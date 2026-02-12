@@ -1,57 +1,60 @@
-@import url('https://rsms.me/inter/inter.css');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --color-brand: #4351E8;
-  --color-brand-hover: #5563F0;
-  --color-brand-active: #3644D0;
-  --color-brand-purple: #8A05FF;
-  --color-port-gore: #181B38;
+  --color-brand: #2563EB;
+  --color-brand-hover: #1D4ED8;
+  --color-brand-active: #1E3A8A;
+  --color-brand-amber: #F59E0B;
+  --color-port-gore: #0F172A;
 
-  --color-surface-primary: #0A0A0F;
-  --color-surface-secondary: #111118;
-  --color-surface-tertiary: #1A1A24;
-  --color-surface-elevated: #1E1E2A;
+  --color-surface-primary: #F6F7FB;
+  --color-surface-secondary: #FFFFFF;
+  --color-surface-tertiary: #EEF2F7;
+  --color-surface-elevated: #FFFFFF;
 
-  --color-border-default: #2A2A3A;
-  --color-border-subtle: #1F1F2E;
-  --color-border-hover: #3A3A4A;
+  --color-border-default: #D7E0EC;
+  --color-border-subtle: #E4EBF5;
+  --color-border-hover: #C2D2E7;
 
-  --color-content-primary: #F1F1F3;
-  --color-content-secondary: #8B8BA0;
-  --color-content-tertiary: #5A5A72;
+  --color-content-primary: #0F172A;
+  --color-content-secondary: #475569;
+  --color-content-tertiary: #64748B;
 
-  --color-status-success: #59FFA4;
-  --color-status-success-bg: #0A2A1A;
-  --color-status-error: #FF4D6A;
-  --color-status-error-bg: #2A0A14;
-  --color-status-warning: #FFBB33;
-  --color-status-warning-bg: #2A2000;
-  --color-status-info: #38BDF8;
-  --color-status-info-bg: #0A1A2A;
+  --color-status-success: #15803D;
+  --color-status-success-bg: #D9F7E6;
+  --color-status-error: #DC2626;
+  --color-status-error-bg: #FDE8E8;
+  --color-status-warning: #B45309;
+  --color-status-warning-bg: #FFF7ED;
+  --color-status-info: #0EA5E9;
+  --color-status-info-bg: #E0F2FE;
 
-  --color-postgres: #336791;
-  --color-redis: #DC382D;
+  --color-postgres: #1F6FEB;
+  --color-redis: #DC2626;
 
-  --font-sans: 'Inter var', 'Inter', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', ui-monospace, monospace;
+  --font-sans: 'Manrope', 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #2A2A3A transparent;
+  scrollbar-color: #cbd5e1 transparent;
 }
 
 *::-webkit-scrollbar { width: 6px; height: 6px; }
 *::-webkit-scrollbar-track { background: transparent; }
-*::-webkit-scrollbar-thumb { background: #2A2A3A; border-radius: 3px; }
-*::-webkit-scrollbar-thumb:hover { background: #3A3A4A; }
+*::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+*::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
 body {
   margin: 0;
-  background: #0A0A0F;
-  color: #F1F1F3;
-  font-family: 'Inter var', 'Inter', system-ui, -apple-system, sans-serif;
+  background:
+    radial-gradient(1200px at 10% 20%, rgba(37, 99, 235, 0.08), transparent 40%),
+    radial-gradient(900px at 90% 0%, rgba(14, 165, 233, 0.08), transparent 36%),
+    #F6F7FB;
+  color: #0F172A;
+  font-family: 'Manrope', 'Inter', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -82,7 +85,7 @@ body {
 
 .animate-pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
 .animate-shimmer {
-  background: linear-gradient(90deg, #1A1A24 25%, #111118 50%, #1A1A24 75%);
+  background: linear-gradient(90deg, #eef2f7 25%, #e4ebf5 50%, #eef2f7 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
 }
@@ -145,10 +148,10 @@ body {
 
 .animate-aurora {
   background:
-    radial-gradient(ellipse at 20% 50%, rgba(67, 81, 232, 0.15) 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 20%, rgba(138, 5, 255, 0.1) 0%, transparent 50%),
-    radial-gradient(ellipse at 40% 80%, rgba(67, 81, 232, 0.08) 0%, transparent 50%),
-    #0A0A0F;
+    radial-gradient(ellipse at 20% 50%, rgba(37, 99, 235, 0.12) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(14, 165, 233, 0.1) 0%, transparent 50%),
+    radial-gradient(ellipse at 40% 80%, rgba(34, 197, 94, 0.1) 0%, transparent 50%),
+    #F6F7FB;
   background-size: 200% 200%;
   animation: aurora 15s ease infinite;
 }
@@ -169,7 +172,7 @@ body {
 }
 
 .text-gradient-brand {
-  background: linear-gradient(90deg, #4351E8, #8A05FF, #4351E8);
+  background: linear-gradient(120deg, #2563EB, #0EA5E9, #22C55E);
   background-size: 200% auto;
   -webkit-background-clip: text;
   background-clip: text;

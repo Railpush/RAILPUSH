@@ -26,11 +26,11 @@ function NavItem({ icon, label, path, active, collapsed }: SidebarItem & { activ
       onClick={() => navigate(path)}
       title={collapsed ? label : undefined}
       className={cn(
-        'w-full flex items-center gap-2.5 rounded-md text-[13px] transition-all duration-100 cursor-pointer',
-        collapsed ? 'justify-center px-0 py-2' : 'px-3 py-[7px]',
+        'w-full flex items-center gap-2.5 rounded-xl text-[13px] transition-all duration-100 cursor-pointer border',
+        collapsed ? 'justify-center px-0 py-2' : 'px-3 py-[9px]',
         active
-          ? 'bg-surface-tertiary text-content-primary font-medium'
-          : 'text-content-secondary hover:bg-surface-tertiary hover:text-content-primary'
+          ? 'bg-brand/10 text-brand font-semibold border-brand/30 shadow-sm'
+          : 'text-content-secondary hover:bg-surface-tertiary hover:text-content-primary border-transparent'
       )}
     >
       <span className="w-4 h-4 flex-shrink-0 opacity-70">{icon}</span>
@@ -66,7 +66,7 @@ export function Sidebar() {
   if (serviceId) {
     const base = `/services/${serviceId}`;
     return (
-      <aside className={cn(width, 'h-screen fixed left-0 top-0 bg-surface-secondary border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-200')}>
+      <aside className={cn(width, 'h-screen fixed left-0 top-0 bg-surface-secondary/95 backdrop-blur-sm border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.08)]')}>
         <div className="p-4 border-b border-border-subtle flex items-center justify-between">
           {!collapsed && (
             <div className="flex items-center gap-2 text-sm text-content-secondary">
@@ -113,7 +113,7 @@ export function Sidebar() {
   if (dbId) {
     const base = `/databases/${dbId}`;
     return (
-      <aside className={cn(width, 'h-screen fixed left-0 top-0 bg-surface-secondary border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-200')}>
+      <aside className={cn(width, 'h-screen fixed left-0 top-0 bg-surface-secondary/95 backdrop-blur-sm border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.08)]')}>
         <div className="p-4 border-b border-border-subtle flex items-center justify-between">
           {!collapsed && (
             <div className="flex items-center gap-2 text-sm text-content-secondary">
@@ -153,7 +153,7 @@ export function Sidebar() {
   if (domainId) {
     const base = `/domains/${domainId}`;
     return (
-      <aside className={cn(width, 'h-screen fixed left-0 top-0 bg-surface-secondary border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-200')}>
+      <aside className={cn(width, 'h-screen fixed left-0 top-0 bg-surface-secondary/95 backdrop-blur-sm border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.08)]')}>
         <div className="p-4 border-b border-border-subtle flex items-center justify-between">
           {!collapsed && (
             <div className="flex items-center gap-2 text-sm text-content-secondary">
@@ -188,13 +188,15 @@ export function Sidebar() {
 
   // Workspace level sidebar (default)
   return (
-    <aside className={cn(width, 'h-screen fixed left-0 top-0 bg-surface-secondary border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-200')}>
+    <aside className={cn(width, 'h-screen fixed left-0 top-0 bg-surface-secondary/95 backdrop-blur-sm border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.08)]')}>
       <div className="p-4 border-b border-border-subtle flex items-center justify-between">
         {!collapsed ? (
           <div className="flex items-center gap-2 text-sm cursor-pointer">
             <LogoMark size={24} />
-            <span className="font-medium text-content-primary">RailPush</span>
-            <ChevronDown className="w-3.5 h-3.5 text-content-tertiary" />
+            <div className="flex flex-col leading-tight">
+              <span className="font-semibold text-content-primary">RailPush</span>
+              <span className="text-[11px] text-content-tertiary">Control room</span>
+            </div>
           </div>
         ) : (
           <LogoMark size={24} />
@@ -214,9 +216,9 @@ export function Sidebar() {
 
       {!collapsed && (
         <div className="p-2">
-          <button className="w-full flex items-center gap-2 px-3 py-1.5 rounded-md bg-surface-tertiary text-content-tertiary text-sm hover:text-content-secondary transition-colors">
+          <button className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-surface-tertiary border border-border-default text-content-secondary text-sm hover:text-content-primary hover:border-border-hover transition-colors">
             <Search className="w-3.5 h-3.5" />
-            <span>Search...</span>
+            <span>Quick search</span>
             <kbd className="ml-auto text-[10px] bg-surface-primary px-1.5 py-0.5 rounded border border-border-default">⌘K</kbd>
           </button>
         </div>

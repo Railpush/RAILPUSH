@@ -49,27 +49,27 @@ export function serviceTypeLabel(type: ServiceType): string {
 
 export function serviceTypeColor(type: ServiceType): string {
   const colors: Record<ServiceType, string> = {
-    web: '#4351E8',
-    pserv: '#8A05FF',
-    worker: '#FFBB33',
-    cron: '#38BDF8',
-    static: '#59FFA4',
-    keyvalue: '#DC382D',
+    web: '#2563EB',
+    pserv: '#7C3AED',
+    worker: '#F59E0B',
+    cron: '#0EA5E9',
+    static: '#10B981',
+    keyvalue: '#DC2626',
   };
   return colors[type] || '#8B8BA0';
 }
 
 export function statusConfig(status: ServiceStatus | DeployStatus): { color: string; bg: string; label: string; pulse: boolean } {
   const configs: Record<string, { color: string; bg: string; label: string; pulse: boolean }> = {
-    created: { color: '#8B8BA0', bg: '#1A1A24', label: 'Created', pulse: false },
-    building: { color: '#38BDF8', bg: '#0A1A2A', label: 'Building', pulse: true },
-    deploying: { color: '#38BDF8', bg: '#0A1A2A', label: 'Deploying', pulse: true },
-    live: { color: '#59FFA4', bg: '#0A2A1A', label: 'Live', pulse: true },
-    failed: { color: '#FF4D6A', bg: '#2A0A14', label: 'Failed', pulse: false },
-    suspended: { color: '#FFBB33', bg: '#2A2000', label: 'Suspended', pulse: false },
-    deactivated: { color: '#5A5A72', bg: '#1A1A24', label: 'Deactivated', pulse: false },
-    pending: { color: '#8B8BA0', bg: '#1A1A24', label: 'Pending', pulse: false },
-    cancelled: { color: '#5A5A72', bg: '#1A1A24', label: 'Cancelled', pulse: false },
+    created: { color: '#475569', bg: '#E4EBF5', label: 'Created', pulse: false },
+    building: { color: '#0EA5E9', bg: '#E0F2FE', label: 'Building', pulse: true },
+    deploying: { color: '#0EA5E9', bg: '#E0F2FE', label: 'Deploying', pulse: true },
+    live: { color: '#15803D', bg: '#D9F7E6', label: 'Live', pulse: true },
+    failed: { color: '#DC2626', bg: '#FDE8E8', label: 'Failed', pulse: false },
+    suspended: { color: '#B45309', bg: '#FFF7ED', label: 'Suspended', pulse: false },
+    deactivated: { color: '#94A3B8', bg: '#E4EBF5', label: 'Deactivated', pulse: false },
+    pending: { color: '#475569', bg: '#E4EBF5', label: 'Pending', pulse: false },
+    cancelled: { color: '#94A3B8', bg: '#E4EBF5', label: 'Cancelled', pulse: false },
   };
   return configs[status] || configs.created;
 }

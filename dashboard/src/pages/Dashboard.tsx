@@ -8,6 +8,7 @@ import { ServiceSkeleton } from '../components/ui/Skeleton';
 import { serviceTypeLabel, timeAgo } from '../lib/utils';
 import type { Service, ManagedDatabase, ManagedKeyValue } from '../types';
 import { services as servicesApi, databases as dbApi, keyvalue as kvApi } from '../lib/api';
+import { Card } from '../components/ui/Card';
 
 export type DashboardScope =
   | 'all'
@@ -138,9 +139,12 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
     return (
       <div>
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-semibold text-content-primary">{pageTitle}</h1>
+          <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-content-tertiary font-semibold">Overview</p>
+            <h1 className="text-2xl font-semibold text-content-primary mt-1">{pageTitle}</h1>
+          </div>
         </div>
-        <div className="bg-surface-secondary border border-border-default rounded-lg overflow-hidden">
+        <div className="bg-surface-secondary border border-border-default rounded-xl overflow-hidden">
           {Array.from({ length: 5 }).map((_, i) => <ServiceSkeleton key={i} />)}
         </div>
       </div>
@@ -149,11 +153,14 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-semibold text-content-primary">{pageTitle}</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-content-tertiary font-semibold">Overview</p>
+          <h1 className="text-2xl font-semibold text-content-primary mt-1">{pageTitle}</h1>
+        </div>
         <button
           onClick={() => navigate(createPath)}
-          className="inline-flex items-center gap-1.5 px-4 py-2 bg-brand text-white rounded-md text-sm font-medium hover:bg-brand-hover transition-colors cursor-pointer"
+          className="inline-flex items-center gap-1.5 px-4 py-2 bg-brand text-white rounded-lg text-sm font-semibold hover:bg-brand-hover transition-colors cursor-pointer shadow-sm"
         >
           <Plus className="w-4 h-4" />
           {createLabel}
@@ -178,7 +185,7 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
                   placeholder={`Search ${pageTitle.toLowerCase()}...`}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  className="w-full bg-surface-tertiary border border-border-default rounded-md pl-9 pr-3 py-2 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 transition-all"
+                  className="w-full bg-surface-secondary border border-border-default rounded-xl pl-10 pr-3 py-2.5 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 transition-all shadow-[0_1px_2px_rgba(15,23,42,0.05)]"
                 />
               </div>
             </div>
@@ -209,30 +216,42 @@ function ServiceSection({ title, items, navigate }: { title: string; items: Serv
   if (items.length === 0) return null;
   return (
     <div className="mb-6">
-      <h2 className="text-xs font-semibold uppercase tracking-wider text-content-tertiary mb-2 px-1">
+      <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-content-tertiary mb-2 px-1">
         {title}
       </h2>
-      <div className="bg-surface-secondary border border-border-default rounded-lg overflow-hidden">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {items.map((service) => (
-          <div
+          <Card
             key={service.id}
+            hover
             onClick={() => navigate(`/services/${service.id}`)}
-            className="flex items-center px-4 py-3 border-b border-border-subtle last:border-0 hover:bg-surface-tertiary cursor-pointer transition-colors"
+            className="group"
           >
-            <ServiceIcon type={service.type} />
-            <div className="ml-3 flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-content-primary">{service.name}</span>
-                <span className="text-[11px] px-2 py-0.5 rounded bg-surface-tertiary text-content-secondary">
-                  {serviceTypeLabel(service.type)}
-                </span>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <ServiceIcon type={service.type} />
+                <div className="space-y-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-semibold text-content-primary truncate">{service.name}</span>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-surface-tertiary text-content-secondary">
+                      {serviceTypeLabel(service.type)}
+                    </span>
+                  </div>
+                  <div className="text-xs text-content-secondary">
+                    {service.branch} · {timeAgo(service.updated_at || service.created_at)}
+                  </div>
+                </div>
               </div>
-              <div className="text-xs text-content-secondary mt-0.5">
-                {service.branch} &middot; {timeAgo(service.updated_at || service.created_at)}
-              </div>
+              <StatusBadge status={service.status} size="sm" />
             </div>
-            <StatusBadge status={service.status} size="sm" />
-          </div>
+            <div className="mt-3 text-xs text-content-tertiary flex items-center gap-3 flex-wrap">
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-surface-tertiary border border-border-subtle">
+                <ServiceIcon type={service.type} size="sm" />
+                {service.type}
+              </span>
+              <span>Updated {timeAgo(service.updated_at || service.created_at)}</span>
+            </div>
+          </Card>
         ))}
       </div>
     </div>
@@ -243,30 +262,41 @@ function DatabaseSection({ items, navigate, force }: { items: ManagedDatabase[];
   if (items.length === 0 && !force) return null;
   return (
     <div className="mb-6">
-      <h2 className="text-xs font-semibold uppercase tracking-wider text-content-tertiary mb-2 px-1">
+      <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-content-tertiary mb-2 px-1">
         PostgreSQL
       </h2>
-      <div className="bg-surface-secondary border border-border-default rounded-lg overflow-hidden">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {items.map((db) => (
-          <div
+          <Card
             key={db.id}
+            hover
             onClick={() => navigate(`/databases/${db.id}`)}
-            className="flex items-center px-4 py-3 border-b border-border-subtle last:border-0 hover:bg-surface-tertiary cursor-pointer transition-colors"
+            className="group"
           >
-            <ServiceIcon type="postgres" />
-            <div className="ml-3 flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-content-primary">{db.name}</span>
-                <span className="text-[11px] px-2 py-0.5 rounded bg-surface-tertiary text-content-secondary">
-                  PostgreSQL
-                </span>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <ServiceIcon type="postgres" />
+                <div className="space-y-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-semibold text-content-primary truncate">{db.name}</span>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-surface-tertiary text-content-secondary">
+                      PostgreSQL
+                    </span>
+                  </div>
+                  <div className="text-xs text-content-secondary">
+                    v{db.pg_version} &middot; {db.plan}
+                  </div>
+                </div>
               </div>
-              <div className="text-xs text-content-secondary mt-0.5">
-                PostgreSQL {db.pg_version} &middot; {db.plan}
-              </div>
+              <StatusBadge status={db.status === 'available' ? 'live' : 'created'} size="sm" />
             </div>
-            <StatusBadge status={db.status === 'available' ? 'live' : 'created'} size="sm" />
-          </div>
+            <div className="mt-3 text-xs text-content-tertiary flex items-center gap-3 flex-wrap">
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-surface-tertiary border border-border-subtle">
+                Plan: {db.plan}
+              </span>
+              <span>Host: {db.host}</span>
+            </div>
+          </Card>
         ))}
       </div>
     </div>
@@ -277,28 +307,39 @@ function KeyValueSection({ items, navigate, force }: { items: ManagedKeyValue[];
   if (items.length === 0 && !force) return null;
   return (
     <div className="mb-6">
-      <h2 className="text-xs font-semibold uppercase tracking-wider text-content-tertiary mb-2 px-1">
+      <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-content-tertiary mb-2 px-1">
         Key Value
       </h2>
-      <div className="bg-surface-secondary border border-border-default rounded-lg overflow-hidden">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {items.map((kv) => (
-          <div
+          <Card
             key={kv.id}
+            hover
             onClick={() => navigate(`/keyvalue/${kv.id}`)}
-            className="flex items-center px-4 py-3 border-b border-border-subtle last:border-0 hover:bg-surface-tertiary cursor-pointer transition-colors"
+            className="group"
           >
-            <ServiceIcon type="keyvalue" />
-            <div className="ml-3 flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-content-primary">{kv.name}</span>
-                <span className="text-[11px] px-2 py-0.5 rounded bg-surface-tertiary text-content-secondary">
-                  Key Value
-                </span>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <ServiceIcon type="keyvalue" />
+                <div className="space-y-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-semibold text-content-primary truncate">{kv.name}</span>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-surface-tertiary text-content-secondary">
+                      Key Value
+                    </span>
+                  </div>
+                  <div className="text-xs text-content-secondary">{kv.plan}</div>
+                </div>
               </div>
-              <div className="text-xs text-content-secondary mt-0.5">{kv.plan}</div>
+              <StatusBadge status={kv.status === 'available' ? 'live' : 'created'} size="sm" />
             </div>
-            <StatusBadge status={kv.status === 'available' ? 'live' : 'created'} size="sm" />
-          </div>
+            <div className="mt-3 text-xs text-content-tertiary flex items-center gap-3 flex-wrap">
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-surface-tertiary border border-border-subtle">
+                Plan: {kv.plan}
+              </span>
+              <span>Created {timeAgo(kv.created_at)}</span>
+            </div>
+          </Card>
         ))}
       </div>
     </div>

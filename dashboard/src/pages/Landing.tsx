@@ -56,57 +56,57 @@ function useScrollReveal() {
 const features = [
   {
     icon: GitBranch,
-    title: 'Deploy from Git',
+    title: 'Zero-config Git deploys',
     description:
-      'Push to your repo and RailPush builds and deploys automatically. Connect GitHub in one click.',
+      'Connect GitHub and ship straight from main. We handle build images, rollbacks, and cache layers for you.',
   },
   {
     icon: Zap,
-    title: 'Instant Scaling',
+    title: 'Instant elasticity',
     description:
-      'Scale horizontally with a single slider. Handle traffic spikes without breaking a sweat.',
+      'Autoscale HTTP, workers, and cron jobs in seconds without yaml forests or per-app knobs.',
   },
   {
     icon: Database,
-    title: 'Managed Databases',
+    title: 'Managed Postgres',
     description:
-      'Spin up PostgreSQL or Redis instances in seconds with on-demand backups and clear connection details.',
+      'Provision production-ready clusters with PITR backups, safe rotations, and crisp connection info.',
   },
   {
     icon: Globe2,
-    title: 'Domain Registration',
+    title: 'Domains & routing',
     description:
-      'Search, register, and manage domains directly from your dashboard. Full DNS editor with automatic configuration.',
+      'Buy domains, wire DNS, and route to services with preview URLs and branch-aware rules.',
   },
   {
     icon: Lock,
-    title: 'Environment Variables',
+    title: 'Shared secrets',
     description:
-      'Securely manage secrets and configuration. Env groups shared across services.',
+      'Organize secrets into reusable groups with audit-friendly history and scoped access.',
   },
   {
     icon: Clock,
-    title: 'Cron Jobs',
+    title: 'Reliable schedulers',
     description:
-      'Schedule recurring tasks with cron expressions and inspect build/runtime logs from the dashboard.',
+      'Cron jobs with retries, logs, and per-job alerting—visible alongside your apps.',
   },
 ];
 
 const steps = [
   {
     number: '01',
-    title: 'Connect Repository',
-    description: 'Link your GitHub account and select a repo. We detect your runtime automatically.',
+    title: 'Connect your repo',
+    description: 'OAuth GitHub, pick a branch, and keep your pipeline inside one platform.',
   },
   {
     number: '02',
-    title: 'Push Your Code',
-    description: 'Every push to your default branch triggers a build. Zero config needed.',
+    title: 'Ship with one push',
+    description: 'We build on every push, stream logs, and create preview URLs for reviews.',
   },
   {
     number: '03',
-    title: 'Go Live',
-    description: 'Your app gets a URL instantly. Add a custom domain whenever you\'re ready.',
+    title: 'Go live with confidence',
+    description: 'Promote to production with health checks, traffic shifting, and instant rollback.',
   },
 ];
 
@@ -188,8 +188,8 @@ export function Landing() {
   return (
     <div className="min-h-screen bg-surface-primary text-content-primary overflow-x-hidden">
       <SEO
-        title="RailPush — Deploy Your Apps Effortlessly"
-        description="Push to Git and RailPush builds, deploys, and scales automatically. Managed PostgreSQL, Redis, custom domains, cron jobs. Free tier, no credit card required."
+        title="RailPush — Modern app platform without the ops tax"
+        description="Build, deploy, and scale web services, workers, cron, and Postgres from one clean console. Git-native, instant rollbacks, domain + DNS baked in."
         canonical="https://railpush.com/"
       />
       {/* ── Nav ──────────────────────────────────────── */}
@@ -243,23 +243,22 @@ export function Landing() {
 
         <div className="relative z-10 max-w-4xl mx-auto px-6 text-center pt-24">
           {/* Badge */}
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-border-default bg-surface-secondary/60 backdrop-blur-sm mb-8 animate-slide-up-landing delay-100">
+          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-border-default bg-surface-secondary/70 backdrop-blur-sm mb-8 animate-slide-up-landing delay-100">
             <Radio className="w-3.5 h-3.5 text-brand" />
             <span className="text-xs font-medium text-content-secondary">
-              Cloud Platform for Developers
+              Unified platform for modern apps
             </span>
           </div>
 
           {/* Headline */}
-          <h1 className="text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight leading-[1.1] mb-6 animate-slide-up-landing delay-200">
-            Deploy your apps{' '}
-            <span className="text-gradient-brand">effortlessly</span>
+          <h1 className="text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight leading-[1.05] mb-6 animate-slide-up-landing delay-200">
+            Run your stack{' '}
+            <span className="text-gradient-brand">without the ops tax</span>
           </h1>
 
           {/* Subtitle */}
           <p className="text-lg sm:text-xl text-content-secondary max-w-2xl mx-auto mb-10 animate-slide-up-landing delay-300">
-            Push your code and let RailPush handle the rest. Automatic builds,
-            instant deploys, managed databases — all in one platform.
+            RailPush keeps build, deploy, DNS, secrets, and data in the same calm console—so teams can ship quickly without another control plane.
           </p>
 
           {/* CTAs */}
