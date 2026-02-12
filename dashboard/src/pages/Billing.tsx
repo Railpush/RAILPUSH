@@ -117,7 +117,7 @@ function SectionFrame({
   return (
     <section id={id} className="border border-border-default bg-surface-primary">
       <div className="px-8 py-7 border-b border-border-subtle">
-        <h2 className="text-4xl font-semibold text-content-primary tracking-tight">{title}</h2>
+        <h2 className="text-2xl font-semibold text-content-primary tracking-tight">{title}</h2>
       </div>
       <div className="px-8 py-7">{children}</div>
     </section>
@@ -334,7 +334,7 @@ export function Billing() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-[44px] font-semibold tracking-tight text-content-primary">Billing Information</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-content-primary">Billing Information</h1>
           <p className="text-sm text-content-secondary mt-1">
             Workspace billing, usage envelopes, and invoice controls.
           </p>
@@ -362,7 +362,7 @@ export function Billing() {
             <div className="border border-border-default bg-surface-secondary p-6 flex flex-wrap items-start justify-between gap-6">
               <div className="space-y-2">
                 <p className="text-xs uppercase tracking-wider text-content-tertiary">Current Plan</p>
-                <h3 className="text-2xl font-semibold text-content-primary">{currentPlan.name}</h3>
+                <h3 className="text-xl font-semibold text-content-primary">{currentPlan.name}</h3>
                 <p className="text-sm text-content-secondary max-w-xl">{currentPlan.description}</p>
                 <div className="flex items-center flex-wrap gap-2 pt-1">
                   <span className="inline-flex items-center border border-border-default bg-surface-primary px-2.5 py-1 text-xs text-content-secondary">
@@ -424,7 +424,7 @@ export function Billing() {
             <div className="border border-border-default bg-surface-secondary divide-y divide-border-subtle">
               <div className="p-6 grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)_auto] gap-4 items-start">
                 <div>
-                  <p className="text-xl font-semibold text-content-primary">Billing email</p>
+                  <p className="text-base font-semibold text-content-primary">Billing email</p>
                   <p className="text-sm text-content-secondary mt-1">
                     Used for invoices and billing notifications.
                   </p>
@@ -439,12 +439,12 @@ export function Billing() {
               </div>
               <div className="p-6 grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)_auto] gap-4 items-start">
                 <div>
-                  <p className="text-xl font-semibold text-content-primary">Additional Information</p>
+                  <p className="text-base font-semibold text-content-primary">Additional Information</p>
                   <p className="text-sm text-content-secondary mt-1">
                     Company and tax details are managed in your billing portal.
                   </p>
                 </div>
-                <p className="text-lg text-content-secondary pt-2">No info provided.</p>
+                <p className="text-base text-content-secondary pt-2">No info provided.</p>
                 <Button variant="ghost" onClick={handleOpenBillingPortal}>
                   <PencilLine className="w-4 h-4" />
                   Edit
@@ -455,7 +455,7 @@ export function Billing() {
 
           <SectionFrame id="included-usage" title="Monthly Included Usage">
             <div className="space-y-4">
-              <p className="text-xl text-content-secondary">
+              <p className="text-base text-content-secondary">
                 Included quotas are based on your <span className="text-content-primary">{currentPlan.name}</span> plan.
               </p>
               <p className="text-sm text-content-tertiary">
@@ -464,16 +464,16 @@ export function Billing() {
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <div className="border border-border-default bg-surface-secondary p-5 space-y-3">
-                  <p className="text-lg text-content-primary">Included Instance Hours</p>
-                  <p className="text-3xl font-semibold text-content-primary">0 hours <span className="text-lg text-content-secondary">/ {includedUsage.instanceHours} hours</span></p>
+                  <p className="text-base text-content-primary">Included Instance Hours</p>
+                  <p className="text-2xl font-semibold text-content-primary">0 hours <span className="text-base text-content-secondary">/ {includedUsage.instanceHours} hours</span></p>
                   <div className="h-1 bg-surface-primary border border-border-subtle">
                     <div className="h-full bg-brand" style={{ width: `${usagePercent(0, includedUsage.instanceHours)}%` }} />
                   </div>
                 </div>
 
                 <div className="border border-border-default bg-surface-secondary p-5 space-y-3">
-                  <p className="text-lg text-content-primary">Included Bandwidth</p>
-                  <p className="text-3xl font-semibold text-content-primary">0 GB <span className="text-lg text-content-secondary">/ {includedUsage.bandwidthGb.toLocaleString()} GB</span></p>
+                  <p className="text-base text-content-primary">Included Bandwidth</p>
+                  <p className="text-2xl font-semibold text-content-primary">0 GB <span className="text-base text-content-secondary">/ {includedUsage.bandwidthGb.toLocaleString()} GB</span></p>
                   <div className="h-1 bg-surface-primary border border-border-subtle">
                     <div className="h-full bg-brand-purple" style={{ width: `${usagePercent(0, includedUsage.bandwidthGb)}%` }} />
                   </div>
@@ -485,8 +485,8 @@ export function Billing() {
                 </div>
 
                 <div className="border border-border-default bg-surface-secondary p-5 space-y-3 lg:col-span-2">
-                  <p className="text-lg text-content-primary">Included Pipeline Minutes</p>
-                  <p className="text-3xl font-semibold text-content-primary">0 min <span className="text-lg text-content-secondary">/ {includedUsage.pipelineMinutes.toLocaleString()} min</span></p>
+                  <p className="text-base text-content-primary">Included Pipeline Minutes</p>
+                  <p className="text-2xl font-semibold text-content-primary">0 min <span className="text-base text-content-secondary">/ {includedUsage.pipelineMinutes.toLocaleString()} min</span></p>
                   <div className="h-1 bg-surface-primary border border-border-subtle">
                     <div className="h-full bg-status-info" style={{ width: `${usagePercent(0, includedUsage.pipelineMinutes)}%` }} />
                   </div>
@@ -497,7 +497,7 @@ export function Billing() {
 
           <SectionFrame id="unbilled-charges" title="Unbilled Charges">
             <div className="space-y-4">
-              <p className="text-xl text-content-secondary">Amounts displayed have been accrued within the month to date.</p>
+              <p className="text-base text-content-secondary">Amounts displayed have been accrued within the month to date.</p>
 
               <div className="flex flex-wrap items-center gap-2">
                 <Button
@@ -538,12 +538,12 @@ export function Billing() {
                           }}
                           className="w-full px-5 py-4 flex items-center justify-between hover:bg-surface-primary/50 transition-colors"
                         >
-                          <div className="flex items-center gap-2 text-lg text-content-primary">
+                          <div className="flex items-center gap-2 text-base text-content-primary">
                             {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                             {resourceIcon(group.key)}
                             <span>{group.label}</span>
                           </div>
-                          <span className="text-2xl font-semibold text-content-primary">{formatCurrency(group.total)}</span>
+                          <span className="text-xl font-semibold text-content-primary">{formatCurrency(group.total)}</span>
                         </button>
 
                         {isOpen && (
@@ -573,11 +573,11 @@ export function Billing() {
                   Download as CSV
                 </Button>
                 <div className="space-y-1 text-right">
-                  <p className="text-lg text-content-secondary">
-                    Total month to date <span className="text-3xl font-semibold text-content-primary ml-3">{formatCurrency(monthToDateCents)}</span>
+                  <p className="text-sm text-content-secondary">
+                    Total month to date <span className="text-2xl font-semibold text-content-primary ml-3">{formatCurrency(monthToDateCents)}</span>
                   </p>
-                  <p className="text-lg text-content-secondary">
-                    Projected total for {new Date().toLocaleString('en-US', { month: 'long' })} <span className="text-3xl font-semibold text-content-primary ml-3">{formatCurrency(projectedCents)}</span>
+                  <p className="text-sm text-content-secondary">
+                    Projected total for {new Date().toLocaleString('en-US', { month: 'long' })} <span className="text-2xl font-semibold text-content-primary ml-3">{formatCurrency(projectedCents)}</span>
                   </p>
                 </div>
               </div>
@@ -587,9 +587,9 @@ export function Billing() {
           <SectionFrame id="credit-balance" title="Credit Balance">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-center">
               <div>
-                <p className="text-xl text-content-secondary mb-5">The balance will be applied to the amount due on your next invoice.</p>
+                <p className="text-base text-content-secondary mb-5">The balance will be applied to the amount due on your next invoice.</p>
                 <p className="text-xs uppercase tracking-wider text-content-tertiary">Total Balance</p>
-                <p className="text-6xl font-semibold text-content-primary mt-2">$0.00</p>
+                <p className="text-4xl font-semibold text-content-primary mt-2">$0.00</p>
               </div>
               <div className="flex items-stretch">
                 <input
@@ -612,7 +612,7 @@ export function Billing() {
 
           <SectionFrame id="invoice-history" title="Invoice History">
             <div className="space-y-4">
-              <p className="text-xl text-content-secondary">View or download your past invoices.</p>
+              <p className="text-base text-content-secondary">View or download your past invoices.</p>
 
               {invoiceRows.length === 0 ? (
                 <div className="border border-border-default bg-surface-secondary p-6 flex flex-wrap items-center justify-between gap-3">
@@ -664,7 +664,7 @@ export function Billing() {
                 type="button"
                 onClick={() => scrollToSection(section.id)}
                 className={cn(
-                  'block w-full text-left text-[28px] leading-tight transition-colors',
+                  'block w-full text-left text-2xl leading-tight transition-colors',
                   activeSection === section.id ? 'text-content-primary' : 'text-content-secondary hover:text-content-primary'
                 )}
               >
