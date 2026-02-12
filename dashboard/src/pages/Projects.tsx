@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, Check, ChevronDown, FolderKanban, MoreVertical, Pencil, Plus, Search, Trash2 } from 'lucide-react';
+import { ChevronDown, FolderKanban, MoreVertical, Pencil, Plus, Search, Trash2 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Dropdown } from '../components/ui/Dropdown';
@@ -51,13 +51,6 @@ function summarizeHealth(services: Service[]): { label: string; tone: HealthTone
   }
   return { label: `${liveCount}/${active.length} services are live`, tone: 'partial' };
 }
-
-const healthToneClass: Record<HealthTone, string> = {
-  healthy: 'bg-[#0A3B2C] text-[#B6FCD9] border border-[#16654B]',
-  partial: 'bg-[#3A2D0F] text-[#FFD782] border border-[#6A4E19]',
-  down: 'bg-[#3A151C] text-[#FF94A5] border border-[#6C2635]',
-  empty: 'bg-[#25262A] text-[#E2E2E2] border border-[#3B3C42]',
-};
 
 function buildProjectData(
   projects: Project[],
@@ -465,13 +458,16 @@ export function Projects() {
           <div className="text-lg font-semibold text-content-primary leading-tight truncate mt-2">{card.name}</div>
 
           <span
-            className={cn(
-              'inline-flex w-fit items-center gap-1.5 px-2.5 py-1 rounded-[6px] text-xs font-medium mt-6',
-              healthToneClass[health.tone],
-            )}
+            className="inline-flex items-center gap-2 mt-6"
+            title={health.label}
+            aria-label={health.label}
           >
-            {health.tone === 'healthy' ? <Check className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
-            {health.label}
+            <span
+              className={cn(
+                'h-2.5 w-2.5 rounded-full border border-white/40 shadow-[0_0_0_4px_rgba(255,255,255,0.18)]',
+                health.tone === 'healthy' ? 'bg-emerald-500' : 'bg-rose-500',
+              )}
+            />
           </span>
         </div>
       </Card>
