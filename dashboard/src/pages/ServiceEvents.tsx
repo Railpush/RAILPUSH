@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { GitCommit, Rocket, RotateCw } from 'lucide-react';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { Skeleton } from '../components/ui/Skeleton';
+import { Card } from '../components/ui/Card';
 import { formatDate, formatTime, formatDuration, truncate } from '../lib/utils';
 import { deploys as deploysApi } from '../lib/api';
 import type { Deploy } from '../types';
@@ -58,27 +59,27 @@ export function ServiceEvents() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-semibold text-content-primary">Events</h1>
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.22em] text-content-tertiary font-semibold">Service timeline</p>
+          <h1 className="text-2xl font-semibold text-content-primary">Events</h1>
+        </div>
       </div>
 
       {deployList.length === 0 ? (
-        <div className="bg-surface-secondary border border-border-default rounded-lg p-8 text-center text-sm text-content-secondary">
+        <Card className="p-8 text-center text-sm text-content-secondary">
           No deploy events yet. Trigger a deploy to see events here.
-        </div>
+        </Card>
       ) : (
         <div className="space-y-6">
           {Object.entries(grouped).map(([date, deploys]) => (
             <div key={date}>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-content-tertiary mb-3">
+              <h3 className="text-xs font-semibold uppercase tracking-[0.2em] text-content-tertiary mb-3">
                 {date}
               </h3>
-              <div className="bg-surface-secondary border border-border-default rounded-lg overflow-hidden">
+              <div className="grid gap-3 md:grid-cols-2">
                 {deploys.map((deploy) => (
-                  <div
-                    key={deploy.id}
-                    className="px-4 py-3.5 border-b border-border-subtle last:border-0 hover:bg-surface-tertiary/50 transition-colors"
-                  >
-                    <div className="flex items-center justify-between mb-2">
+                  <Card key={deploy.id} hover className="space-y-2">
+                    <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2.5">
                         <StatusBadge status={deploy.status} size="sm" />
                         <span className="text-sm font-medium text-content-primary">
@@ -91,7 +92,7 @@ export function ServiceEvents() {
                     </div>
 
                     {deploy.commit_sha && (
-                      <div className="flex items-center gap-2 mb-1.5">
+                      <div className="flex items-center gap-2">
                         <code className="text-xs font-mono px-1.5 py-0.5 bg-surface-tertiary rounded text-content-primary">
                           {deploy.commit_sha.slice(0, 7)}
                         </code>
@@ -103,7 +104,7 @@ export function ServiceEvents() {
                       </div>
                     )}
 
-                    <div className="flex items-center gap-3 text-xs text-content-tertiary">
+                    <div className="flex items-center gap-3 text-xs text-content-tertiary flex-wrap">
                       <div className="flex items-center gap-1">
                         {triggerIcon(deploy.trigger)}
                         <span>{triggerLabel(deploy.trigger)}</span>
@@ -116,7 +117,7 @@ export function ServiceEvents() {
                         </span>
                       )}
                     </div>
-                  </div>
+                  </Card>
                 ))}
               </div>
             </div>

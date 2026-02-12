@@ -112,18 +112,21 @@ export function ServiceLogs() {
   return (
     <div className={fullscreen ? 'fixed inset-0 z-50 bg-surface-primary p-4' : ''}>
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-semibold text-content-primary">Logs</h1>
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.22em] text-content-tertiary font-semibold">Observability</p>
+          <h1 className="text-2xl font-semibold text-content-primary">Logs</h1>
+        </div>
         <div className="flex items-center gap-2">
           <button
             onClick={fetchLogs}
-            className="p-2 rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors"
+            className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors border border-transparent hover:border-border-default"
             title="Refresh logs"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
           <button
             onClick={() => setFullscreen(!fullscreen)}
-            className="p-2 rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors"
+            className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors border border-transparent hover:border-border-default"
           >
             {fullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
           </button>
@@ -133,12 +136,12 @@ export function ServiceLogs() {
       {/* Controls */}
       <div className="flex items-center gap-3 mb-3">
         {/* Log type toggle */}
-        <div className="flex rounded-lg border border-border-default overflow-hidden">
+        <div className="flex rounded-lg border border-border-default overflow-hidden bg-surface-secondary">
           <button
             onClick={() => setLogType('runtime')}
             className={`px-3 py-2 text-sm font-medium transition-colors ${
               logType === 'runtime'
-                ? 'bg-surface-tertiary text-content-primary'
+                ? 'bg-surface-tertiary text-content-primary shadow-inner'
                 : 'text-content-tertiary hover:text-content-secondary'
             }`}
           >
@@ -148,7 +151,7 @@ export function ServiceLogs() {
             onClick={() => setLogType('deploy')}
             className={`px-3 py-2 text-sm font-medium transition-colors border-l border-border-default ${
               logType === 'deploy'
-                ? 'bg-surface-tertiary text-content-primary'
+                ? 'bg-surface-tertiary text-content-primary shadow-inner'
                 : 'text-content-tertiary hover:text-content-secondary'
             }`}
           >
@@ -163,7 +166,7 @@ export function ServiceLogs() {
             placeholder="Search logs..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full bg-surface-tertiary border border-border-default rounded-md pl-9 pr-3 py-2 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 transition-all font-mono"
+            className="w-full bg-surface-secondary border border-border-default rounded-lg pl-9 pr-3 py-2 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 transition-all font-mono shadow-[0_1px_2px_rgba(15,23,42,0.05)]"
           />
         </div>
         {logType === 'runtime' && (
@@ -184,7 +187,7 @@ export function ServiceLogs() {
       {/* Log viewer */}
       <div
         ref={containerRef}
-        className={`bg-[#0D0D14] rounded-lg border border-border-default overflow-auto font-mono text-xs ${
+        className={`rounded-xl border border-border-default overflow-auto font-mono text-xs bg-surface-secondary shadow-inner ${
           fullscreen ? 'h-[calc(100vh-140px)]' : 'h-[600px]'
         }`}
       >
@@ -196,7 +199,7 @@ export function ServiceLogs() {
           ) : (
             <div className="p-3 space-y-0">
               {filtered.map((entry, i) => (
-                <div key={i} className="flex items-start gap-2 py-0.5 hover:bg-white/[0.02] px-2 -mx-2 rounded group">
+                <div key={i} className="flex items-start gap-2 py-0.5 hover:bg-surface-tertiary px-2 -mx-2 rounded group transition-colors">
                   {levelIcon(entry.level)}
                   <span className="text-content-tertiary flex-shrink-0 select-none text-[11px]">
                     {formatTime(entry.timestamp)}
@@ -240,7 +243,7 @@ export function ServiceLogs() {
                   {deploy.log ? (
                     <div className="space-y-0">
                       {deploy.log.split('\n').filter(Boolean).map((line, j) => (
-                        <div key={j} className="py-0.5 hover:bg-white/[0.02] px-2 -mx-2 rounded">
+                        <div key={j} className="py-0.5 hover:bg-surface-tertiary px-2 -mx-2 rounded transition-colors">
                           <span className={`${deployLineColor(line)} break-all leading-relaxed`}>
                             {line}
                           </span>

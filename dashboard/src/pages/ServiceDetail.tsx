@@ -60,15 +60,17 @@ export function ServiceDetail() {
     <div>
       {/* Header */}
       <div className="mb-6">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
             <ServiceIcon type={service.type} size="lg" />
             <div>
+              <p className="text-[11px] uppercase tracking-[0.22em] text-content-tertiary font-semibold mb-1">Service</p>
               <h1 className="text-2xl font-semibold text-content-primary">{service.name}</h1>
-              <div className="flex items-center gap-2 mt-1 text-sm text-content-secondary">
-                <span>{serviceTypeLabel(service.type)}</span>
-                <span>&middot;</span>
-                <div className="flex items-center gap-1">
+              <div className="flex items-center gap-3 mt-1 text-sm text-content-secondary flex-wrap">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-tertiary text-content-secondary">
+                  {serviceTypeLabel(service.type)}
+                </span>
+                <div className="inline-flex items-center gap-1">
                   <GitBranch className="w-3.5 h-3.5" />
                   {service.branch}
                 </div>
@@ -161,7 +163,7 @@ export function ServiceDetail() {
       {/* Recent Events */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-content-tertiary">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-content-tertiary">
             Recent Events
           </h2>
           <button
@@ -171,34 +173,36 @@ export function ServiceDetail() {
             View all
           </button>
         </div>
-        <div className="bg-surface-secondary border border-border-default rounded-lg overflow-hidden">
-          {deployList.length === 0 ? (
-            <div className="px-4 py-8 text-center text-sm text-content-secondary">No deploys yet</div>
-          ) : (
-            deployList.slice(0, 5).map((deploy, i) => (
-              <div
+        {deployList.length === 0 ? (
+          <Card className="text-center text-sm text-content-secondary">No deploys yet</Card>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2">
+            {deployList.slice(0, 4).map((deploy, i) => (
+              <Card
                 key={deploy.id}
-                className="flex items-center justify-between px-4 py-3 border-b border-border-subtle last:border-0 hover:bg-surface-tertiary cursor-pointer transition-colors"
+                hover
                 onClick={() => navigate(`/services/${service.id}/events`)}
+                className="flex items-center justify-between"
               >
                 <div className="flex items-center gap-3">
                   <StatusBadge status={deploy.status} size="sm" />
-                  <span className="text-sm text-content-primary">Deploy #{deployList.length - i}</span>
+                  <div>
+                    <div className="text-sm text-content-primary">Deploy #{deployList.length - i}</div>
+                    <div className="text-xs text-content-tertiary flex items-center gap-2">
+                      {deploy.commit_sha && (
+                        <code className="text-[11px] font-mono text-content-secondary">
+                          {deploy.commit_sha.slice(0, 7)}
+                        </code>
+                      )}
+                      <span>{timeAgo(deploy.started_at || deploy.finished_at)}</span>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  {deploy.commit_sha && (
-                    <code className="text-xs font-mono text-content-secondary">
-                      {deploy.commit_sha.slice(0, 7)}
-                    </code>
-                  )}
-                  <span className="text-xs text-content-tertiary">
-                    {timeAgo(deploy.started_at || deploy.finished_at)}
-                  </span>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
+                <ExternalLink className="w-4 h-4 text-content-tertiary" />
+              </Card>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
