@@ -1,0 +1,16 @@
+User-agent: *
+Allow: /
+Allow: /login
+Allow: /docs
+Allow: /privacy
+
+Disallow: /services/
+Disallow: /databases/
+Disallow: /domains/
+Disallow: /billing
+Disallow: /blueprints/
+Disallow: /env-groups
+Disallow: /new
+Disallow: /api/
+
+Sitemap: https://railpush.com/sitemap.xml

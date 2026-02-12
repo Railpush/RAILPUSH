@@ -1,0 +1,17 @@
+{
+  "name": "RailPush",
+  "short_name": "RailPush",
+  "description": "Deploy your apps effortlessly. Push to Git and RailPush handles the rest.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#3B82F6",
+  "background_color": "#0A0A0F",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+[Unit]
+Description=RailPush API Server
+After=network.target postgresql.service redis-server.service
+Wants=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=railpush
+Group=railpush
+SupplementaryGroups=docker
+WorkingDirectory=/opt/railpush
+ExecStart=/opt/railpush/railpush-api-bin
+Restart=always
+RestartSec=5
+EnvironmentFile=/etc/railpush/railpush.env
+
+[Install]
+WantedBy=multi-user.target

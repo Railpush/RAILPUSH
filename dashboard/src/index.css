@@ -1,0 +1,184 @@
+@import url('https://rsms.me/inter/inter.css');
+@import "tailwindcss";
+
+@theme {
+  --color-brand: #4351E8;
+  --color-brand-hover: #5563F0;
+  --color-brand-active: #3644D0;
+  --color-brand-purple: #8A05FF;
+  --color-port-gore: #181B38;
+
+  --color-surface-primary: #0A0A0F;
+  --color-surface-secondary: #111118;
+  --color-surface-tertiary: #1A1A24;
+  --color-surface-elevated: #1E1E2A;
+
+  --color-border-default: #2A2A3A;
+  --color-border-subtle: #1F1F2E;
+  --color-border-hover: #3A3A4A;
+
+  --color-content-primary: #F1F1F3;
+  --color-content-secondary: #8B8BA0;
+  --color-content-tertiary: #5A5A72;
+
+  --color-status-success: #59FFA4;
+  --color-status-success-bg: #0A2A1A;
+  --color-status-error: #FF4D6A;
+  --color-status-error-bg: #2A0A14;
+  --color-status-warning: #FFBB33;
+  --color-status-warning-bg: #2A2000;
+  --color-status-info: #38BDF8;
+  --color-status-info-bg: #0A1A2A;
+
+  --color-postgres: #336791;
+  --color-redis: #DC382D;
+
+  --font-sans: 'Inter var', 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', ui-monospace, monospace;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2A2A3A transparent;
+}
+
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: #2A2A3A; border-radius: 3px; }
+*::-webkit-scrollbar-thumb:hover { background: #3A3A4A; }
+
+body {
+  margin: 0;
+  background: #0A0A0F;
+  color: #F1F1F3;
+  font-family: 'Inter var', 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes slide-up {
+  from { transform: translateY(10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.animate-pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+.animate-shimmer {
+  background: linear-gradient(90deg, #1A1A24 25%, #111118 50%, #1A1A24 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+.animate-slide-up { animation: slide-up 0.3s ease; }
+.animate-fade-in { animation: fade-in 0.2s ease; }
+.animate-spin { animation: spin 1s linear infinite; }
+
+/* Landing page animations */
+@keyframes aurora {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  25% {
+    background-position: 50% 100%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  75% {
+    background-position: 50% 0%;
+  }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-20px); }
+}
+
+@keyframes blink-cursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes gradient-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+@keyframes slide-up-landing {
+  from {
+    transform: translateY(40px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes scale-in {
+  from {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-aurora {
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(67, 81, 232, 0.15) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(138, 5, 255, 0.1) 0%, transparent 50%),
+    radial-gradient(ellipse at 40% 80%, rgba(67, 81, 232, 0.08) 0%, transparent 50%),
+    #0A0A0F;
+  background-size: 200% 200%;
+  animation: aurora 15s ease infinite;
+}
+
+.animate-float { animation: float 6s ease-in-out infinite; }
+.animate-blink-cursor { animation: blink-cursor 1s step-end infinite; }
+
+.animate-slide-up-landing {
+  opacity: 0;
+  animation: slide-up-landing 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+.animate-scale-in {
+  opacity: 0;
+  animation: scale-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+.text-gradient-brand {
+  background: linear-gradient(90deg, #4351E8, #8A05FF, #4351E8);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: gradient-shift 4s ease infinite;
+}
+
+.delay-100 { animation-delay: 100ms; }
+.delay-200 { animation-delay: 200ms; }
+.delay-300 { animation-delay: 300ms; }
+.delay-400 { animation-delay: 400ms; }
+.delay-500 { animation-delay: 500ms; }

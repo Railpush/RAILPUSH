@@ -1,0 +1,20 @@
+# RailPush PaaS - Caddy Configuration
+{
+    admin localhost:2019
+}
+
+# Main dashboard + API
+railpush.com {
+    reverse_proxy localhost:8080
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+    }
+}
+
+# Canonicalize www -> apex
+www.railpush.com {
+    redir https://railpush.com{uri} permanent
+}

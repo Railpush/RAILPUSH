@@ -1,0 +1,199 @@
+name: Deploy To Server
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+
+    env:
+      DEPLOY_REF: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      DEPLOY_BRANCH: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_REF }}
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${DEPLOY_HOST}" || { echo "Missing DEPLOY_HOST secret"; exit 1; }
+          test -n "${DEPLOY_USER}" || { echo "Missing DEPLOY_USER secret"; exit 1; }
+          test -n "${{ secrets.DEPLOY_SSH_KEY }}" || { echo "Missing DEPLOY_SSH_KEY secret"; exit 1; }
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          PORT="${DEPLOY_PORT:-22}"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          if [ -n "${{ secrets.DEPLOY_KNOWN_HOSTS }}" ]; then
+            printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "${PORT}" "${DEPLOY_HOST}" >> ~/.ssh/known_hosts
+          fi
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Sync source to server
+        shell: bash
+        run: |
+          set -euo pipefail
+          PORT="${DEPLOY_PORT:-22}"
+          RSYNC_SSH="ssh -p ${PORT}"
+
+          rsync -az --delete \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'node_modules' \
+            --exclude 'dist' \
+            -e "${RSYNC_SSH}" \
+            ./api/ "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/railpush/railpush-api/"
+
+          rsync -az --delete \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'node_modules' \
+            --exclude 'dist' \
+            -e "${RSYNC_SSH}" \
+            ./dashboard/ "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/railpush/dashboard/"
+
+      - name: Build and restart on server
+        shell: bash
+        run: |
+          set -euo pipefail
+          PORT="${DEPLOY_PORT:-22}"
+
+          ssh -p "${PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" <<'SSH'
+          set -euo pipefail
+
+          if [ "$(id -u)" -eq 0 ]; then
+            SUDO=""
+          else
+            SUDO="sudo"
+          fi
+
+          cd /opt/railpush/dashboard
+          npm ci
+          npm run build
+
+          cd /opt/railpush/railpush-api
+          PREV_BIN="/opt/railpush/railpush-api-bin.prev"
+          NEW_BIN="/opt/railpush/railpush-api-bin.new"
+
+          if [ -f /opt/railpush/railpush-api-bin ]; then
+            cp -f /opt/railpush/railpush-api-bin "${PREV_BIN}"
+          fi
+
+          if [ -x /usr/local/go/bin/go ]; then
+            /usr/local/go/bin/go mod download
+            /usr/local/go/bin/go build -o "${NEW_BIN}" .
+          elif command -v go >/dev/null 2>&1; then
+            go mod download
+            go build -o "${NEW_BIN}" .
+          elif command -v docker >/dev/null 2>&1; then
+            docker run --rm -v /opt/railpush/railpush-api:/src -w /src golang:1.22 \
+              sh -lc "go mod download && go build -o ${NEW_BIN} ."
+          else
+            echo "No Go compiler found on server."
+            exit 1
+          fi
+
+          mv -f "${NEW_BIN}" /opt/railpush/railpush-api-bin
+
+          ${SUDO} systemctl restart railpush-api.service
+          ${SUDO} systemctl is-active --quiet railpush-api.service
+
+          HEALTH_OK=0
+          for i in $(seq 1 20); do
+            CODE="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/v1/auth/user || true)"
+            if [ "${CODE}" != "000" ] && [ "${CODE}" -lt 500 ]; then
+              HEALTH_OK=1
+              break
+            fi
+            sleep 2
+          done
+
+          if [ "${HEALTH_OK}" -ne 1 ]; then
+            echo "Health check failed after deploy, rolling back API binary..."
+            if [ -f "${PREV_BIN}" ]; then
+              cp -f "${PREV_BIN}" /opt/railpush/railpush-api-bin
+              ${SUDO} systemctl restart railpush-api.service
+            fi
+            ${SUDO} systemctl --no-pager --lines=60 status railpush-api.service || true
+            exit 1
+          fi
+
+          ${SUDO} systemctl --no-pager --lines=20 status railpush-api.service
+          SSH
+
+      - name: Notify Slack
+        if: always() && secrets.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DEPLOY_STATUS: ${{ job.status }}
+          DEPLOY_SHA: ${{ env.DEPLOY_REF }}
+          DEPLOY_BRANCH: ${{ env.DEPLOY_BRANCH }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${DEPLOY_SHA:0:7}"
+          if [ "${DEPLOY_STATUS}" = "success" ]; then
+            EMOJI=":white_check_mark:"
+          else
+            EMOJI=":x:"
+          fi
+          TEXT="${EMOJI} Production deploy ${DEPLOY_STATUS} for ${GITHUB_REPOSITORY} (${DEPLOY_BRANCH}@${SHORT_SHA}). Run: ${RUN_URL}"
+          SAFE_TEXT="$(printf '%s' "${TEXT}" | sed 's/\\/\\\\/g; s/\"/\\"/g')"
+          curl -fsS -X POST "${SLACK_WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            --data "{\"text\":\"${SAFE_TEXT}\"}"
+
+      - name: Notify Discord
+        if: always() && secrets.DISCORD_WEBHOOK_URL != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DEPLOY_STATUS: ${{ job.status }}
+          DEPLOY_SHA: ${{ env.DEPLOY_REF }}
+          DEPLOY_BRANCH: ${{ env.DEPLOY_BRANCH }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${DEPLOY_SHA:0:7}"
+          if [ "${DEPLOY_STATUS}" = "success" ]; then
+            TAG="[OK]"
+          else
+            TAG="[FAIL]"
+          fi
+          TEXT="${TAG} Production deploy ${DEPLOY_STATUS} for ${GITHUB_REPOSITORY} (${DEPLOY_BRANCH}@${SHORT_SHA}). Run: ${RUN_URL}"
+          SAFE_TEXT="$(printf '%s' "${TEXT}" | sed 's/\\/\\\\/g; s/\"/\\"/g')"
+          curl -fsS -X POST "${DISCORD_WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            --data "{\"content\":\"${SAFE_TEXT}\"}"

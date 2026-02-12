@@ -1,0 +1,275 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/gorilla/mux"
+	"github.com/joho/godotenv"
+	"github.com/railpush/api/config"
+	"github.com/railpush/api/database"
+	"github.com/railpush/api/handlers"
+	"github.com/railpush/api/middleware"
+	"github.com/railpush/api/services"
+	"github.com/railpush/api/services/registrar"
+)
+
+func main() {
+	godotenv.Load()
+	cfg := config.Load()
+	if err := validateCriticalConfig(cfg); err != nil {
+		log.Fatalf("Invalid runtime configuration: %v", err)
+	}
+
+	if err := database.Connect(&cfg.Database); err != nil {
+		log.Fatalf("Database connection failed: %v", err)
+	}
+	defer database.Close()
+
+	if err := database.RunMigrations(); err != nil {
+		log.Fatalf("Migrations failed: %v", err)
+	}
+
+	// Create build directory
+	os.MkdirAll(cfg.Docker.BuildPath, 0755)
+
+	// Ensure Caddy dynamic server for subdomain routing
+	caddyRouter := services.NewRouter(cfg)
+	if cfg.Deploy.Domain != "" && cfg.Deploy.Domain != "localhost" {
+		if err := caddyRouter.EnsureDynamicServer(); err != nil {
+			log.Printf("WARNING: Could not create Caddy dynamic server: %v (subdomain routing may not work)", err)
+		}
+	}
+
+	// Start deploy worker
+	worker := services.NewWorker(cfg)
+	worker.Router = caddyRouter
+	worker.Start(4)
+	autoscaler := services.NewAutoscaler(cfg, worker)
+	autoscaler.Start()
+	routeReconciler := services.NewRouteReconciler(cfg, caddyRouter)
+	routeReconciler.Start()
+
+	// Start scheduler for cron jobs
+	scheduler := services.NewScheduler(cfg)
+	scheduler.Start()
+
+	// WebSocket handler (created early so we can wire build log broadcasting)
+	wsH := handlers.NewWebSocketHandler(cfg)
+
+	// Wire build log broadcasting from worker to WebSocket clients
+	worker.OnBuildLog = func(deployID string, line string) {
+		wsH.BroadcastBuildMessage(deployID, []byte(line))
+	}
+
+	r := mux.NewRouter()
+	r.Use(middleware.CORSMiddleware(cfg))
+	r.Use(middleware.RateLimitMiddleware)
+
+	setupRoutes(r, cfg, worker, wsH)
+
+	r.PathPrefix("/").HandlerFunc(spaHandler)
+
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	srv := &http.Server{Addr: addr, Handler: r, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second}
+
+	go func() {
+		log.Printf("RailPush API listening on %s", addr)
+		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("Shutting down...")
+	routeReconciler.Stop()
+	autoscaler.Stop()
+	scheduler.Stop()
+	worker.Stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	srv.Shutdown(ctx)
+	log.Println("Server stopped")
+}
+
+func validateCriticalConfig(cfg *config.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("missing config")
+	}
+	if strings.TrimSpace(cfg.JWT.Secret) == "" {
+		return fmt.Errorf("JWT_SECRET is required")
+	}
+	if strings.TrimSpace(cfg.Crypto.EncryptionKey) == "" {
+		return fmt.Errorf("ENCRYPTION_KEY is required")
+	}
+	if len(strings.TrimSpace(cfg.Crypto.EncryptionKey)) < 32 {
+		return fmt.Errorf("ENCRYPTION_KEY must be at least 32 characters")
+	}
+	return nil
+}
+
+func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH *handlers.WebSocketHandler) {
+	stripeService := services.NewStripeService(cfg)
+	auth := handlers.NewAuthHandler(cfg)
+	svcH := handlers.NewServiceHandler(cfg, worker, stripeService)
+	depH := handlers.NewDeployHandler(cfg, worker)
+	envH := handlers.NewEnvVarHandler(cfg)
+	dbH := handlers.NewDatabaseHandler(cfg, worker, stripeService)
+	kvH := handlers.NewKeyValueHandler(cfg, worker, stripeService)
+	bpH := handlers.NewBlueprintHandler(cfg, worker)
+	domH := handlers.NewDomainHandler(cfg, worker)
+	logH := handlers.NewLogHandler(cfg)
+	whH := handlers.NewWebhookHandler(cfg, worker)
+	metH := handlers.NewMetricsHandler(cfg)
+	billH := handlers.NewBillingHandler(cfg, stripeService)
+	projH := handlers.NewProjectHandler()
+	workH := handlers.NewWorkspaceHandler()
+	autoH := handlers.NewAutoscalingHandler()
+	jobH := handlers.NewOneOffJobHandler(worker)
+	prevH := handlers.NewPreviewEnvironmentHandler()
+	egH := handlers.NewEnvGroupHandler()
+	samlH := handlers.NewSamlSSOHandler(cfg)
+	regRouter := registrar.NewProviderRouter(cfg.Registrar)
+	rdH := handlers.NewRegisteredDomainHandler(cfg, regRouter)
+
+	api := r.PathPrefix("/api/v1").Subrouter()
+
+	api.HandleFunc("/auth/register", auth.Register).Methods("POST")
+	api.HandleFunc("/auth/login", auth.Login).Methods("POST")
+	api.HandleFunc("/auth/logout", auth.Logout).Methods("POST")
+	api.HandleFunc("/auth/github", auth.GitHubRedirect).Methods("GET")
+	api.HandleFunc("/auth/github/callback", auth.GitHubCallback).Methods("GET")
+	api.HandleFunc("/webhooks/github", whH.GitHubWebhook).Methods("POST")
+	api.HandleFunc("/webhooks/stripe", billH.StripeWebhook).Methods("POST")
+	api.HandleFunc("/domains/search", rdH.SearchDomains).Methods("POST")
+	api.HandleFunc("/workspaces/{id}/sso/saml/metadata", samlH.Metadata).Methods("GET")
+	api.HandleFunc("/workspaces/{id}/sso/saml/acs", samlH.ACS).Methods("POST")
+
+	authed := api.PathPrefix("").Subrouter()
+	authed.Use(middleware.AuthMiddleware(cfg))
+
+	authed.HandleFunc("/auth/user", auth.GetCurrentUser).Methods("GET")
+	authed.HandleFunc("/auth/api-keys", auth.CreateAPIKey).Methods("POST")
+	authed.HandleFunc("/auth/api-keys/{id}", auth.DeleteAPIKey).Methods("DELETE")
+
+	ghH := handlers.NewGitHubHandler(cfg, services.NewGitHub(cfg))
+	authed.HandleFunc("/github/repos", ghH.ListRepos).Methods("GET")
+	authed.HandleFunc("/github/repos/{owner}/{repo}/branches", ghH.ListBranches).Methods("GET")
+
+	authed.HandleFunc("/services", svcH.ListServices).Methods("GET")
+	authed.HandleFunc("/services", svcH.CreateService).Methods("POST")
+	authed.HandleFunc("/services/{id}", svcH.GetService).Methods("GET")
+	authed.HandleFunc("/services/{id}", svcH.UpdateService).Methods("PATCH")
+	authed.HandleFunc("/services/{id}", svcH.DeleteService).Methods("DELETE")
+	authed.HandleFunc("/services/{id}/restart", svcH.RestartService).Methods("POST")
+	authed.HandleFunc("/services/{id}/suspend", svcH.SuspendService).Methods("POST")
+	authed.HandleFunc("/services/{id}/resume", svcH.ResumeService).Methods("POST")
+	authed.HandleFunc("/services/{id}/autoscaling", autoH.GetPolicy).Methods("GET")
+	authed.HandleFunc("/services/{id}/autoscaling", autoH.UpsertPolicy).Methods("PUT")
+	authed.HandleFunc("/services/{id}/jobs", jobH.ListServiceJobs).Methods("GET")
+	authed.HandleFunc("/services/{id}/jobs", jobH.RunServiceJob).Methods("POST")
+	authed.HandleFunc("/jobs/{jobId}", jobH.GetJob).Methods("GET")
+
+	authed.HandleFunc("/services/{id}/deploys", depH.TriggerDeploy).Methods("POST")
+	authed.HandleFunc("/services/{id}/deploys", depH.ListDeploys).Methods("GET")
+	authed.HandleFunc("/services/{id}/deploys/{deployId}", depH.GetDeploy).Methods("GET")
+	authed.HandleFunc("/services/{id}/deploys/{deployId}/rollback", depH.Rollback).Methods("POST")
+
+	authed.HandleFunc("/services/{id}/env-vars", envH.ListEnvVars).Methods("GET")
+	authed.HandleFunc("/services/{id}/env-vars", envH.BulkUpdateEnvVars).Methods("PUT")
+
+	authed.HandleFunc("/services/{id}/custom-domains", domH.AddCustomDomain).Methods("POST")
+	authed.HandleFunc("/services/{id}/custom-domains", domH.ListCustomDomains).Methods("GET")
+	authed.HandleFunc("/services/{id}/custom-domains/{domain}", domH.DeleteCustomDomain).Methods("DELETE")
+
+	authed.HandleFunc("/services/{id}/logs", logH.QueryLogs).Methods("GET")
+	authed.HandleFunc("/services/{id}/metrics", metH.GetServiceMetrics).Methods("GET")
+	authed.HandleFunc("/services/{id}/metrics/history", metH.GetServiceMetricsHistory).Methods("GET")
+
+	authed.HandleFunc("/databases", dbH.ListDatabases).Methods("GET")
+	authed.HandleFunc("/databases", dbH.CreateDatabase).Methods("POST")
+	authed.HandleFunc("/databases/{id}", dbH.GetDatabase).Methods("GET")
+	authed.HandleFunc("/databases/{id}", dbH.DeleteDatabase).Methods("DELETE")
+	authed.HandleFunc("/databases/{id}/backups", dbH.ListBackups).Methods("GET")
+	authed.HandleFunc("/databases/{id}/backups", dbH.TriggerBackup).Methods("POST")
+	authed.HandleFunc("/databases/{id}/replicas", dbH.ListReplicas).Methods("GET")
+	authed.HandleFunc("/databases/{id}/replicas", dbH.CreateReplica).Methods("POST")
+	authed.HandleFunc("/databases/{id}/replicas/{replicaId}/promote", dbH.PromoteReplica).Methods("POST")
+	authed.HandleFunc("/databases/{id}/ha/enable", dbH.EnableHA).Methods("POST")
+
+	authed.HandleFunc("/keyvalue", kvH.ListKeyValues).Methods("GET")
+	authed.HandleFunc("/keyvalue", kvH.CreateKeyValue).Methods("POST")
+	authed.HandleFunc("/keyvalue/{id}", kvH.GetKeyValue).Methods("GET")
+	authed.HandleFunc("/keyvalue/{id}", kvH.DeleteKeyValue).Methods("DELETE")
+
+	authed.HandleFunc("/billing", billH.GetBillingOverview).Methods("GET")
+	authed.HandleFunc("/billing/checkout-session", billH.CreateCheckoutSession).Methods("POST")
+	authed.HandleFunc("/billing/payment-method", billH.GetPaymentMethod).Methods("GET")
+	authed.HandleFunc("/billing/portal-session", billH.CreatePortalSession).Methods("POST")
+
+	authed.HandleFunc("/domains", rdH.ListDomains).Methods("GET")
+	authed.HandleFunc("/domains", rdH.RegisterDomain).Methods("POST")
+	authed.HandleFunc("/domains/{id}", rdH.GetDomain).Methods("GET")
+	authed.HandleFunc("/domains/{id}", rdH.UpdateDomain).Methods("PATCH")
+	authed.HandleFunc("/domains/{id}", rdH.DeleteDomain).Methods("DELETE")
+	authed.HandleFunc("/domains/{id}/renew", rdH.RenewDomain).Methods("POST")
+	authed.HandleFunc("/domains/{id}/dns", rdH.ListDnsRecords).Methods("GET")
+	authed.HandleFunc("/domains/{id}/dns", rdH.CreateDnsRecord).Methods("POST")
+	authed.HandleFunc("/domains/{id}/dns/{recordId}", rdH.UpdateDnsRecord).Methods("PUT")
+	authed.HandleFunc("/domains/{id}/dns/{recordId}", rdH.DeleteDnsRecord).Methods("DELETE")
+
+	authed.HandleFunc("/blueprints", bpH.ListBlueprints).Methods("GET")
+	authed.HandleFunc("/blueprints", bpH.CreateBlueprint).Methods("POST")
+	authed.HandleFunc("/blueprints/{id}", bpH.GetBlueprint).Methods("GET")
+	authed.HandleFunc("/blueprints/{id}", bpH.DeleteBlueprint).Methods("DELETE")
+	authed.HandleFunc("/blueprints/{id}/sync", bpH.SyncBlueprint).Methods("POST")
+	authed.HandleFunc("/projects", projH.ListProjects).Methods("GET")
+	authed.HandleFunc("/projects", projH.CreateProject).Methods("POST")
+	authed.HandleFunc("/projects/{id}", projH.GetProject).Methods("GET")
+	authed.HandleFunc("/projects/{id}", projH.UpdateProject).Methods("PATCH")
+	authed.HandleFunc("/projects/{id}", projH.DeleteProject).Methods("DELETE")
+	authed.HandleFunc("/project-folders", projH.ListProjectFolders).Methods("GET")
+	authed.HandleFunc("/project-folders", projH.CreateProjectFolder).Methods("POST")
+	authed.HandleFunc("/project-folders/{id}", projH.UpdateProjectFolder).Methods("PATCH")
+	authed.HandleFunc("/project-folders/{id}", projH.DeleteProjectFolder).Methods("DELETE")
+	authed.HandleFunc("/projects/{id}/environments", projH.ListProjectEnvironments).Methods("GET")
+	authed.HandleFunc("/projects/{id}/environments", projH.CreateProjectEnvironment).Methods("POST")
+	authed.HandleFunc("/environments/{id}", projH.UpdateEnvironment).Methods("PATCH")
+	authed.HandleFunc("/environments/{id}", projH.DeleteEnvironment).Methods("DELETE")
+	authed.HandleFunc("/env-groups", egH.ListEnvGroups).Methods("GET")
+	authed.HandleFunc("/env-groups", egH.CreateEnvGroup).Methods("POST")
+	authed.HandleFunc("/env-groups/{id}", egH.GetEnvGroup).Methods("GET")
+	authed.HandleFunc("/env-groups/{id}", egH.UpdateEnvGroup).Methods("PATCH")
+	authed.HandleFunc("/env-groups/{id}", egH.DeleteEnvGroup).Methods("DELETE")
+	authed.HandleFunc("/preview-environments", prevH.ListPreviewEnvironments).Methods("GET")
+	authed.HandleFunc("/workspaces/{id}/members", workH.ListMembers).Methods("GET")
+	authed.HandleFunc("/workspaces/{id}/members", workH.AddMember).Methods("POST")
+	authed.HandleFunc("/workspaces/{id}/members/{userId}", workH.UpdateMemberRole).Methods("PATCH")
+	authed.HandleFunc("/workspaces/{id}/members/{userId}", workH.RemoveMember).Methods("DELETE")
+	authed.HandleFunc("/workspaces/{id}/audit-logs", workH.ListAuditLogs).Methods("GET")
+	authed.HandleFunc("/workspaces/{id}/audit-logs.csv", workH.ExportAuditLogsCSV).Methods("GET")
+	authed.HandleFunc("/workspaces/{id}/sso/saml/config", samlH.GetConfig).Methods("GET")
+	authed.HandleFunc("/workspaces/{id}/sso/saml/config", samlH.UpsertConfig).Methods("PUT")
+
+	r.HandleFunc("/ws/logs/{serviceId}", wsH.HandleLogStream)
+	r.HandleFunc("/ws/builds/{deployId}", wsH.HandleBuildStream)
+	r.HandleFunc("/ws/events", wsH.HandleEventStream)
+}
+
+func spaHandler(w http.ResponseWriter, r *http.Request) {
+	path := "./dashboard/dist" + r.URL.Path
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		http.ServeFile(w, r, "./dashboard/dist/index.html")
+		return
+	}
+	http.ServeFile(w, r, path)
+}
