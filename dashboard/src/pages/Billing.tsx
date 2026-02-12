@@ -105,6 +105,64 @@ function usagePercent(used: number, included: number) {
   return Math.min(100, Math.round((used / included) * 100));
 }
 
+type StatusTone = 'success' | 'warning' | 'danger' | 'neutral';
+
+function subscriptionStatusDisplay(status?: string): { label: string; tone: StatusTone } {
+  const normalized = (status || 'active').trim().toLowerCase();
+  const label = normalized
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+
+  switch (normalized) {
+    case 'active':
+    case 'trialing':
+      return { label: label || 'Active', tone: 'success' };
+    case 'past_due':
+    case 'incomplete':
+      return { label: label || 'Past due', tone: 'warning' };
+    case 'unpaid':
+    case 'incomplete_expired':
+      return { label: label || 'Unpaid', tone: 'danger' };
+    case 'canceled':
+    case 'cancelled':
+    case 'ended':
+      return { label: label || 'Canceled', tone: 'neutral' };
+    default:
+      return { label: label || 'Unknown', tone: 'neutral' };
+  }
+}
+
+function StatusPill({ status }: { status?: string }) {
+  const { label, tone } = subscriptionStatusDisplay(status);
+
+  const toneClass =
+    tone === 'success'
+      ? 'bg-status-success-bg text-status-success border border-status-success/20'
+      : tone === 'warning'
+        ? 'bg-status-warning-bg text-status-warning border border-status-warning/20'
+        : tone === 'danger'
+          ? 'bg-status-error-bg text-status-error border border-status-error/20'
+          : 'bg-surface-tertiary text-content-secondary border border-border-default';
+
+  const dotClass =
+    tone === 'success'
+      ? 'bg-status-success'
+      : tone === 'warning'
+        ? 'bg-status-warning'
+        : tone === 'danger'
+          ? 'bg-status-error'
+          : 'bg-content-tertiary';
+
+  return (
+    <span className={cn('inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium', toneClass)}>
+      <span className={cn('w-1.5 h-1.5 rounded-full', dotClass)} />
+      {label}
+    </span>
+  );
+}
+
 function SectionFrame({
   id,
   title,
@@ -115,11 +173,11 @@ function SectionFrame({
   children: React.ReactNode;
 }) {
   return (
-    <section id={id} className="border border-border-default bg-surface-primary">
-      <div className="px-8 py-7 border-b border-border-subtle">
-        <h2 className="text-2xl font-semibold text-content-primary tracking-tight">{title}</h2>
+    <section id={id} className="border border-border-default bg-surface-primary rounded-lg overflow-hidden">
+      <div className="px-6 py-5 border-b border-border-subtle">
+        <h2 className="text-xl font-semibold text-content-primary tracking-tight">{title}</h2>
       </div>
-      <div className="px-8 py-7">{children}</div>
+      <div className="px-6 py-6">{children}</div>
     </section>
   );
 }
@@ -399,9 +457,7 @@ export function Billing() {
                         {brandDisplay(overview.payment_method_brand)} ending in {overview.payment_method_last4}
                       </p>
                     </div>
-                    <span className="inline-flex items-center border border-border-default bg-surface-primary px-2.5 py-1 text-xs text-content-secondary capitalize">
-                      {overview.subscription_status || 'active'}
-                    </span>
+                    <StatusPill status={overview.subscription_status} />
                   </div>
                   <Button variant="secondary" onClick={handleOpenBillingPortal}>
                     Edit payment details
@@ -667,8 +723,10 @@ export function Billing() {
                 type="button"
                 onClick={() => scrollToSection(section.id)}
                 className={cn(
-                  'block w-full text-left text-2xl leading-tight transition-colors',
-                  activeSection === section.id ? 'text-content-primary' : 'text-content-secondary hover:text-content-primary'
+                  'block w-full text-left text-base font-medium leading-6 py-1 transition-colors',
+                  activeSection === section.id
+                    ? 'text-content-primary'
+                    : 'text-content-secondary hover:text-content-primary'
                 )}
               >
                 {section.label}
