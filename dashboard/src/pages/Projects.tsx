@@ -668,7 +668,7 @@ export function Projects() {
                     </div>
 
                     <div>
-                      <span className="inline-flex items-center px-2 py-1 text-[11px] rounded-[2px] bg-[#2D2D2F] text-content-primary">
+                      <span className="inline-flex items-center px-2 py-1 text-[11px] rounded-md border border-brand/20 bg-brand/10 text-brand font-semibold capitalize">
                         {svc.runtime || serviceTypeLabel(svc.type)}
                       </span>
                     </div>
