@@ -63,3 +63,13 @@ func TestAuthenticateRequestMissingToken(t *testing.T) {
 		t.Fatalf("expected error for missing credentials")
 	}
 }
+
+func TestAuthenticateRequestRejectsQueryToken(t *testing.T) {
+	cfg := &config.Config{JWT: config.JWTConfig{Secret: "test-secret"}}
+	tok := signedToken(t, cfg.JWT.Secret, "user-query")
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com?token="+tok, nil)
+	if _, err := AuthenticateRequest(cfg, req); err == nil {
+		t.Fatalf("expected query token to be rejected")
+	}
+}
