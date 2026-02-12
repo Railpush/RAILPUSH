@@ -146,7 +146,7 @@ export function Docs() {
     <div className="min-h-screen bg-surface-primary text-content-primary">
       <SEO
         title="Documentation — RailPush"
-        description="Complete RailPush documentation. Learn how to deploy services, manage PostgreSQL and Redis databases, use blueprints, custom domains, cron jobs, and more."
+        description="How RailPush works: ship from Git, wire domains, manage Postgres and Redis, schedule jobs, and define everything as code with render.yaml."
         canonical="https://railpush.com/docs"
       />
       {/* ── Top Nav ─────────────────────────────────────── */}
@@ -212,14 +212,14 @@ export function Docs() {
                 <h1 className="text-3xl font-bold tracking-tight">Getting Started</h1>
               </div>
               <p className="text-content-secondary text-base leading-relaxed mt-4 mb-8">
-                RailPush is a cloud platform that deploys your applications directly from Git. Push your code, and we handle building, deploying, TLS certificates, and routing automatically.
+                RailPush keeps deploys, data, and routing under one roof. Connect GitHub, describe what you need, and we’ll build, run, and front it with defaults you can override.
               </p>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
                 {[
-                  { icon: GitBranch, title: 'Connect GitHub', desc: 'Link your account in one click' },
-                  { icon: Zap, title: 'Push Code', desc: 'Every push triggers a deploy' },
-                  { icon: Globe, title: 'Go Live', desc: 'Get a URL instantly' },
+                  { icon: GitBranch, title: 'Connect GitHub', desc: 'Link your account and pick a repo' },
+                  { icon: Zap, title: 'Push Code', desc: 'Every push builds, checks health, and rolls out' },
+                  { icon: Globe, title: 'Go Live', desc: 'Instant URL with TLS and preview links' },
                 ].map(s => (
                   <div key={s.title} className="rounded-xl border border-border-default bg-surface-secondary/50 p-5">
                     <s.icon className="w-5 h-5 text-brand mb-3" />

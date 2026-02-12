@@ -117,7 +117,7 @@ export function Login() {
     <div className="min-h-screen bg-surface-primary flex">
       <SEO
         title="Sign In — RailPush"
-        description="Sign in to your RailPush dashboard to manage deployments, databases, and domains. Or create a free account to get started."
+        description="Access RailPush to manage services, databases, domains, and schedulers from one console. Create an account or sign in to keep shipping."
         canonical="https://railpush.com/login"
       />
       {/* ── Left: Branding / Visual ───────────────────── */}
@@ -153,14 +153,14 @@ export function Login() {
             <div>
               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-border-default bg-surface-secondary/40 backdrop-blur-sm mb-6">
                 <Sparkles className="w-3.5 h-3.5 text-brand" />
-                <span className="text-xs font-medium text-content-secondary">Deploy in seconds, not hours</span>
+                <span className="text-xs font-medium text-content-secondary">Hands-off builds, confident releases</span>
               </div>
               <h2 className="text-3xl font-bold tracking-tight leading-tight mb-3">
-                Ship faster with<br />
-                <span className="text-gradient-brand">zero config deploys</span>
+                Ship with focus<br />
+                <span className="text-gradient-brand">no yak shaving required</span>
               </h2>
               <p className="text-content-secondary text-sm leading-relaxed max-w-sm">
-                Push your code and RailPush handles the rest. Automatic builds, managed databases, instant scaling.
+                Git in, services out. RailPush builds, provisions data, issues certs, and scales while you stay in flow.
               </p>
             </div>
             <AnimatedTerminal />
@@ -169,9 +169,9 @@ export function Login() {
           {/* Bottom: Stats */}
           <div className="flex items-center gap-8">
             {[
-              { value: '< 30s', label: 'Deploy time' },
-              { value: '9', label: 'Runtimes' },
-              { value: '99.9%', label: 'Uptime' },
+              { value: '< 30s', label: 'From push to live' },
+              { value: '9', label: 'Runtime families' },
+              { value: '99.9%', label: 'Target uptime' },
             ].map(s => (
               <div key={s.label}>
                 <div className="text-xl font-bold text-content-primary">{s.value}</div>
