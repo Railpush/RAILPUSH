@@ -107,6 +107,36 @@ function usagePercent(used: number, included: number) {
 
 type StatusTone = 'success' | 'warning' | 'danger' | 'neutral';
 
+function StatCard({
+  title,
+  value,
+  helper,
+  icon,
+  emphasis = false,
+}: {
+  title: string;
+  value: string;
+  helper?: string | React.ReactNode;
+  icon?: React.ReactNode;
+  emphasis?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        'border border-border-default bg-surface-secondary rounded-lg p-5 flex items-start gap-3',
+        emphasis && 'bg-surface-tertiary border-border-hover'
+      )}
+    >
+      {icon && <div className="w-10 h-10 rounded-full bg-surface-primary border border-border-default flex items-center justify-center text-content-primary">{icon}</div>}
+      <div className="flex-1">
+        <p className="text-xs uppercase tracking-wide text-content-tertiary">{title}</p>
+        <p className="text-xl font-semibold text-content-primary mt-1">{value}</p>
+        {helper && <p className="text-sm text-content-secondary mt-1 leading-relaxed">{helper}</p>}
+      </div>
+    </div>
+  );
+}
+
 function subscriptionStatusDisplay(status?: string): { label: string; tone: StatusTone } {
   const normalized = (status || 'active').trim().toLowerCase();
   const label = normalized
@@ -384,21 +414,20 @@ export function Billing() {
   if (loading) {
     return (
       <div className="space-y-4">
-        <div className="h-10 w-72 bg-surface-secondary border border-border-default animate-pulse" />
-        <div className="h-48 bg-surface-secondary border border-border-default animate-pulse" />
-        <div className="h-48 bg-surface-secondary border border-border-default animate-pulse" />
+        <div className="h-10 w-72 bg-surface-secondary border border-border-default rounded animate-pulse" />
+        <div className="h-48 bg-surface-secondary border border-border-default rounded animate-pulse" />
+        <div className="h-48 bg-surface-secondary border border-border-default rounded animate-pulse" />
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-content-primary">Billing Information</h1>
-          <p className="text-sm text-content-secondary mt-1">
-            Workspace billing, usage envelopes, and invoice controls.
-          </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="space-y-1">
+          <p className="text-xs uppercase tracking-wide text-content-tertiary">Billing</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-content-primary">Workspace billing & invoices</h1>
+          <p className="text-sm text-content-secondary">Keep plans, payment, and invoice history in sync with Stripe.</p>
         </div>
         <div className="flex items-center gap-2">
           {overview?.has_payment_method && (
@@ -407,24 +436,52 @@ export function Billing() {
               Manage Billing
             </Button>
           )}
-          <Button
-            variant={overview?.has_payment_method ? 'secondary' : 'primary'}
-            onClick={handleAddPaymentMethod}
-          >
+          <Button variant={overview?.has_payment_method ? 'secondary' : 'primary'} onClick={handleAddPaymentMethod}>
             <CreditCard className="w-4 h-4" />
             {overview?.has_payment_method ? 'Update Payment Method' : 'Add Payment Method'}
           </Button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_220px] gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <StatCard
+          title="Plan"
+          value={`${currentPlan.name} • ${PLAN_BY_ID[currentPlanId].priceLabel}`}
+          helper={<div className="flex items-center gap-2 text-sm"><StatusPill status={overview?.subscription_status} /><span className="text-content-secondary">Includes {PLAN_BY_ID[currentPlanId].cpu} / {PLAN_BY_ID[currentPlanId].mem}</span></div>}
+          icon={<CircleDollarSign className="w-4 h-4" />}
+          emphasis
+        />
+        <StatCard
+          title="Unbilled this month"
+          value={formatCurrency(monthToDateCents)}
+          helper={`Projected ${formatMonthLabel(new Date())}: ${formatCurrency(projectedCents)}`}
+          icon={<ReceiptText className="w-4 h-4" />}
+        />
+        <StatCard
+          title="Payment method"
+          value={
+            overview?.has_payment_method
+              ? `${brandDisplay(overview.payment_method_brand)} •••• ${overview.payment_method_last4}`
+              : 'No card on file'
+          }
+          helper={overview?.has_payment_method ? 'Stripe keeps this card current.' : 'Add a card to enable paid plans.'}
+          icon={<CreditCard className="w-4 h-4" />}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_240px] gap-6">
         <div className="space-y-6">
-          <SectionFrame id="plan" title="Plan">
-            <div className="border border-border-default bg-surface-secondary p-6 flex flex-wrap items-start justify-between gap-6">
-              <div className="space-y-2">
-                <p className="text-xs uppercase tracking-wider text-content-tertiary">Current Plan</p>
-                <h3 className="text-xl font-semibold text-content-primary">{currentPlan.name}</h3>
-                <p className="text-sm text-content-secondary max-w-xl">{currentPlan.description}</p>
+          <SectionFrame id="plan" title="Plan & Controls">
+            <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-4">
+              <div className="border border-border-default bg-surface-secondary rounded-lg p-5 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <p className="text-xs uppercase tracking-wider text-content-tertiary">Current Plan</p>
+                    <h3 className="text-xl font-semibold text-content-primary">{currentPlan.name}</h3>
+                    <p className="text-sm text-content-secondary leading-relaxed">{currentPlan.description}</p>
+                  </div>
+                  <StatusPill status={overview?.subscription_status} />
+                </div>
                 <div className="flex items-center flex-wrap gap-2 pt-1">
                   <span className="inline-flex items-center border border-border-default bg-surface-primary px-2.5 py-1 text-xs text-content-secondary">
                     {currentPlan.cpu}
@@ -437,10 +494,20 @@ export function Billing() {
                   </span>
                 </div>
               </div>
-              <Button variant="secondary" onClick={handleOpenBillingPortal}>
-                <PencilLine className="w-4 h-4" />
-                Update Plan
-              </Button>
+
+              <div className="border border-border-default bg-surface-secondary rounded-lg p-5 space-y-3">
+                <p className="text-sm text-content-secondary">Manage your subscription and invoices in Stripe.</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="secondary" onClick={handleOpenBillingPortal}>
+                    <PencilLine className="w-4 h-4" />
+                    Update Plan
+                  </Button>
+                  <Button variant="ghost" onClick={handleOpenBillingPortal}>
+                    <ExternalLink className="w-4 h-4" />
+                    Open Stripe Portal
+                  </Button>
+                </div>
+              </div>
             </div>
           </SectionFrame>
 
@@ -480,33 +547,22 @@ export function Billing() {
           </SectionFrame>
 
           <SectionFrame id="billing-information" title="Billing Information">
-            <div className="border border-border-default bg-surface-secondary divide-y divide-border-subtle">
-              <div className="p-6 grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)_auto] gap-4 items-start">
-                <div>
-                  <p className="text-base font-semibold text-content-primary">Billing email</p>
-                  <p className="text-sm text-content-secondary mt-1">
-                    Used for invoices and billing notifications.
-                  </p>
-                </div>
-                <div className="h-11 border border-border-default bg-surface-primary px-3 flex items-center text-content-secondary">
-                  {billingEmail || 'Not provided'}
-                </div>
-                <Button variant="ghost" onClick={handleOpenBillingPortal}>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="border border-border-default bg-surface-secondary rounded-lg p-5 space-y-2">
+                <p className="text-xs uppercase tracking-wider text-content-tertiary">Billing email</p>
+                <p className="text-base text-content-primary">{billingEmail || 'Not provided'}</p>
+                <p className="text-sm text-content-secondary">Used for invoices and billing notifications.</p>
+                <Button variant="ghost" onClick={handleOpenBillingPortal} className="mt-2 w-fit">
                   <PencilLine className="w-4 h-4" />
-                  Edit
+                  Edit in portal
                 </Button>
               </div>
-              <div className="p-6 grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)_auto] gap-4 items-start">
-                <div>
-                  <p className="text-base font-semibold text-content-primary">Additional Information</p>
-                  <p className="text-sm text-content-secondary mt-1">
-                    Company and tax details are managed in your billing portal.
-                  </p>
-                </div>
-                <p className="text-base text-content-secondary pt-2">No info provided.</p>
-                <Button variant="ghost" onClick={handleOpenBillingPortal}>
-                  <PencilLine className="w-4 h-4" />
-                  Edit
+              <div className="border border-border-default bg-surface-secondary rounded-lg p-5 space-y-2">
+                <p className="text-xs uppercase tracking-wider text-content-tertiary">Company & Tax Details</p>
+                <p className="text-base text-content-secondary">Manage company name, address, and VAT in your Stripe portal.</p>
+                <Button variant="ghost" onClick={handleOpenBillingPortal} className="mt-2 w-fit">
+                  <ExternalLink className="w-4 h-4" />
+                  Open portal
                 </Button>
               </div>
             </div>
@@ -517,40 +573,43 @@ export function Billing() {
               <p className="text-base text-content-secondary">
                 Included quotas are based on your <span className="text-content-primary">{currentPlan.name}</span> plan.
               </p>
-              <p className="text-sm text-content-tertiary">
-                Usage metering endpoints are not enabled yet, so current month values are shown as 0 while limits and billable footprint remain accurate.
-              </p>
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <div className="border border-border-default bg-surface-secondary p-5 space-y-3">
-                  <p className="text-base text-content-primary">Included Instance Hours</p>
-                  <p className="text-2xl font-semibold text-content-primary">0 hours <span className="text-base text-content-secondary">/ {includedUsage.instanceHours} hours</span></p>
-                  <div className="h-1 bg-surface-primary border border-border-subtle">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="border border-border-default bg-surface-secondary rounded-lg p-4 space-y-2">
+                  <div className="flex items-center justify-between text-sm text-content-secondary">
+                    <span>Instance Hours</span>
+                    <span className="text-content-primary font-semibold">0 / {includedUsage.instanceHours}</span>
+                  </div>
+                  <div className="h-2 bg-surface-primary rounded-full overflow-hidden border border-border-subtle">
                     <div className="h-full bg-brand" style={{ width: `${usagePercent(0, includedUsage.instanceHours)}%` }} />
                   </div>
                 </div>
-
-                <div className="border border-border-default bg-surface-secondary p-5 space-y-3">
-                  <p className="text-base text-content-primary">Included Bandwidth</p>
-                  <p className="text-2xl font-semibold text-content-primary">0 GB <span className="text-base text-content-secondary">/ {includedUsage.bandwidthGb.toLocaleString()} GB</span></p>
-                  <div className="h-1 bg-surface-primary border border-border-subtle">
+                <div className="border border-border-default bg-surface-secondary rounded-lg p-4 space-y-2">
+                  <div className="flex items-center justify-between text-sm text-content-secondary">
+                    <span>Bandwidth (GB)</span>
+                    <span className="text-content-primary font-semibold">0 / {includedUsage.bandwidthGb.toLocaleString()}</span>
+                  </div>
+                  <div className="h-2 bg-surface-primary rounded-full overflow-hidden border border-border-subtle">
                     <div className="h-full bg-brand-purple" style={{ width: `${usagePercent(0, includedUsage.bandwidthGb)}%` }} />
                   </div>
-                  <div className="pt-2 space-y-2 text-sm text-content-secondary">
-                    <div className="flex items-center justify-between"><span>Services ({activeServiceCount})</span><span>0 GB</span></div>
-                    <div className="flex items-center justify-between"><span>Databases ({activeDatabaseCount})</span><span>0 GB</span></div>
-                    <div className="flex items-center justify-between"><span>Key Value ({activeKeyValueCount})</span><span>0 GB</span></div>
+                  <div className="flex justify-between text-xs text-content-tertiary pt-1">
+                    <span>Services ({activeServiceCount})</span>
+                    <span>DB ({activeDatabaseCount})</span>
+                    <span>KV ({activeKeyValueCount})</span>
                   </div>
                 </div>
-
-                <div className="border border-border-default bg-surface-secondary p-5 space-y-3 lg:col-span-2">
-                  <p className="text-base text-content-primary">Included Pipeline Minutes</p>
-                  <p className="text-2xl font-semibold text-content-primary">0 min <span className="text-base text-content-secondary">/ {includedUsage.pipelineMinutes.toLocaleString()} min</span></p>
-                  <div className="h-1 bg-surface-primary border border-border-subtle">
+                <div className="border border-border-default bg-surface-secondary rounded-lg p-4 space-y-2">
+                  <div className="flex items-center justify-between text-sm text-content-secondary">
+                    <span>Pipeline Minutes</span>
+                    <span className="text-content-primary font-semibold">0 / {includedUsage.pipelineMinutes.toLocaleString()}</span>
+                  </div>
+                  <div className="h-2 bg-surface-primary rounded-full overflow-hidden border border-border-subtle">
                     <div className="h-full bg-status-info" style={{ width: `${usagePercent(0, includedUsage.pipelineMinutes)}%` }} />
                   </div>
                 </div>
               </div>
+              <p className="text-sm text-content-tertiary">
+                Usage metering is rolling out soon; until then, totals remain accurate while live usage reads as 0.
+              </p>
             </div>
           </SectionFrame>
 
