@@ -13,7 +13,7 @@ export function Input({ label, error, hint, className, ...props }: Props) {
       {label && <label className="block text-sm font-medium text-content-primary">{label}</label>}
       <input
         className={cn(
-          'w-full bg-surface-secondary border rounded-lg px-3 py-2.5 text-sm text-content-primary shadow-[0_1px_2px_rgba(15,23,42,0.06)]',
+          'w-full bg-white/70 backdrop-blur-lg border rounded-lg px-3 py-2.5 text-sm text-content-primary shadow-[0_8px_20px_rgba(15,23,42,0.05)]',
           'placeholder:text-content-tertiary',
           'focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/15',
           'transition-all duration-150',

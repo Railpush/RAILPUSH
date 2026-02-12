@@ -66,7 +66,7 @@ export function Sidebar() {
   if (serviceId) {
     const base = `/services/${serviceId}`;
     return (
-      <aside className={cn(width, 'h-screen fixed left-0 top-0 bg-surface-secondary/95 backdrop-blur-sm border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.08)]')}>
+      <aside className={cn(width, 'h-screen fixed left-0 top-0 bg-white/65 backdrop-blur-xl border-r border-white/60 flex flex-col overflow-y-auto z-40 transition-all duration-200 shadow-[12px_0_28px_rgba(15,23,42,0.08)]')}>
         <div className="p-4 border-b border-border-subtle flex items-center justify-between">
           {!collapsed && (
             <div className="flex items-center gap-2 text-sm text-content-secondary">
@@ -113,7 +113,7 @@ export function Sidebar() {
   if (dbId) {
     const base = `/databases/${dbId}`;
     return (
-      <aside className={cn(width, 'h-screen fixed left-0 top-0 bg-surface-secondary/95 backdrop-blur-sm border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.08)]')}>
+      <aside className={cn(width, 'h-screen fixed left-0 top-0 bg-white/65 backdrop-blur-xl border-r border-white/60 flex flex-col overflow-y-auto z-40 transition-all duration-200 shadow-[12px_0_28px_rgba(15,23,42,0.08)]')}>
         <div className="p-4 border-b border-border-subtle flex items-center justify-between">
           {!collapsed && (
             <div className="flex items-center gap-2 text-sm text-content-secondary">
@@ -153,7 +153,7 @@ export function Sidebar() {
   if (domainId) {
     const base = `/domains/${domainId}`;
     return (
-      <aside className={cn(width, 'h-screen fixed left-0 top-0 bg-surface-secondary/95 backdrop-blur-sm border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.08)]')}>
+      <aside className={cn(width, 'h-screen fixed left-0 top-0 bg-white/65 backdrop-blur-xl border-r border-white/60 flex flex-col overflow-y-auto z-40 transition-all duration-200 shadow-[12px_0_28px_rgba(15,23,42,0.08)]')}>
         <div className="p-4 border-b border-border-subtle flex items-center justify-between">
           {!collapsed && (
             <div className="flex items-center gap-2 text-sm text-content-secondary">
@@ -188,8 +188,8 @@ export function Sidebar() {
 
   // Workspace level sidebar (default)
   return (
-    <aside className={cn(width, 'h-screen fixed left-0 top-0 bg-surface-secondary/95 backdrop-blur-sm border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-200 shadow-[8px_0_24px_rgba(15,23,42,0.08)]')}>
-      <div className="p-4 border-b border-border-subtle flex items-center justify-between">
+    <aside className={cn(width, 'h-screen fixed left-0 top-0 bg-white/65 backdrop-blur-xl border-r border-white/60 flex flex-col overflow-y-auto z-40 transition-all duration-200 shadow-[12px_0_28px_rgba(15,23,42,0.08)]')}>
+      <div className="p-4 border-b border-border-subtle flex items-center justify-between bg-white/50 backdrop-blur-xl">
         {!collapsed ? (
           <div className="flex items-center gap-2 text-sm cursor-pointer">
             <LogoMark size={24} />
@@ -208,7 +208,7 @@ export function Sidebar() {
 
       {collapsed && (
         <div className="p-2 flex justify-center">
-          <button onClick={toggle} className="p-1.5 rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors" title="Expand sidebar">
+          <button onClick={toggle} className="p-1.5 rounded-md text-content-tertiary hover:text-content-primary hover:bg-white/60 transition-colors" title="Expand sidebar">
             <PanelLeftOpen className="w-4 h-4" />
           </button>
         </div>
@@ -216,7 +216,7 @@ export function Sidebar() {
 
       {!collapsed && (
         <div className="p-2">
-          <button className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-surface-tertiary border border-border-default text-content-secondary text-sm hover:text-content-primary hover:border-border-hover transition-colors">
+          <button className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-white/70 backdrop-blur-lg border border-white/60 text-content-secondary text-sm hover:text-content-primary hover:border-border-hover transition-colors shadow-[0_4px_12px_rgba(15,23,42,0.06)]">
             <Search className="w-3.5 h-3.5" />
             <span>Quick search</span>
             <kbd className="ml-auto text-[10px] bg-surface-primary px-1.5 py-0.5 rounded border border-border-default">⌘K</kbd>

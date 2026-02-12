@@ -13,8 +13,8 @@ export function Card({ children, hover, padding = 'md', className, ...props }: P
   return (
     <div
       className={cn(
-        'bg-surface-secondary border border-border-default rounded-xl transition-all duration-150 shadow-sm',
-        hover && 'hover:border-border-hover hover:shadow-md cursor-pointer',
+        'glass-panel rounded-xl transition-all duration-150',
+        hover && 'hover:border-border-hover hover:shadow-lg cursor-pointer',
         paddings[padding],
         className
       )}

@@ -22,7 +22,7 @@ export function TopBar() {
   ];
 
   return (
-    <header className="h-[58px] border-b border-border-default flex items-center justify-end px-4 lg:px-6 gap-3 bg-surface-secondary/80 backdrop-blur-sm sticky top-0 z-30">
+    <header className="h-[58px] border-b border-border-default flex items-center justify-end px-4 lg:px-6 gap-3 bg-white/65 backdrop-blur-xl shadow-[0_6px_20px_rgba(15,23,42,0.05)] sticky top-0 z-30">
       <Dropdown
         trigger={
           <button className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-brand text-white rounded-lg text-sm font-semibold hover:bg-brand-hover transition-colors cursor-pointer shadow-sm">
