@@ -37,6 +37,33 @@
   --font-mono: 'IBM Plex Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 }
 
+/* Dark theme overrides */
+.theme-dark {
+  --color-brand: #4F8BFF;
+  --color-brand-hover: #3A73E6;
+  --color-brand-active: #2B56B8;
+  --color-surface-primary: #0E1118;
+  --color-surface-secondary: rgba(18, 21, 31, 0.82);
+  --color-surface-tertiary: rgba(26, 30, 44, 0.7);
+  --color-surface-elevated: rgba(24, 28, 40, 0.88);
+  --color-border-default: rgba(255, 255, 255, 0.08);
+  --color-border-subtle: rgba(255, 255, 255, 0.04);
+  --color-border-hover: rgba(255, 255, 255, 0.12);
+  --color-content-primary: #E9EDF7;
+  --color-content-secondary: #A5B1CC;
+  --color-content-tertiary: #7D8AAA;
+  --color-status-success: #4ADE80;
+  --color-status-success-bg: rgba(74, 222, 128, 0.12);
+  --color-status-error: #F43F5E;
+  --color-status-error-bg: rgba(244, 63, 94, 0.12);
+  --color-status-warning: #F59E0B;
+  --color-status-warning-bg: rgba(245, 158, 11, 0.12);
+  --color-status-info: #38BDF8;
+  --color-status-info-bg: rgba(56, 189, 248, 0.12);
+  --color-postgres: #5B8BFF;
+  --color-redis: #F87171;
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;

@@ -1,9 +1,11 @@
 import { useNavigate } from 'react-router-dom';
-import { Plus, Bell, ChevronDown, Globe, FileText, Lock, Cog, Clock, Database, Key, Layers } from 'lucide-react';
+import { Plus, Bell, ChevronDown, Globe, FileText, Lock, Cog, Clock, Database, Key, Layers, Moon, Sun } from 'lucide-react';
 import { Dropdown } from '../ui/Dropdown';
+import { useTheme } from '../../lib/theme';
 
 export function TopBar() {
   const navigate = useNavigate();
+  const { theme, toggleTheme } = useTheme();
 
   const ico = (I: any, c: string) => <I size={14} style={{ color: c }} />;
 
@@ -38,6 +40,14 @@ export function TopBar() {
       <button className="relative p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors border border-transparent hover:border-border-default">
         <Bell className="w-4 h-4" />
         <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-status-error rounded-full" />
+      </button>
+
+      <button
+        className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors border border-transparent hover:border-border-default"
+        onClick={toggleTheme}
+        title={theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
+      >
+        {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
       </button>
 
       <button className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-surface-tertiary transition-colors border border-transparent hover:border-border-default">

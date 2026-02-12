@@ -61,15 +61,15 @@ export function serviceTypeColor(type: ServiceType): string {
 
 export function statusConfig(status: ServiceStatus | DeployStatus): { color: string; bg: string; label: string; pulse: boolean } {
   const configs: Record<string, { color: string; bg: string; label: string; pulse: boolean }> = {
-    created: { color: '#475569', bg: '#E4EBF5', label: 'Created', pulse: false },
-    building: { color: '#0EA5E9', bg: '#E0F2FE', label: 'Building', pulse: true },
-    deploying: { color: '#0EA5E9', bg: '#E0F2FE', label: 'Deploying', pulse: true },
-    live: { color: '#15803D', bg: '#D9F7E6', label: 'Live', pulse: true },
-    failed: { color: '#DC2626', bg: '#FDE8E8', label: 'Failed', pulse: false },
-    suspended: { color: '#B45309', bg: '#FFF7ED', label: 'Suspended', pulse: false },
-    deactivated: { color: '#94A3B8', bg: '#E4EBF5', label: 'Deactivated', pulse: false },
-    pending: { color: '#475569', bg: '#E4EBF5', label: 'Pending', pulse: false },
-    cancelled: { color: '#94A3B8', bg: '#E4EBF5', label: 'Cancelled', pulse: false },
+    created: { color: 'var(--color-content-secondary)', bg: 'var(--color-surface-tertiary)', label: 'Created', pulse: false },
+    building: { color: 'var(--color-status-info)', bg: 'var(--color-status-info-bg)', label: 'Building', pulse: true },
+    deploying: { color: 'var(--color-status-info)', bg: 'var(--color-status-info-bg)', label: 'Deploying', pulse: true },
+    live: { color: 'var(--color-status-success)', bg: 'var(--color-status-success-bg)', label: 'Live', pulse: true },
+    failed: { color: 'var(--color-status-error)', bg: 'var(--color-status-error-bg)', label: 'Failed', pulse: false },
+    suspended: { color: 'var(--color-status-warning)', bg: 'var(--color-status-warning-bg)', label: 'Suspended', pulse: false },
+    deactivated: { color: 'var(--color-content-tertiary)', bg: 'var(--color-surface-tertiary)', label: 'Deactivated', pulse: false },
+    pending: { color: 'var(--color-content-secondary)', bg: 'var(--color-surface-tertiary)', label: 'Pending', pulse: false },
+    cancelled: { color: 'var(--color-content-tertiary)', bg: 'var(--color-surface-tertiary)', label: 'Cancelled', pulse: false },
   };
   return configs[status] || configs.created;
 }
