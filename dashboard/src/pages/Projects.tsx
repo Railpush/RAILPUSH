@@ -614,7 +614,7 @@ export function Projects() {
                   className={cn(
                     'px-3 py-1.5 text-sm border-r border-border-default last:border-r-0 transition-colors',
                     serviceTab === tab.id
-                      ? 'bg-[#3A1A73] text-white'
+                      ? 'bg-brand text-white'
                       : 'text-content-secondary hover:text-content-primary hover:bg-surface-tertiary',
                   )}
                 >
