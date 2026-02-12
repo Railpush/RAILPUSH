@@ -5,6 +5,7 @@ import { SidebarProvider, useSidebar } from '../../lib/sidebar';
 
 function LayoutInner() {
   const { collapsed } = useSidebar();
+  const year = new Date().getFullYear();
 
   return (
     <div className="min-h-screen bg-surface-primary relative">
@@ -13,8 +14,13 @@ function LayoutInner() {
       <div className={`relative transition-all duration-200 ${collapsed ? 'ml-[68px]' : 'ml-[248px]'}`}>
         <TopBar />
         <main className="px-4 sm:px-6 lg:px-10 py-6 max-w-[1320px] mx-auto">
-          <div className="page-shell p-4 sm:p-6">
-            <Outlet />
+          <div className="page-shell p-4 sm:p-6 flex flex-col">
+            <div className="flex-1">
+              <Outlet />
+            </div>
+            <footer className="mt-10 pt-5 border-t border-border-default/60 text-xs text-content-tertiary text-center">
+              RailPush {year}
+            </footer>
           </div>
         </main>
       </div>
