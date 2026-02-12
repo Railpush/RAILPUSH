@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 
 	"github.com/railpush/api/config"
 	"github.com/railpush/api/database"
@@ -49,6 +50,23 @@ func (s *StripeService) PriceIDForPlan(plan string) string {
 	}
 }
 
+func (s *StripeService) PlanForPriceID(priceID string) string {
+	priceID = strings.TrimSpace(priceID)
+	if priceID == "" || s == nil || s.Config == nil {
+		return ""
+	}
+	switch priceID {
+	case strings.TrimSpace(s.Config.Stripe.PriceStarter):
+		return "starter"
+	case strings.TrimSpace(s.Config.Stripe.PriceStandard):
+		return "standard"
+	case strings.TrimSpace(s.Config.Stripe.PricePro):
+		return "pro"
+	default:
+		return ""
+	}
+}
+
 // EnsureCustomer creates or retrieves a Stripe customer for the given user.
 func (s *StripeService) EnsureCustomer(userID, email string) (*models.BillingCustomer, error) {
 	bc, err := models.GetBillingCustomerByUserID(userID)
@@ -77,6 +95,124 @@ func (s *StripeService) EnsureCustomer(userID, email string) (*models.BillingCus
 		return nil, fmt.Errorf("failed to save billing customer: %w", err)
 	}
 	return bc, nil
+}
+
+func subscriptionStatusScore(status string) int {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "active":
+		return 6
+	case "trialing":
+		return 5
+	case "past_due":
+		return 4
+	case "unpaid":
+		return 3
+	case "incomplete":
+		return 2
+	case "incomplete_expired":
+		return 1
+	case "ended":
+		return 0
+	case "canceled", "cancelled":
+		return -1
+	default:
+		return 0
+	}
+}
+
+func (s *StripeService) fetchBestSubscription(stripeCustomerID, preferredSubscriptionID string) (*stripe.Subscription, error) {
+	stripeCustomerID = strings.TrimSpace(stripeCustomerID)
+	if stripeCustomerID == "" {
+		return nil, nil
+	}
+
+	preferredSubscriptionID = strings.TrimSpace(preferredSubscriptionID)
+	if preferredSubscriptionID != "" {
+		getParams := &stripe.SubscriptionParams{}
+		getParams.AddExpand("default_payment_method")
+		getParams.AddExpand("items.data.price")
+		sub, err := subscription.Get(preferredSubscriptionID, getParams)
+		if err == nil && sub != nil {
+			return sub, nil
+		}
+	}
+
+	listParams := &stripe.SubscriptionListParams{
+		Customer: stripe.String(stripeCustomerID),
+		Status:   stripe.String("all"),
+	}
+	listParams.Limit = stripe.Int64(10)
+	listParams.AddExpand("data.default_payment_method")
+	listParams.AddExpand("data.items.data.price")
+
+	iter := subscription.List(listParams)
+
+	var best *stripe.Subscription
+	bestScore := -999
+	var bestCreated int64
+
+	for iter.Next() {
+		sub := iter.Subscription()
+		if sub == nil {
+			continue
+		}
+		score := subscriptionStatusScore(string(sub.Status))
+		if best == nil || score > bestScore || (score == bestScore && sub.Created > bestCreated) {
+			best = sub
+			bestScore = score
+			bestCreated = sub.Created
+		}
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("failed to list subscriptions: %w", err)
+	}
+	return best, nil
+}
+
+// SyncBillingCustomer attempts to refresh subscription/payment method fields from Stripe so
+// the dashboard reflects Stripe's source of truth even if webhooks were missed.
+func (s *StripeService) SyncBillingCustomer(bc *models.BillingCustomer) (*stripe.Subscription, error) {
+	if s == nil || !s.Enabled() || bc == nil || strings.TrimSpace(bc.StripeCustomerID) == "" {
+		return nil, nil
+	}
+
+	// Best-effort: sync default payment method from Stripe customer.
+	_, _ = s.getDefaultPaymentMethod(bc)
+
+	sub, err := s.fetchBestSubscription(bc.StripeCustomerID, bc.StripeSubscriptionID)
+	if err != nil {
+		return nil, err
+	}
+	if sub == nil {
+		return nil, nil
+	}
+
+	changed := false
+	if bc.StripeSubscriptionID != sub.ID {
+		bc.StripeSubscriptionID = sub.ID
+		changed = true
+	}
+	subStatus := string(sub.Status)
+	if strings.TrimSpace(subStatus) != "" && bc.SubscriptionStatus != subStatus {
+		bc.SubscriptionStatus = subStatus
+		changed = true
+	}
+	if sub.DefaultPaymentMethod != nil && sub.DefaultPaymentMethod.Card != nil {
+		last4 := strings.TrimSpace(sub.DefaultPaymentMethod.Card.Last4)
+		brand := strings.TrimSpace(string(sub.DefaultPaymentMethod.Card.Brand))
+		if last4 != "" && (bc.PaymentMethodLast4 != last4 || bc.PaymentMethodBrand != brand) {
+			bc.PaymentMethodLast4 = last4
+			bc.PaymentMethodBrand = brand
+			changed = true
+		}
+	}
+
+	if changed {
+		if err := models.UpdateBillingCustomer(bc); err != nil {
+			return sub, err
+		}
+	}
+	return sub, nil
 }
 
 // CreateCheckoutSession creates a Stripe Checkout session in setup mode to collect a payment method.
@@ -294,6 +430,8 @@ func (s *StripeService) HandleWebhookEvent(payload []byte, signature string) err
 	switch event.Type {
 	case "checkout.session.completed":
 		return s.handleCheckoutCompleted(event)
+	case "customer.subscription.created":
+		return s.handleSubscriptionUpdated(event)
 	case "customer.subscription.updated":
 		return s.handleSubscriptionUpdated(event)
 	case "customer.subscription.deleted":

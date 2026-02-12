@@ -182,7 +182,7 @@ export function Billing() {
 
   const items = overview?.items ?? [];
   const paidItems = items.filter((item) => item.monthly_cost > 0);
-  const monthToDateCents = paidItems.reduce((sum, item) => sum + item.monthly_cost, 0);
+  const monthToDateCents = overview?.monthly_total ?? paidItems.reduce((sum, item) => sum + item.monthly_cost, 0);
 
   const projectedCents = useMemo(() => {
     const now = new Date();
@@ -193,6 +193,9 @@ export function Billing() {
   }, [monthToDateCents]);
 
   const currentPlanId = useMemo<PlanID>(() => {
+    const fromApi = overview?.current_plan ? normalizePlan(overview.current_plan) : null;
+    if (fromApi) return fromApi;
+
     if (paidItems.length === 0) return 'free';
     let best: PlanID = 'free';
     paidItems.forEach((item) => {
@@ -202,7 +205,7 @@ export function Billing() {
       }
     });
     return best;
-  }, [paidItems]);
+  }, [overview?.current_plan, paidItems]);
 
   const currentPlan = PLAN_BY_ID[currentPlanId];
   const includedUsage = includedByPlan[currentPlanId];

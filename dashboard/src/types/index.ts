@@ -237,6 +237,7 @@ export interface BillingOverview {
   payment_method_last4: string;
   payment_method_brand: string;
   subscription_status: string;
+  current_plan?: string;
   items: BillingLineItem[];
   monthly_total: number;
 }

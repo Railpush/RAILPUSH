@@ -2,13 +2,16 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
+	"strings"
 
 	"github.com/railpush/api/config"
 	"github.com/railpush/api/middleware"
 	"github.com/railpush/api/models"
 	"github.com/railpush/api/services"
 	"github.com/railpush/api/utils"
+	"github.com/stripe/stripe-go/v81"
 )
 
 type BillingHandler struct {
@@ -18,6 +21,19 @@ type BillingHandler struct {
 
 func NewBillingHandler(cfg *config.Config, stripeService *services.StripeService) *BillingHandler {
 	return &BillingHandler{Config: cfg, Stripe: stripeService}
+}
+
+func planRank(plan string) int {
+	switch strings.ToLower(strings.TrimSpace(plan)) {
+	case "pro":
+		return 3
+	case "standard":
+		return 2
+	case "starter":
+		return 1
+	default:
+		return 0
+	}
 }
 
 // GetBillingOverview returns the user's billing status, payment method, and all billing items.
@@ -42,6 +58,7 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 		PaymentMethodLast4 string            `json:"payment_method_last4"`
 		PaymentMethodBrand string            `json:"payment_method_brand"`
 		SubscriptionStatus string            `json:"subscription_status"`
+		CurrentPlan        string            `json:"current_plan"`
 		Items              []BillingLineItem `json:"items"`
 		MonthlyTotal       int               `json:"monthly_total"`
 	}
@@ -50,7 +67,17 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 		Items: []BillingLineItem{},
 	}
 
+	var stripeSub *stripe.Subscription
+
 	if bc != nil {
+		if h.Stripe != nil && h.Stripe.Enabled() {
+			if sub, syncErr := h.Stripe.SyncBillingCustomer(bc); syncErr != nil {
+				log.Printf("Warning: failed to sync billing customer from Stripe: %v", syncErr)
+			} else {
+				stripeSub = sub
+			}
+		}
+
 		overview.HasPaymentMethod = bc.PaymentMethodLast4 != ""
 		overview.PaymentMethodLast4 = bc.PaymentMethodLast4
 		overview.PaymentMethodBrand = bc.PaymentMethodBrand
@@ -60,6 +87,9 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 		if err == nil {
 			for _, item := range items {
 				cost := planCost(item.Plan)
+				if planRank(item.Plan) > planRank(overview.CurrentPlan) {
+					overview.CurrentPlan = item.Plan
+				}
 				overview.Items = append(overview.Items, BillingLineItem{
 					ResourceType: item.ResourceType,
 					ResourceID:   item.ResourceID,
@@ -70,6 +100,58 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 				overview.MonthlyTotal += cost
 			}
 		}
+
+		// If the user subscribed directly in Stripe (e.g. via customer portal), our DB might have no billing_items.
+		// Fall back to Stripe subscription items so the dashboard stays accurate.
+		if len(overview.Items) == 0 && stripeSub != nil && stripeSub.Items != nil {
+			for _, si := range stripeSub.Items.Data {
+				if si == nil || si.Price == nil {
+					continue
+				}
+				plan := ""
+				if h.Stripe != nil {
+					plan = h.Stripe.PlanForPriceID(si.Price.ID)
+				}
+
+				monthly := 0
+				if si.Price.UnitAmount > 0 {
+					monthly = int(si.Price.UnitAmount)
+				} else {
+					monthly = planCost(plan)
+				}
+				qty := int64(1)
+				if si.Quantity > 0 {
+					qty = si.Quantity
+				}
+				monthly = monthly * int(qty)
+
+				name := "Subscription"
+				switch plan {
+				case "starter":
+					name = "RailPush Starter"
+				case "standard":
+					name = "RailPush Standard"
+				case "pro":
+					name = "RailPush Pro"
+				}
+
+				overview.Items = append(overview.Items, BillingLineItem{
+					ResourceType: "subscription",
+					ResourceID:   si.ID,
+					ResourceName: name,
+					Plan:         plan,
+					MonthlyCost:  monthly,
+				})
+				overview.MonthlyTotal += monthly
+				if planRank(plan) > planRank(overview.CurrentPlan) {
+					overview.CurrentPlan = plan
+				}
+			}
+		}
+	}
+
+	if strings.TrimSpace(overview.CurrentPlan) == "" {
+		overview.CurrentPlan = "free"
 	}
 
 	utils.RespondJSON(w, http.StatusOK, overview)
