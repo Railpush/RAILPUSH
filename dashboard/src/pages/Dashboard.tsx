@@ -268,7 +268,7 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
                       <StatusBadge status={service.status} size="sm" />
                     </div>
                     <div className="col-span-2">
-                      <span className="inline-flex px-2 py-1 rounded-md bg-surface-tertiary text-xs text-content-secondary capitalize">
+                      <span className="inline-flex px-2 py-1 rounded-md border border-brand/20 bg-brand/10 text-xs font-semibold text-brand capitalize">
                         {service.runtime || 'n/a'}
                       </span>
                     </div>
