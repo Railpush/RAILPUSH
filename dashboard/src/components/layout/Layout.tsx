@@ -13,7 +13,9 @@ function LayoutInner() {
       <div className={`relative transition-all duration-200 ${collapsed ? 'ml-[68px]' : 'ml-[248px]'}`}>
         <TopBar />
         <main className="px-4 sm:px-6 lg:px-10 py-6 max-w-[1320px] mx-auto">
-          <Outlet />
+          <div className="page-shell p-4 sm:p-6">
+            <Outlet />
+          </div>
         </main>
       </div>
     </div>

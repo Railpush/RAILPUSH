@@ -114,7 +114,7 @@ export function Login() {
   const inputClass = 'w-full h-11 px-4 rounded-xl bg-surface-tertiary border border-border-default text-content-primary placeholder:text-content-tertiary text-sm focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand transition-all duration-200';
 
   return (
-    <div className="min-h-screen bg-surface-primary flex">
+    <div className="min-h-screen bg-surface-primary flex page-shell">
       <SEO
         title="Sign In — RailPush"
         description="Access RailPush to manage services, databases, domains, and schedulers from one console. Create an account or sign in to keep shipping."

@@ -143,7 +143,7 @@ export function Docs() {
   };
 
   return (
-    <div className="min-h-screen bg-surface-primary text-content-primary">
+    <div className="min-h-screen bg-surface-primary text-content-primary page-shell">
       <SEO
         title="Documentation — RailPush"
         description="How RailPush works: ship from Git, wire domains, manage Postgres and Redis, schedule jobs, and define everything as code with render.yaml."

@@ -186,7 +186,7 @@ export function Landing() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-surface-primary text-content-primary overflow-x-hidden">
+    <div className="min-h-screen bg-surface-primary text-content-primary overflow-x-hidden page-shell">
       <SEO
         title="RailPush — Modern app platform without the ops tax"
         description="Build, deploy, and scale web services, workers, cron, and Postgres from one clean console. Git-native, instant rollbacks, domain + DNS baked in."

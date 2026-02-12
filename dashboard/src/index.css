@@ -219,6 +219,33 @@ body {
   -webkit-backdrop-filter: blur(16px);
 }
 
+.theme-dark .glass-panel {
+  background: rgba(18, 21, 31, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 20px 60px rgba(0, 0, 0, 0.35),
+    0 8px 18px rgba(0, 0, 0, 0.2);
+}
+
+.page-shell {
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow:
+    0 24px 70px rgba(15, 23, 42, 0.12),
+    0 10px 26px rgba(15, 23, 42, 0.06);
+  backdrop-filter: blur(18px) saturate(125%);
+  -webkit-backdrop-filter: blur(18px) saturate(125%);
+  border-radius: 18px;
+}
+
+.theme-dark .page-shell {
+  background: rgba(14, 17, 24, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.5),
+    0 10px 26px rgba(0, 0, 0, 0.25);
+}
+
 .delay-100 { animation-delay: 100ms; }
 .delay-200 { animation-delay: 200ms; }
 .delay-300 { animation-delay: 300ms; }
