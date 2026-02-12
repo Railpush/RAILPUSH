@@ -1,11 +1,11 @@
 import { useNavigate } from 'react-router-dom';
-import { Plus, Bell, ChevronDown, Globe, FileText, Lock, Cog, Clock, Database, Key, Layers, Moon, Sun } from 'lucide-react';
+import { Plus, Bell, ChevronDown, Globe, FileText, Lock, Cog, Clock, Database, Key, Layers, Moon, Sun, Sparkles } from 'lucide-react';
 import { Dropdown } from '../ui/Dropdown';
 import { useTheme } from '../../lib/theme';
 
 export function TopBar() {
   const navigate = useNavigate();
-  const { theme, toggleTheme } = useTheme();
+  const { theme, surface, toggleTheme, toggleSurface } = useTheme();
 
   const ico = (I: any, c: string) => <I size={14} style={{ color: c }} />;
 
@@ -24,7 +24,7 @@ export function TopBar() {
   ];
 
   return (
-    <header className="h-[58px] border-b border-border-default flex items-center justify-end px-4 lg:px-6 gap-3 bg-white/65 backdrop-blur-xl shadow-[0_6px_20px_rgba(15,23,42,0.05)] sticky top-0 z-30">
+    <header className="app-topbar h-[58px] border-b border-border-default flex items-center justify-end px-4 lg:px-6 gap-3 bg-surface-secondary shadow-[0_6px_20px_rgba(15,23,42,0.05)] sticky top-0 z-30">
       <Dropdown
         trigger={
           <button className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-brand text-white rounded-lg text-sm font-semibold hover:bg-brand-hover transition-colors cursor-pointer shadow-sm">
@@ -40,6 +40,16 @@ export function TopBar() {
       <button className="relative p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors border border-transparent hover:border-border-default">
         <Bell className="w-4 h-4" />
         <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-status-error rounded-full" />
+      </button>
+
+      <button
+        className={`p-2 rounded-lg transition-colors border border-transparent hover:border-border-default hover:bg-surface-tertiary ${
+          surface === 'frost' ? 'text-brand' : 'text-content-tertiary hover:text-content-primary'
+        }`}
+        onClick={toggleSurface}
+        title={surface === 'frost' ? 'Switch to Slate' : 'Switch to Frost'}
+      >
+        <Sparkles className="w-4 h-4" />
       </button>
 
       <button
