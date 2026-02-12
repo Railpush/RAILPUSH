@@ -209,8 +209,8 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
                     onClick={() => setStatusFilter(f)}
                     className={`px-3 py-1.5 rounded-full border transition-colors ${
                       statusFilter === f
-                        ? 'bg-brand text-white border-brand'
-                        : 'bg-white/60 border-border-default text-content-secondary hover:text-content-primary'
+                        ? 'bg-brand text-white border-brand shadow-[0_6px_16px_rgba(37,99,235,0.35)]'
+                        : 'bg-white/70 border-brand/20 text-brand hover:text-brand-hover'
                     }`}
                   >
                     {f === 'active' ? `Active (${filteredServices.filter(s => s.status !== 'suspended').length})`
@@ -268,7 +268,7 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
                       <StatusBadge status={service.status} size="sm" />
                     </div>
                     <div className="col-span-2">
-                      <span className="inline-flex px-2 py-1 rounded-md border border-brand/20 bg-brand/10 text-xs font-semibold text-brand capitalize">
+                      <span className="inline-flex px-2.5 py-1 rounded-md border border-brand/30 bg-brand text-xs font-semibold text-white capitalize shadow-[0_4px_10px_rgba(37,99,235,0.25)]">
                         {service.runtime || 'n/a'}
                       </span>
                     </div>
