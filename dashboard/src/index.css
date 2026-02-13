@@ -9,13 +9,14 @@
   --color-port-gore: #0F172A;
 
   --color-surface-primary: #EDF2FB;
-  --color-surface-secondary: rgba(255, 255, 255, 0.72);
-  --color-surface-tertiary: rgba(255, 255, 255, 0.55);
-  --color-surface-elevated: rgba(255, 255, 255, 0.82);
+  /* Slate surfaces (default): solid, crisp */
+  --color-surface-secondary: #FFFFFF;
+  --color-surface-tertiary: #F6F8FF;
+  --color-surface-elevated: #FFFFFF;
 
-  --color-border-default: rgba(255, 255, 255, 0.38);
-  --color-border-subtle: rgba(255, 255, 255, 0.24);
-  --color-border-hover: rgba(255, 255, 255, 0.5);
+  --color-border-default: rgba(15, 23, 42, 0.10);
+  --color-border-subtle: rgba(15, 23, 42, 0.06);
+  --color-border-hover: rgba(15, 23, 42, 0.16);
 
   --color-content-primary: #0F172A;
   --color-content-secondary: #475569;
@@ -37,15 +38,26 @@
   --font-mono: 'IBM Plex Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 }
 
-/* Dark theme overrides */
+/* Frost surfaces: glassy + translucent */
+.theme-frost {
+  --color-surface-secondary: rgba(255, 255, 255, 0.72);
+  --color-surface-tertiary: rgba(255, 255, 255, 0.55);
+  --color-surface-elevated: rgba(255, 255, 255, 0.82);
+
+  --color-border-default: rgba(255, 255, 255, 0.38);
+  --color-border-subtle: rgba(255, 255, 255, 0.24);
+  --color-border-hover: rgba(255, 255, 255, 0.5);
+}
+
+/* Dark theme overrides (Slate) */
 .theme-dark {
   --color-brand: #4F8BFF;
   --color-brand-hover: #3A73E6;
   --color-brand-active: #2B56B8;
   --color-surface-primary: #0E1118;
-  --color-surface-secondary: rgba(18, 21, 31, 0.82);
-  --color-surface-tertiary: rgba(26, 30, 44, 0.7);
-  --color-surface-elevated: rgba(24, 28, 40, 0.88);
+  --color-surface-secondary: #12151F;
+  --color-surface-tertiary: #1A1E2C;
+  --color-surface-elevated: #181C28;
   --color-border-default: rgba(255, 255, 255, 0.08);
   --color-border-subtle: rgba(255, 255, 255, 0.04);
   --color-border-hover: rgba(255, 255, 255, 0.12);
@@ -62,6 +74,16 @@
   --color-status-info-bg: rgba(56, 189, 248, 0.12);
   --color-postgres: #5B8BFF;
   --color-redis: #F87171;
+}
+
+.theme-dark.theme-frost {
+  --color-surface-secondary: rgba(18, 21, 31, 0.82);
+  --color-surface-tertiary: rgba(26, 30, 44, 0.7);
+  --color-surface-elevated: rgba(24, 28, 40, 0.88);
+
+  --color-border-default: rgba(255, 255, 255, 0.08);
+  --color-border-subtle: rgba(255, 255, 255, 0.04);
+  --color-border-hover: rgba(255, 255, 255, 0.12);
 }
 
 * {
@@ -210,6 +232,14 @@ body {
 
 /* Glass */
 .glass-panel {
+  background: var(--color-surface-secondary);
+  border: 1px solid var(--color-border-default);
+  box-shadow:
+    0 18px 52px rgba(15, 23, 42, 0.10),
+    0 6px 16px rgba(15, 23, 42, 0.06);
+}
+
+.theme-frost .glass-panel {
   background: rgba(255, 255, 255, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.42);
   box-shadow:
@@ -220,6 +250,14 @@ body {
 }
 
 .theme-dark .glass-panel {
+  background: var(--color-surface-secondary);
+  border: 1px solid var(--color-border-default);
+  box-shadow:
+    0 18px 52px rgba(0, 0, 0, 0.45),
+    0 6px 16px rgba(0, 0, 0, 0.22);
+}
+
+.theme-dark.theme-frost .glass-panel {
   background: rgba(18, 21, 31, 0.8);
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow:
@@ -228,6 +266,15 @@ body {
 }
 
 .page-shell {
+  background: var(--color-surface-secondary);
+  border: 1px solid var(--color-border-subtle);
+  box-shadow:
+    0 24px 68px rgba(15, 23, 42, 0.10),
+    0 10px 24px rgba(15, 23, 42, 0.06);
+  border-radius: 18px;
+}
+
+.theme-frost .page-shell {
   background: rgba(255, 255, 255, 0.6);
   border: 1px solid rgba(255, 255, 255, 0.28);
   box-shadow:
@@ -235,15 +282,29 @@ body {
     0 10px 26px rgba(15, 23, 42, 0.06);
   backdrop-filter: blur(18px) saturate(125%);
   -webkit-backdrop-filter: blur(18px) saturate(125%);
-  border-radius: 18px;
 }
 
 .theme-dark .page-shell {
+  background: var(--color-surface-secondary);
+  border: 1px solid var(--color-border-subtle);
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.55),
+    0 10px 26px rgba(0, 0, 0, 0.25);
+}
+
+.theme-dark.theme-frost .page-shell {
   background: rgba(14, 17, 24, 0.78);
   border: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow:
     0 24px 70px rgba(0, 0, 0, 0.5),
     0 10px 26px rgba(0, 0, 0, 0.25);
+}
+
+.theme-frost .app-topbar,
+.theme-frost .app-sidebar,
+.theme-frost .app-input {
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
 }
 
 .delay-100 { animation-delay: 100ms; }

@@ -210,7 +210,7 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
                     className={`px-3 py-1.5 rounded-full border transition-colors ${
                       statusFilter === f
                         ? 'bg-brand text-white border-brand shadow-[0_6px_16px_rgba(37,99,235,0.35)]'
-                        : 'bg-white/70 border-brand/20 text-brand hover:text-brand-hover'
+                        : 'bg-surface-secondary border-brand/20 text-brand hover:text-brand-hover hover:bg-surface-tertiary/50'
                     }`}
                   >
                     {f === 'active' ? `Active (${filteredServices.filter(s => s.status !== 'suspended').length})`
@@ -230,7 +230,7 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
                     placeholder="Search services..."
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    className="w-full bg-white/70 backdrop-blur-lg border border-border-default rounded-lg pl-10 pr-3 py-2.5 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/12 transition-all shadow-[0_8px_20px_rgba(15,23,42,0.05)]"
+                    className="app-input w-full bg-surface-secondary border border-border-default rounded-lg pl-10 pr-3 py-2.5 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/12 transition-all shadow-[0_8px_20px_rgba(15,23,42,0.05)]"
                   />
                 </div>
               </div>
@@ -251,7 +251,7 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
                   <button
                     key={service.id}
                     onClick={() => navigate(`/services/${service.id}`)}
-                    className="w-full grid grid-cols-12 px-4 py-3 text-left items-center border-b border-border-subtle/60 last:border-0 hover:bg-white/50 transition-colors"
+                    className="w-full grid grid-cols-12 px-4 py-3 text-left items-center border-b border-border-subtle/60 last:border-0 hover:bg-surface-tertiary/40 transition-colors"
                   >
                     <div className="col-span-4 flex items-center gap-3">
                       <ServiceIcon type={service.type} />
