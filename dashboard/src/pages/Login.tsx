@@ -152,7 +152,7 @@ export function Login() {
               onClick={() => navigate('/')}
               className="flex items-center hover:opacity-80 transition-opacity"
             >
-              <Logo size={36} />
+              <Logo size={36} textClassName="text-white" />
             </button>
           </div>
 
