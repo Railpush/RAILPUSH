@@ -1,24 +1,32 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Github, Eye, EyeOff, Loader2, ArrowRight, Terminal, Sparkles } from 'lucide-react';
+import { Eye, EyeOff, Loader2, ArrowRight, Terminal, Sparkles } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { auth } from '../lib/api';
 import { SEO } from '../components/SEO';
 import { Logo } from '../components/Logo';
 
+function GitHubMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 98 96" className={className} fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+      <path fillRule="evenodd" clipRule="evenodd" d="M48.854 0C21.839 0 0 22 0 49.217c0 21.756 13.993 40.172 33.405 46.69 2.427.49 3.316-1.059 3.316-2.362 0-1.141-.08-5.052-.08-9.127-13.59 2.934-16.42-5.867-16.42-5.867-2.184-5.704-5.42-7.17-5.42-7.17-4.448-3.015.324-3.015.324-3.015 4.934.326 7.523 5.052 7.523 5.052 4.367 7.496 11.404 5.378 14.235 4.074.404-3.178 1.699-5.378 3.074-6.6-10.839-1.141-22.243-5.378-22.243-24.283 0-5.378 1.94-9.778 5.014-13.2-.485-1.222-2.184-6.275.486-13.038 0 0 4.125-1.304 13.426 5.052a46.97 46.97 0 0 1 12.214-1.63c4.125 0 8.33.571 12.213 1.63 9.302-6.356 13.427-5.052 13.427-5.052 2.67 6.763.97 11.816.485 13.038 3.155 3.422 5.015 7.822 5.015 13.2 0 18.905-11.404 23.06-22.324 24.283 1.78 1.548 3.316 4.481 3.316 9.126 0 6.6-.08 11.897-.08 13.526 0 1.304.89 2.853 3.316 2.364 19.412-6.52 33.405-24.935 33.405-46.691C97.707 22 75.788 0 48.854 0z" />
+    </svg>
+  );
+}
+
 const terminalLines = [
-  { delay: 0, text: '$ git push origin main', color: 'text-content-primary' },
-  { delay: 600, text: 'Enumerating objects: 42, done.', color: 'text-content-tertiary' },
-  { delay: 1000, text: '> Webhook received — starting build', color: 'text-content-secondary' },
-  { delay: 1600, text: '> Cloning repository...', color: 'text-content-secondary' },
-  { delay: 2200, text: '> Detected runtime: Node.js 20', color: 'text-status-info' },
-  { delay: 2800, text: '> Installing dependencies...', color: 'text-content-secondary' },
-  { delay: 3800, text: '> npm install — 1,247 packages in 4.2s', color: 'text-content-secondary' },
-  { delay: 4400, text: '> Building application...', color: 'text-content-secondary' },
-  { delay: 5400, text: '> Build succeeded — image railpush/app:a3f8c21', color: 'text-status-success' },
-  { delay: 6000, text: '> Starting container...', color: 'text-content-secondary' },
-  { delay: 6600, text: '> Health check passed (200 OK)', color: 'text-status-success' },
-  { delay: 7200, text: '> Live at https://my-app.railpush.com', color: 'text-status-success font-semibold' },
+  { delay: 0, text: '$ git push origin main', color: 'text-[#E2E8F0]' },
+  { delay: 600, text: 'Enumerating objects: 42, done.', color: 'text-[#64748B]' },
+  { delay: 1000, text: '> Webhook received — starting build', color: 'text-[#94A3B8]' },
+  { delay: 1600, text: '> Cloning repository...', color: 'text-[#94A3B8]' },
+  { delay: 2200, text: '> Detected runtime: Node.js 20', color: 'text-[#38BDF8]' },
+  { delay: 2800, text: '> Installing dependencies...', color: 'text-[#94A3B8]' },
+  { delay: 3800, text: '> npm install — 1,247 packages in 4.2s', color: 'text-[#94A3B8]' },
+  { delay: 4400, text: '> Building application...', color: 'text-[#94A3B8]' },
+  { delay: 5400, text: '> Build succeeded — image railpush/app:a3f8c21', color: 'text-[#4ADE80]' },
+  { delay: 6000, text: '> Starting container...', color: 'text-[#94A3B8]' },
+  { delay: 6600, text: '> Health check passed (200 OK)', color: 'text-[#4ADE80]' },
+  { delay: 7200, text: '> Live at https://my-app.railpush.com', color: 'text-[#4ADE80] font-semibold' },
 ];
 
 function AnimatedTerminal() {
@@ -52,12 +60,12 @@ function AnimatedTerminal() {
   }, []);
 
   return (
-    <div className="rounded-xl border border-border-default bg-surface-secondary/80 backdrop-blur-sm overflow-hidden shadow-2xl shadow-black/40">
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border-subtle bg-surface-tertiary/50">
+    <div className="rounded-xl border border-white/8 bg-[#0D1117]/90 backdrop-blur-sm overflow-hidden shadow-2xl shadow-black/50">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-white/6 bg-white/[0.03]">
         <div className="w-3 h-3 rounded-full bg-[#FF5F57]" />
         <div className="w-3 h-3 rounded-full bg-[#FEBC2E]" />
         <div className="w-3 h-3 rounded-full bg-[#28C840]" />
-        <span className="ml-2 text-xs text-content-tertiary font-mono flex items-center gap-1.5">
+        <span className="ml-2 text-xs text-[#64748B] font-mono flex items-center gap-1.5">
           <Terminal className="w-3 h-3" />
           deploy
         </span>
@@ -73,8 +81,8 @@ function AnimatedTerminal() {
           </div>
         ))}
         {visibleLines >= terminalLines.length && (
-          <div className="text-content-primary mt-1">
-            $ <span className="inline-block w-2 h-3.5 bg-content-primary align-middle animate-blink-cursor" />
+          <div className="text-[#E2E8F0] mt-1">
+            $ <span className="inline-block w-2 h-3.5 bg-[#E2E8F0] align-middle animate-blink-cursor" />
           </div>
         )}
       </div>
@@ -121,18 +129,18 @@ export function Login() {
         canonical="https://railpush.com/login"
       />
       {/* ── Left: Branding / Visual ───────────────────── */}
-      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden">
+      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-[#060810] rounded-l-[18px]">
         {/* Animated background */}
-        <div className="absolute inset-0 bg-gradient-to-br from-brand/5 via-surface-primary to-brand-purple/5" />
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-brand/15 rounded-full blur-[120px] animate-float" />
-        <div className="absolute bottom-1/3 right-1/4 w-80 h-80 bg-brand-purple/10 rounded-full blur-[100px] animate-float delay-700" />
-        <div className="absolute top-2/3 left-1/2 w-64 h-64 bg-status-success/5 rounded-full blur-[80px] animate-float delay-300" />
+        <div className="absolute inset-0 bg-gradient-to-br from-[#0A1628] via-[#060810] to-[#0D0A1A]" />
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-brand/20 rounded-full blur-[120px] animate-float" />
+        <div className="absolute bottom-1/3 right-1/4 w-80 h-80 bg-[#6D28D9]/12 rounded-full blur-[100px] animate-float delay-700" />
+        <div className="absolute top-2/3 left-1/2 w-64 h-64 bg-[#06B6D4]/8 rounded-full blur-[80px] animate-float delay-300" />
 
         {/* Grid pattern */}
         <div
-          className="absolute inset-0 opacity-[0.03]"
+          className="absolute inset-0 opacity-[0.04]"
           style={{
-            backgroundImage: 'linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)',
+            backgroundImage: 'linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px)',
             backgroundSize: '60px 60px',
           }}
         />
@@ -151,15 +159,15 @@ export function Login() {
           {/* Center: Terminal + Copy */}
           <div className="max-w-md mx-auto w-full space-y-8">
             <div>
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-border-default bg-surface-secondary/40 backdrop-blur-sm mb-6">
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/10 bg-white/5 backdrop-blur-sm mb-6">
                 <Sparkles className="w-3.5 h-3.5 text-brand" />
-                <span className="text-xs font-medium text-content-secondary">Hands-off builds, confident releases</span>
+                <span className="text-xs font-medium text-[#94A3B8]">Hands-off builds, confident releases</span>
               </div>
-              <h2 className="text-3xl font-bold tracking-tight leading-tight mb-3">
-                Ship with focus<br />
+              <h2 className="text-4xl font-extrabold tracking-[-0.02em] leading-[1.15] mb-4">
+                <span className="text-white">Ship with focus</span><br />
                 <span className="text-gradient-brand">no yak shaving required</span>
               </h2>
-              <p className="text-content-secondary text-sm leading-relaxed max-w-sm">
+              <p className="text-[#94A3B8] text-[15px] leading-relaxed max-w-sm">
                 Git in, services out. RailPush builds, provisions data, issues certs, and scales while you stay in flow.
               </p>
             </div>
@@ -174,8 +182,8 @@ export function Login() {
               { value: '99.9%', label: 'Target uptime' },
             ].map(s => (
               <div key={s.label}>
-                <div className="text-xl font-bold text-content-primary">{s.value}</div>
-                <div className="text-xs text-content-tertiary">{s.label}</div>
+                <div className="text-xl font-bold text-white">{s.value}</div>
+                <div className="text-xs text-[#64748B]">{s.label}</div>
               </div>
             ))}
           </div>
@@ -215,7 +223,7 @@ export function Login() {
             onClick={() => auth.loginGithub()}
             className="w-full flex items-center justify-center gap-2.5 h-11 rounded-xl border border-border-default bg-surface-secondary hover:bg-surface-tertiary text-content-primary text-sm font-medium transition-all duration-200 mb-6"
           >
-            <Github className="w-4.5 h-4.5" />
+            <GitHubMark className="w-5 h-5" />
             Continue with GitHub
           </button>
 

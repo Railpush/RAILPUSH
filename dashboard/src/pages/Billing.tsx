@@ -74,6 +74,27 @@ function brandDisplay(brand: string) {
   return brands[brand.toLowerCase()] || brand;
 }
 
+function VisaLogo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 780 500" className={className} fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="780" height="500" rx="40" fill="#1A1F71" />
+      <path d="M293.2 348.7l33.4-195.8h53.4l-33.4 195.8h-53.4zm221.5-191c-10.6-4-27.2-8.3-47.9-8.3-52.8 0-90 26.6-90.2 64.6-.3 28.1 26.5 43.8 46.7 53.2 20.8 9.6 27.8 15.7 27.7 24.3-.1 13.1-16.6 19.1-32 19.1-21.4 0-32.7-3-50.3-10.2l-6.9-3.1-7.5 43.8c12.5 5.5 35.6 10.2 59.6 10.5 56.2 0 92.6-26.3 93-66.8.2-22.3-14-39.2-44.8-53.2-18.6-9.1-30.1-15.1-30-24.3 0-8.1 9.7-16.8 30.6-16.8 17.5-.3 30.1 3.5 40 7.5l4.8 2.3 7.2-42.7zm138.3-4.8h-41.3c-12.8 0-22.4 3.5-28 16.3l-79.4 179.5h56.2s9.2-24.1 11.2-29.4h68.6c1.6 6.9 6.5 29.4 6.5 29.4h49.7l-43.5-195.8zm-65.8 126.4c4.4-11.3 21.4-54.8 21.4-54.8-.3.5 4.4-11.4 7.1-18.8l3.6 17s10.3 47 12.5 56.6h-44.6zM285 152.9l-52.4 133.6-5.6-27.1c-9.7-31.3-40-65.2-73.9-82.2l47.9 171.3 56.6-.1 84.2-195.5H285z" fill="white" />
+      <path d="M146.9 152.9H60.1l-.7 3.8c67.1 16.2 111.5 55.3 129.9 102.3l-18.7-90.2c-3.2-12.4-12.8-15.5-23.7-15.9z" fill="#F9A51A" />
+    </svg>
+  );
+}
+
+function MastercardLogo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 780 500" className={className} fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="780" height="500" rx="40" fill="#252525" />
+      <circle cx="312" cy="250" r="150" fill="#EB001B" />
+      <circle cx="468" cy="250" r="150" fill="#F79E1B" />
+      <path d="M390 130.7c-37.1 29.3-60.9 74.5-60.9 125.3s23.8 96 60.9 125.3c37.1-29.3 60.9-74.5 60.9-125.3s-23.8-96-60.9-125.3z" fill="#FF5F00" />
+    </svg>
+  );
+}
+
 function CardBrandMark({
   brand,
   className,
@@ -82,33 +103,25 @@ function CardBrandMark({
   className?: string;
 }) {
   const key = (brand || '').trim().toLowerCase();
-  const label = brandDisplay(brand || '');
 
   if (key === 'visa') {
     return (
       <div
-        className={cn(
-          'inline-flex items-center justify-center rounded-md px-2 py-1 text-[11px] font-extrabold tracking-[0.12em] leading-none',
-          'bg-[#1A1F71] text-white border border-[#1A1F71]',
-          className
-        )}
+        className={cn('inline-flex items-center justify-center rounded-md overflow-hidden', className)}
         aria-label="Visa"
       >
-        VISA
+        <VisaLogo className="h-6 w-auto" />
       </div>
     );
   }
 
-  if (!key || key === 'card' || key === 'unknown') {
+  if (key === 'mastercard') {
     return (
       <div
-        className={cn(
-          'inline-flex items-center justify-center rounded-md border border-border-default bg-surface-primary text-content-primary',
-          className
-        )}
-        aria-label="Card"
+        className={cn('inline-flex items-center justify-center rounded-md overflow-hidden', className)}
+        aria-label="Mastercard"
       >
-        <CreditCard className="w-4 h-4" />
+        <MastercardLogo className="h-6 w-auto" />
       </div>
     );
   }
@@ -116,13 +129,12 @@ function CardBrandMark({
   return (
     <div
       className={cn(
-        'inline-flex items-center justify-center rounded-md px-2 py-1 text-[10px] font-bold tracking-[0.12em] leading-none',
-        'border border-border-default bg-surface-primary text-content-primary',
+        'inline-flex items-center justify-center rounded-md border border-border-default bg-surface-primary text-content-primary',
         className
       )}
-      aria-label={label}
+      aria-label="Card"
     >
-      {label.toUpperCase()}
+      <CreditCard className="w-4 h-4" />
     </div>
   );
 }
