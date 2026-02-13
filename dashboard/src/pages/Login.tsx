@@ -221,7 +221,7 @@ export function Login() {
           {/* GitHub OAuth */}
           <button
             onClick={() => auth.loginGithub()}
-            className="w-full flex items-center justify-center gap-2.5 h-11 rounded-xl border border-border-default bg-surface-secondary hover:bg-surface-tertiary text-content-primary text-sm font-medium transition-all duration-200 mb-6"
+            className="w-full flex items-center justify-center gap-2.5 h-11 rounded-xl bg-[#24292f] hover:bg-[#32383f] text-white text-sm font-medium transition-all duration-200 mb-6"
           >
             <GitHubMark className="w-5 h-5" />
             Continue with GitHub
