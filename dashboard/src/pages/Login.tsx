@@ -122,14 +122,14 @@ export function Login() {
   const inputClass = 'w-full h-11 px-4 rounded-xl bg-surface-tertiary border border-border-default text-content-primary placeholder:text-content-tertiary text-sm focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand transition-all duration-200';
 
   return (
-    <div className="min-h-screen bg-surface-primary flex page-shell">
+    <div className="min-h-screen flex">
       <SEO
         title="Sign In — RailPush"
         description="Access RailPush to manage services, databases, domains, and schedulers from one console. Create an account or sign in to keep shipping."
         canonical="https://railpush.com/login"
       />
       {/* ── Left: Branding / Visual ───────────────────── */}
-      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-[#060810] rounded-l-[18px]">
+      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-[#060810]">
         {/* Animated background */}
         <div className="absolute inset-0 bg-gradient-to-br from-[#0A1628] via-[#060810] to-[#0D0A1A]" />
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-brand/20 rounded-full blur-[120px] animate-float" />
@@ -191,7 +191,7 @@ export function Login() {
       </div>
 
       {/* ── Right: Auth Form ──────────────────────────── */}
-      <div className="flex-1 flex items-center justify-center px-6 py-12 relative">
+      <div className="flex-1 flex items-center justify-center px-6 py-12 relative bg-surface-primary">
         {/* Subtle background for mobile */}
         <div className="lg:hidden absolute top-0 left-0 right-0 h-64 bg-gradient-to-b from-brand/5 to-transparent" />
 
