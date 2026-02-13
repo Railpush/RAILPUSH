@@ -74,6 +74,59 @@ function brandDisplay(brand: string) {
   return brands[brand.toLowerCase()] || brand;
 }
 
+function CardBrandMark({
+  brand,
+  className,
+}: {
+  brand?: string | null;
+  className?: string;
+}) {
+  const key = (brand || '').trim().toLowerCase();
+  const label = brandDisplay(brand || '');
+
+  if (key === 'visa') {
+    return (
+      <div
+        className={cn(
+          'inline-flex items-center justify-center rounded-md px-2 py-1 text-[11px] font-extrabold tracking-[0.12em] leading-none',
+          'bg-[#1A1F71] text-white border border-[#1A1F71]',
+          className
+        )}
+        aria-label="Visa"
+      >
+        VISA
+      </div>
+    );
+  }
+
+  if (!key || key === 'card' || key === 'unknown') {
+    return (
+      <div
+        className={cn(
+          'inline-flex items-center justify-center rounded-md border border-border-default bg-surface-primary text-content-primary',
+          className
+        )}
+        aria-label="Card"
+      >
+        <CreditCard className="w-4 h-4" />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        'inline-flex items-center justify-center rounded-md px-2 py-1 text-[10px] font-bold tracking-[0.12em] leading-none',
+        'border border-border-default bg-surface-primary text-content-primary',
+        className
+      )}
+      aria-label={label}
+    >
+      {label.toUpperCase()}
+    </div>
+  );
+}
+
 function resourceLabel(type: string) {
   switch (type) {
     case 'service': return 'Services';
@@ -465,7 +518,13 @@ export function Billing() {
               : 'No card on file'
           }
           helper={overview?.has_payment_method ? 'Stripe keeps this card current.' : 'Add a card to enable paid plans.'}
-          icon={<CreditCard className="w-4 h-4" />}
+          icon={
+            overview?.has_payment_method ? (
+              <CardBrandMark brand={overview.payment_method_brand} className="px-2.5 py-1.5 text-[10px]" />
+            ) : (
+              <CreditCard className="w-4 h-4" />
+            )
+          }
         />
       </div>
 
@@ -515,11 +574,9 @@ export function Billing() {
             <div className="border border-border-default bg-surface-secondary p-6">
               {overview?.has_payment_method ? (
                 <div className="space-y-4">
-                  <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div className="flex flex-wrap items-center justify-between gap-4">
                     <div className="flex items-center gap-3">
-                      <div className="w-12 h-9 border border-border-default bg-surface-primary flex items-center justify-center text-xs font-semibold text-content-primary">
-                        {brandDisplay(overview.payment_method_brand).toUpperCase()}
-                      </div>
+                      <CardBrandMark brand={overview.payment_method_brand} className="w-12 h-9 rounded-lg text-[10px]" />
                       <p className="text-lg text-content-primary">
                         {brandDisplay(overview.payment_method_brand)} ending in {overview.payment_method_last4}
                       </p>
