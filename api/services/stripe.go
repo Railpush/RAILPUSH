@@ -329,7 +329,6 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, resource
 	siParams := &stripe.SubscriptionItemParams{
 		Subscription:      stripe.String(bc.StripeSubscriptionID),
 		Price:             stripe.String(priceID),
-		OffSession:        stripe.Bool(true),
 		PaymentBehavior:   stripe.String("error_if_incomplete"),
 		ProrationBehavior: stripe.String("always_invoice"),
 	}
