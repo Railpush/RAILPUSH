@@ -17,6 +17,7 @@ import (
 )
 
 func int32Ptr(v int32) *int32 { return &v }
+func int64Ptr(v int64) *int64 { return &v }
 
 func cleanRelPath(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
@@ -300,6 +301,7 @@ fi
 			},
 			Spec: batchv1.JobSpec{
 				BackoffLimit:            int32Ptr(0),
+				ActiveDeadlineSeconds:   int64Ptr(25 * 60),
 				TTLSecondsAfterFinished: int32Ptr(3600),
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{Labels: labels},

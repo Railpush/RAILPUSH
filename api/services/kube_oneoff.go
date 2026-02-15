@@ -94,6 +94,7 @@ func (k *KubeDeployer) RunOneOffJob(oneOffJobID string, svc *models.Service, com
 
 	envSecretName := svcName + "-env"
 	optional := true
+	requests, limits := kubeResourcesForPlan(svc.Plan)
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -103,6 +104,7 @@ func (k *KubeDeployer) RunOneOffJob(oneOffJobID string, svc *models.Service, com
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            int32Ptr(0),
+			ActiveDeadlineSeconds:   int64Ptr(15 * 60),
 			TTLSecondsAfterFinished: int32Ptr(3600),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
@@ -113,7 +115,7 @@ func (k *KubeDeployer) RunOneOffJob(oneOffJobID string, svc *models.Service, com
 							Name:            "oneoff",
 							Image:           image,
 							ImagePullPolicy: corev1.PullIfNotPresent,
-							Command:         []string{"sh", "-lc", cmd},
+							Command: []string{"sh", "-lc", cmd},
 							EnvFrom: []corev1.EnvFromSource{
 								{
 									SecretRef: &corev1.SecretEnvSource{
@@ -121,6 +123,10 @@ func (k *KubeDeployer) RunOneOffJob(oneOffJobID string, svc *models.Service, com
 										Optional:             &optional,
 									},
 								},
+							},
+							Resources: corev1.ResourceRequirements{
+								Requests: requests,
+								Limits:   limits,
 							},
 						},
 					},
