@@ -56,6 +56,8 @@ export function OpsSettingsPage() {
   const [enableConfirm, setEnableConfirm] = useState('');
   const [enableBusy, setEnableBusy] = useState(false);
   const [enableUpdated, setEnableUpdated] = useState<number | null>(null);
+  const [testTo, setTestTo] = useState('');
+  const [testBusy, setTestBusy] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -241,6 +243,39 @@ export function OpsSettingsPage() {
                   }}
                 >
                   Run
+                </Button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+              <label className="block md:col-span-2">
+                <div className="text-xs text-content-tertiary mb-1.5">Send test email (transactional outbox)</div>
+                <input
+                  value={testTo}
+                  onChange={(e) => setTestTo(e.target.value)}
+                  placeholder="you@example.com"
+                  className="w-full h-10 px-3 rounded-md bg-surface-secondary border border-border-default text-sm"
+                />
+              </label>
+              <div>
+                <Button
+                  variant="secondary"
+                  className="w-full h-10"
+                  loading={testBusy}
+                  disabled={!testTo.trim()}
+                  onClick={async () => {
+                    setTestBusy(true);
+                    try {
+                      await ops.sendTestEmail(testTo.trim());
+                      toast.success('Test email enqueued (check Ops -> Email outbox)');
+                    } catch (e: unknown) {
+                      toast.error(e instanceof Error ? e.message : 'Failed to send test email');
+                    } finally {
+                      setTestBusy(false);
+                    }
+                  }}
+                >
+                  Send
                 </Button>
               </div>
             </div>

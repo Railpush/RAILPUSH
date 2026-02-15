@@ -250,6 +250,8 @@ export const ops = {
   getSettings: () => request<Record<string, unknown>>('/ops/settings'),
   enableAutoDeployAll: (confirm: string) =>
     request<{ status: string; updated: number }>('/ops/actions/auto-deploy/enable-all', { method: 'POST', body: JSON.stringify({ confirm }) }),
+  sendTestEmail: (to: string) =>
+    request<{ status: string; id?: string }>('/ops/actions/email/test', { method: 'POST', body: JSON.stringify({ to }) }),
   // Billing
   listBillingCustomers: (params?: { query?: string; status?: string; limit?: number; offset?: number }) => {
     const qs = new URLSearchParams();

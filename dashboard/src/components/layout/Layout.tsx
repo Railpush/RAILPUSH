@@ -8,17 +8,15 @@ function LayoutInner() {
   const year = new Date().getFullYear();
 
   return (
-    <div className="min-h-screen bg-surface-primary">
+    <div className="min-h-screen">
       <Sidebar />
-      <div className={`transition-all duration-200 flex flex-col min-h-screen ${collapsed ? 'ml-[64px]' : 'ml-[240px]'}`}>
+      <div className={`transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)] flex flex-col min-h-screen ${collapsed ? 'ml-[68px]' : 'ml-[260px]'}`}>
         <TopBar />
-        <main className="flex-1 px-4 sm:px-6 lg:px-8 py-6 max-w-[1280px] mx-auto w-full">
-          <div className="page-shell p-4 sm:p-6">
-            <Outlet />
-          </div>
+        <main className="flex-1 px-4 sm:px-6 lg:px-8 py-8 w-full mx-auto max-w-[1400px] animate-fade-in">
+          <Outlet />
         </main>
-        <footer className="py-5 text-xs text-content-tertiary text-center">
-          RailPush {year}
+        <footer className="py-6 text-xs text-content-tertiary text-center opacity-60">
+          RailPush {year} &copy; All rights reserved
         </footer>
       </div>
     </div>

@@ -4,7 +4,7 @@ import {
   Globe, Globe2, FileText, Lock, Cog, Clock, Database, Key,
   Settings, BookOpen, MessageSquare, CreditCard, LogOut, LifeBuoy, Coins, Server,
   ArrowLeft, BarChart3, ScrollText, Network, HardDrive, TrendingUp,
-  ChevronDown, Search, Info, ShieldCheck, Save, AppWindow, List,
+  Info, ShieldCheck, Save, AppWindow, List,
   PanelLeftClose, PanelLeftOpen, Siren, Users, Mail
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -27,23 +27,24 @@ function NavItem({ icon, label, path, active, collapsed }: SidebarItem & { activ
       onClick={() => navigate(path)}
       title={collapsed ? label : undefined}
       className={cn(
-        'w-full flex items-center gap-2.5 rounded-md text-[13px] transition-colors duration-100 cursor-pointer border',
-        collapsed ? 'justify-center px-0 py-2' : 'px-3 py-[9px]',
+        'w-full flex items-center gap-3 rounded-lg text-[13px] transition-all duration-200 cursor-pointer border relative overflow-hidden group',
+        collapsed ? 'justify-center p-2' : 'px-3 py-2',
         active
-          ? 'bg-surface-tertiary text-content-primary font-semibold border-border-default'
+          ? 'bg-brand/10 text-brand font-medium border-brand/20 shadow-[0_0_10px_-4px_var(--color-brand-glow)]'
           : 'text-content-secondary hover:bg-surface-tertiary hover:text-content-primary border-transparent'
       )}
     >
-      <span className="w-4 h-4 flex-shrink-0 opacity-70">{icon}</span>
-      {!collapsed && label}
+      {active && <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-brand shadow-[0_0_8px_var(--color-brand)]" />}
+      <span className={cn("w-4 h-4 flex-shrink-0 transition-transform duration-200", active ? "scale-110" : "opacity-70 group-hover:scale-110 group-hover:opacity-100")}>{icon}</span>
+      {!collapsed && <span className="truncate">{label}</span>}
     </button>
   );
 }
 
 function SectionLabel({ label, collapsed }: { label: string; collapsed?: boolean }) {
-  if (collapsed) return <div className="my-2 border-t border-border-subtle" />;
+  if (collapsed) return <div className="my-2 border-t border-border-default/50" />;
   return (
-    <div className="px-3 pt-4 pb-1 text-[11px] font-semibold uppercase tracking-wider text-content-tertiary">
+    <div className="px-3 pt-5 pb-2 text-[10px] font-bold uppercase tracking-widest text-content-tertiary opacity-80">
       {label}
     </div>
   );
@@ -56,16 +57,16 @@ export function Sidebar() {
   const { collapsed, toggle } = useSidebar();
   const { user, isOps } = useSession();
 
-  // Extract route params — useParams works for child routes, but also parse from path as fallback
+  // Extract route params
   const serviceId = params.serviceId;
   const dbId = params.dbId;
   const domainMatch = path.match(/^\/domains\/([0-9a-f-]{36})/);
   const domainId = params.domainId || (domainMatch ? domainMatch[1] : undefined);
 
-  const width = collapsed ? 'w-[64px]' : 'w-[240px]';
+  const width = collapsed ? 'w-[68px]' : 'w-[260px]';
   const asideClass = cn(
     width,
-    'app-sidebar h-screen fixed left-0 top-0 bg-surface-secondary border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-200'
+    'app-sidebar h-screen fixed left-0 top-0 bg-surface-secondary/80 backdrop-blur-xl border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)]'
   );
 
   // Service detail sidebar
@@ -73,30 +74,30 @@ export function Sidebar() {
     const base = `/services/${serviceId}`;
     return (
       <aside className={asideClass}>
-        <div className="p-4 border-b border-border-subtle flex items-center justify-between">
+        <div className="h-[60px] px-4 border-b border-border-default flex items-center justify-between shrink-0">
           {!collapsed && (
-            <div className="flex items-center gap-2 text-sm text-content-secondary">
-              <span className="font-medium text-content-primary">RailPush</span>
-              <ChevronDown className="w-3.5 h-3.5" />
+            <div className="flex items-center gap-2 text-sm text-content-secondary animate-enter">
+              <span className="font-semibold text-content-primary tracking-tight">RailPush</span>
+              <span className="bg-surface-tertiary px-1.5 py-0.5 rounded text-[10px] border border-border-subtle">Svc</span>
             </div>
           )}
-          <button onClick={toggle} className="p-1 rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors" title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+          <button onClick={toggle} className="p-1.5 rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors">
             {collapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
           </button>
         </div>
 
-        <div className="p-2">
+        <div className="p-3">
           <NavItem icon={<ArrowLeft className="w-4 h-4" />} label="Back to Dashboard" path="/" active={false} collapsed={collapsed} />
         </div>
 
         {!collapsed && (
-          <div className="px-3 py-2 border-b border-border-subtle">
-            <div className="text-xs text-content-tertiary uppercase tracking-wider">Service</div>
-            <div className="text-sm font-semibold text-content-primary mt-0.5 truncate">{serviceId}</div>
+          <div className="px-4 py-3 border-b border-border-default/50 mx-2 mb-2 animate-enter animate-enter-delay-1">
+            <div className="text-[10px] text-content-tertiary uppercase tracking-wider font-semibold mb-1">Service</div>
+            <div className="text-sm font-bold text-content-primary truncate font-mono">{serviceId}</div>
           </div>
         )}
 
-        <nav className="flex-1 p-2 space-y-0.5">
+        <nav className="flex-1 px-3 py-2 space-y-1">
           <NavItem icon={<LayoutDashboard className="w-4 h-4" />} label="Overview" path={base} active={path === base} collapsed={collapsed} />
           <NavItem icon={<ScrollText className="w-4 h-4" />} label="Events" path={`${base}/events`} active={path.includes('/events')} collapsed={collapsed} />
           <NavItem icon={<BarChart3 className="w-4 h-4" />} label="Metrics" path={`${base}/metrics`} active={path.includes('/metrics')} collapsed={collapsed} />
@@ -108,7 +109,7 @@ export function Sidebar() {
           <NavItem icon={<Settings className="w-4 h-4" />} label="Settings" path={`${base}/settings`} active={path.includes('/settings')} collapsed={collapsed} />
         </nav>
 
-        <div className="p-2 border-t border-border-subtle">
+        <div className="p-3 border-t border-border-default/50 mt-auto">
           <NavItem icon={<BookOpen className="w-4 h-4" />} label="Docs" path="/docs" active={false} collapsed={collapsed} />
         </div>
       </aside>
@@ -120,30 +121,30 @@ export function Sidebar() {
     const base = `/databases/${dbId}`;
     return (
       <aside className={asideClass}>
-        <div className="p-4 border-b border-border-subtle flex items-center justify-between">
+        <div className="h-[60px] px-4 border-b border-border-default flex items-center justify-between shrink-0">
           {!collapsed && (
-            <div className="flex items-center gap-2 text-sm text-content-secondary">
-              <span className="font-medium text-content-primary">RailPush</span>
-              <ChevronDown className="w-3.5 h-3.5" />
+            <div className="flex items-center gap-2 text-sm text-content-secondary animate-enter">
+              <span className="font-semibold text-content-primary tracking-tight">RailPush</span>
+              <span className="bg-surface-tertiary px-1.5 py-0.5 rounded text-[10px] border border-border-subtle">DB</span>
             </div>
           )}
-          <button onClick={toggle} className="p-1 rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors" title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+          <button onClick={toggle} className="p-1.5 rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors">
             {collapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
           </button>
         </div>
 
-        <div className="p-2">
+        <div className="p-3">
           <NavItem icon={<ArrowLeft className="w-4 h-4" />} label="Back to Dashboard" path="/" active={false} collapsed={collapsed} />
         </div>
 
         {!collapsed && (
-          <div className="px-3 py-2 border-b border-border-subtle">
-            <div className="text-xs text-content-tertiary uppercase tracking-wider">Database</div>
-            <div className="text-sm font-semibold text-content-primary mt-0.5 truncate">{dbId}</div>
+          <div className="px-4 py-3 border-b border-border-default/50 mx-2 mb-2 animate-enter animate-enter-delay-1">
+            <div className="text-[10px] text-content-tertiary uppercase tracking-wider font-semibold mb-1">Database</div>
+            <div className="text-sm font-bold text-content-primary truncate font-mono">{dbId}</div>
           </div>
         )}
 
-        <nav className="flex-1 p-2 space-y-0.5">
+        <nav className="flex-1 px-3 py-2 space-y-1">
           <NavItem icon={<Info className="w-4 h-4" />} label="Info" path={base} active={path === base} collapsed={collapsed} />
           <NavItem icon={<BarChart3 className="w-4 h-4" />} label="Metrics" path={`${base}/metrics`} active={path.includes('/metrics')} collapsed={collapsed} />
           <NavItem icon={<ShieldCheck className="w-4 h-4" />} label="Access Control" path={`${base}/access`} active={path.includes('/access')} collapsed={collapsed} />
@@ -160,30 +161,30 @@ export function Sidebar() {
     const base = `/domains/${domainId}`;
     return (
       <aside className={asideClass}>
-        <div className="p-4 border-b border-border-subtle flex items-center justify-between">
+        <div className="h-[60px] px-4 border-b border-border-default flex items-center justify-between shrink-0">
           {!collapsed && (
-            <div className="flex items-center gap-2 text-sm text-content-secondary">
-              <span className="font-medium text-content-primary">RailPush</span>
-              <ChevronDown className="w-3.5 h-3.5" />
+            <div className="flex items-center gap-2 text-sm text-content-secondary animate-enter">
+              <span className="font-semibold text-content-primary tracking-tight">RailPush</span>
+              <span className="bg-surface-tertiary px-1.5 py-0.5 rounded text-[10px] border border-border-subtle">DNS</span>
             </div>
           )}
-          <button onClick={toggle} className="p-1 rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors" title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+          <button onClick={toggle} className="p-1.5 rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors">
             {collapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
           </button>
         </div>
 
-        <div className="p-2">
+        <div className="p-3">
           <NavItem icon={<ArrowLeft className="w-4 h-4" />} label="Back to Domains" path="/domains" active={false} collapsed={collapsed} />
         </div>
 
         {!collapsed && (
-          <div className="px-3 py-2 border-b border-border-subtle">
-            <div className="text-xs text-content-tertiary uppercase tracking-wider">Domain</div>
-            <div className="text-sm font-semibold text-content-primary mt-0.5 truncate">{domainId}</div>
+          <div className="px-4 py-3 border-b border-border-default/50 mx-2 mb-2 animate-enter animate-enter-delay-1">
+            <div className="text-[10px] text-content-tertiary uppercase tracking-wider font-semibold mb-1">Domain</div>
+            <div className="text-sm font-bold text-content-primary truncate font-mono">{domainId}</div>
           </div>
         )}
 
-        <nav className="flex-1 p-2 space-y-0.5">
+        <nav className="flex-1 px-3 py-2 space-y-1">
           <NavItem icon={<Info className="w-4 h-4" />} label="Overview" path={base} active={path === base} collapsed={collapsed} />
           <NavItem icon={<List className="w-4 h-4" />} label="DNS Records" path={`${base}/dns`} active={path.includes('/dns')} collapsed={collapsed} />
           <NavItem icon={<Settings className="w-4 h-4" />} label="Settings" path={`${base}/settings`} active={path.endsWith('/settings')} collapsed={collapsed} />
@@ -199,51 +200,45 @@ export function Sidebar() {
 
   return (
     <aside className={asideClass}>
-      <div className="p-4 border-b border-border-subtle flex items-center justify-between">
+      <div className="h-[60px] px-4 border-b border-border-default flex items-center justify-between shrink-0">
         {!collapsed ? (
-          <div className="flex items-center gap-2 text-sm cursor-pointer">
-            <LogoMark size={24} />
+          <div className="flex items-center gap-2.5 text-sm cursor-pointer animate-enter">
+            <LogoMark size={28} />
             <div className="flex flex-col leading-tight">
-              <span className="font-semibold text-content-primary">RailPush</span>
-              <span className="text-[11px] text-content-tertiary">Dashboard</span>
+              <span className="font-bold text-content-primary tracking-tight text-[15px]">RailPush</span>
+              <span className="text-[11px] text-content-tertiary font-medium">Dashboard</span>
             </div>
           </div>
         ) : (
-          <LogoMark size={24} />
+          <div className="w-full flex justify-center animate-enter">
+            <LogoMark size={28} />
+          </div>
         )}
-        <button onClick={toggle} className={cn('p-1 rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors', collapsed && 'hidden')} title="Collapse sidebar">
+        <button onClick={toggle} className={cn('p-1.5 rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors', collapsed && 'hidden')} title="Collapse sidebar">
           <PanelLeftClose className="w-4 h-4" />
         </button>
       </div>
 
       {collapsed && (
-        <div className="p-2 flex justify-center">
+        <div className="p-3 flex justify-center">
           <button onClick={toggle} className="p-1.5 rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors" title="Expand sidebar">
             <PanelLeftOpen className="w-4 h-4" />
           </button>
         </div>
       )}
 
-      {!collapsed && (
-        <div className="px-4 py-2 text-[11px] text-content-tertiary">
-          <span className="inline-flex items-center gap-2">
-            <Search className="w-3.5 h-3.5" />
-            <span>Tip: use the service pages for logs, metrics, and settings.</span>
-          </span>
-        </div>
-      )}
-
-      <nav className="flex-1 p-2 space-y-0.5">
+      {/* Quick Access / Main Nav */}
+      <nav className="flex-1 px-3 py-4 space-y-1">
         <NavItem icon={<LayoutDashboard className="w-4 h-4" />} label="Dashboard" path="/" active={path === '/'} collapsed={collapsed} />
         <NavItem icon={<Layers className="w-4 h-4" />} label="Blueprints" path="/blueprints" active={path.startsWith('/blueprints')} collapsed={collapsed} />
-        <NavItem icon={<Link2 className="w-4 h-4" />} label="Environment Groups" path="/env-groups" active={path.startsWith('/env-groups')} collapsed={collapsed} />
+        <NavItem icon={<Link2 className="w-4 h-4" />} label="Env Groups" path="/env-groups" active={path.startsWith('/env-groups')} collapsed={collapsed} />
         <NavItem icon={<FolderKanban className="w-4 h-4" />} label="Projects" path="/projects" active={path.startsWith('/projects')} collapsed={collapsed} />
 
         <SectionLabel label="Resources" collapsed={collapsed} />
         <NavItem icon={<FileText className="w-4 h-4" />} label="Static Sites" path="/static-sites" active={path.startsWith('/static-sites')} collapsed={collapsed} />
         <NavItem icon={<Globe className="w-4 h-4" />} label="Web Services" path="/web-services" active={path.startsWith('/web-services')} collapsed={collapsed} />
         <NavItem icon={<Lock className="w-4 h-4" />} label="Private Services" path="/private-services" active={path.startsWith('/private-services')} collapsed={collapsed} />
-        <NavItem icon={<Cog className="w-4 h-4" />} label="Background Workers" path="/workers" active={path.startsWith('/workers')} collapsed={collapsed} />
+        <NavItem icon={<Cog className="w-4 h-4" />} label="Workers" path="/workers" active={path.startsWith('/workers')} collapsed={collapsed} />
         <NavItem icon={<Clock className="w-4 h-4" />} label="Cron Jobs" path="/cron-jobs" active={path.startsWith('/cron-jobs')} collapsed={collapsed} />
         <NavItem icon={<Database className="w-4 h-4" />} label="PostgreSQL" path="/postgres" active={path.startsWith('/postgres')} collapsed={collapsed} />
         <NavItem icon={<Key className="w-4 h-4" />} label="Key Value" path="/keyvalue" active={path.startsWith('/keyvalue')} collapsed={collapsed} />
@@ -253,24 +248,32 @@ export function Sidebar() {
 
         {isOps && (
           <>
-            <SectionLabel label="Ops" collapsed={collapsed} />
+            <SectionLabel label="Ops Mode" collapsed={collapsed} />
             <NavItem icon={<ShieldCheck className="w-4 h-4" />} label="Overview" path="/ops" active={path === '/ops'} collapsed={collapsed} />
             <NavItem icon={<Users className="w-4 h-4" />} label="Customers" path="/ops/customers" active={path.startsWith('/ops/customers')} collapsed={collapsed} />
             <NavItem icon={<AppWindow className="w-4 h-4" />} label="Services" path="/ops/services" active={path.startsWith('/ops/services')} collapsed={collapsed} />
             <NavItem icon={<TrendingUp className="w-4 h-4" />} label="Deployments" path="/ops/deployments" active={path.startsWith('/ops/deployments')} collapsed={collapsed} />
             <NavItem icon={<CreditCard className="w-4 h-4" />} label="Billing" path="/ops/billing" active={path.startsWith('/ops/billing')} collapsed={collapsed} />
-            <NavItem icon={<LifeBuoy className="w-4 h-4" />} label="Tickets" path="/ops/tickets" active={path.startsWith('/ops/tickets')} collapsed={collapsed} />
-            <NavItem icon={<Coins className="w-4 h-4" />} label="Credits" path="/ops/credits" active={path.startsWith('/ops/credits')} collapsed={collapsed} />
-            <NavItem icon={<Server className="w-4 h-4" />} label="Technical" path="/ops/technical" active={path.startsWith('/ops/technical')} collapsed={collapsed} />
-            <NavItem icon={<BarChart3 className="w-4 h-4" />} label="Performance" path="/ops/performance" active={path.startsWith('/ops/performance')} collapsed={collapsed} />
-            <NavItem icon={<Mail className="w-4 h-4" />} label="Email" path="/ops/email" active={path.startsWith('/ops/email')} collapsed={collapsed} />
-            <NavItem icon={<Settings className="w-4 h-4" />} label="Ops Settings" path="/ops/settings" active={path.startsWith('/ops/settings')} collapsed={collapsed} />
-            <NavItem icon={<Siren className="w-4 h-4" />} label="Incidents" path="/incidents" active={path.startsWith('/incidents')} collapsed={collapsed} />
+
+            {!collapsed && (
+              <div className="pl-3 mt-1 space-y-0.5 border-l border-border-subtle ml-2">
+                <NavItem icon={<LifeBuoy className="w-3.5 h-3.5" />} label="Tickets" path="/ops/tickets" active={path.startsWith('/ops/tickets')} collapsed={false} />
+                <NavItem icon={<Coins className="w-3.5 h-3.5" />} label="Credits" path="/ops/credits" active={path.startsWith('/ops/credits')} collapsed={false} />
+                <NavItem icon={<Server className="w-3.5 h-3.5" />} label="Technical" path="/ops/technical" active={path.startsWith('/ops/technical')} collapsed={false} />
+                <NavItem icon={<BarChart3 className="w-3.5 h-3.5" />} label="Performance" path="/ops/performance" active={path.startsWith('/ops/performance')} collapsed={false} />
+                <NavItem icon={<Mail className="w-3.5 h-3.5" />} label="Email" path="/ops/email" active={path.startsWith('/ops/email')} collapsed={false} />
+                <NavItem icon={<Settings className="w-3.5 h-3.5" />} label="Settings" path="/ops/settings" active={path.startsWith('/ops/settings')} collapsed={false} />
+                <NavItem icon={<Siren className="w-3.5 h-3.5" />} label="Incidents" path="/incidents" active={path.startsWith('/incidents')} collapsed={false} />
+              </div>
+            )}
+            {collapsed && (
+              <NavItem icon={<Siren className="w-4 h-4" />} label="Incidents" path="/incidents" active={path.startsWith('/incidents')} collapsed={true} />
+            )}
           </>
         )}
       </nav>
 
-      <div className="p-2 border-t border-border-subtle space-y-0.5">
+      <div className="px-3 py-2 border-t border-border-default/50 space-y-1 bg-surface-primary/30">
         <NavItem icon={<Settings className="w-4 h-4" />} label="Settings" path="/settings" active={path === '/settings'} collapsed={collapsed} />
         <NavItem icon={<CreditCard className="w-4 h-4" />} label="Billing" path="/billing" active={path === '/billing'} collapsed={collapsed} />
         <NavItem icon={<LifeBuoy className="w-4 h-4" />} label="Support" path="/support" active={path.startsWith('/support')} collapsed={collapsed} />
@@ -278,23 +281,23 @@ export function Sidebar() {
         <NavItem icon={<MessageSquare className="w-4 h-4" />} label="Community" path="/community" active={false} collapsed={collapsed} />
       </div>
 
-      <div className="p-3 border-t border-border-subtle">
-        <div className={cn('flex items-center', collapsed ? 'justify-center' : 'gap-2')}>
-          <div className="w-7 h-7 rounded-full bg-surface-tertiary flex items-center justify-center text-xs text-content-secondary">
+      <div className="p-3 border-t border-border-default h-[60px] flex items-center bg-surface-secondary/50">
+        <div className={cn('flex items-center w-full', collapsed ? 'justify-center' : 'gap-3')}>
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-brand/20 to-brand/5 border border-brand/20 flex items-center justify-center text-xs font-bold text-brand shadow-sm">
             {userInitial}
           </div>
           {!collapsed && (
             <>
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-medium text-content-primary truncate">{userLabel}</div>
-                {userSub && <div className="text-[11px] text-content-tertiary truncate">{userSub}</div>}
+              <div className="flex-1 min-w-0 flex flex-col justify-center">
+                <div className="text-[13px] font-semibold text-content-primary truncate">{userLabel}</div>
+                {userSub && <div className="text-[10px] text-content-tertiary truncate leading-tight">{userSub}</div>}
               </div>
               <button
                 onClick={() => { auth.logout(); }}
                 title="Log out"
-                className="p-1 rounded-md text-content-tertiary hover:text-red-400 hover:bg-surface-tertiary transition-colors"
+                className="p-1.5 rounded-md text-content-tertiary hover:text-status-error hover:bg-status-error/10 transition-colors"
               >
-                <LogOut className="w-3.5 h-3.5" />
+                <LogOut className="w-4 h-4" />
               </button>
             </>
           )}

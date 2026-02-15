@@ -10,6 +10,7 @@ import (
 	"github.com/railpush/api/config"
 	"github.com/railpush/api/database"
 	"github.com/railpush/api/middleware"
+	"github.com/railpush/api/models"
 	"github.com/railpush/api/services"
 	"github.com/railpush/api/utils"
 )
@@ -425,4 +426,34 @@ func (h *OpsDashboardHandler) ListEmailOutbox(w http.ResponseWriter, r *http.Req
 		out = []item{}
 	}
 	utils.RespondJSON(w, http.StatusOK, out)
+}
+
+// SendTestEmail enqueues a test message in the transactional outbox to validate SMTP setup.
+// Body: { "to": "you@example.com" }
+func (h *OpsDashboardHandler) SendTestEmail(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureOps(w, r) {
+		return
+	}
+	if h == nil || h.Config == nil || !h.Config.Email.Enabled() {
+		utils.RespondError(w, http.StatusServiceUnavailable, "email is disabled")
+		return
+	}
+	var req struct {
+		To string `json:"to"`
+	}
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 32*1024)).Decode(&req)
+	to := strings.TrimSpace(req.To)
+	if to == "" {
+		utils.RespondError(w, http.StatusBadRequest, "missing recipient")
+		return
+	}
+
+	subj := "RailPush test email"
+	text := "This is a test email from RailPush.\n\nIf you received this, your SMTP configuration is working."
+	id, err := models.EnqueueEmail("", "ops_test", to, subj, text, "")
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to enqueue email")
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "id": id})
 }
