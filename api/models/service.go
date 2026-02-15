@@ -2,9 +2,14 @@ package models
 
 import (
 	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
 	"time"
 
+	"github.com/lib/pq"
 	"github.com/railpush/api/database"
+	"github.com/railpush/api/utils"
 )
 
 type Service struct {
@@ -13,6 +18,7 @@ type Service struct {
 	ProjectID         *string   `json:"project_id"`
 	EnvironmentID     *string   `json:"environment_id"`
 	Name              string    `json:"name"`
+	Subdomain         string    `json:"subdomain"`
 	PublicURL         string    `json:"public_url,omitempty"`
 	Type              string    `json:"type"`
 	Runtime           string    `json:"runtime"`
@@ -40,7 +46,7 @@ type Service struct {
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
-const serviceSelectCols = `id, COALESCE(workspace_id::text,''), COALESCE(project_id::text,''), COALESCE(environment_id::text,''), name, COALESCE(type,''), COALESCE(runtime,''), COALESCE(repo_url,''), COALESCE(branch,'main'), COALESCE(build_command,''), COALESCE(start_command,''), COALESCE(dockerfile_path,''), COALESCE(docker_context,''), COALESCE(image_url,''), COALESCE(health_check_path,''), COALESCE(port,10000), COALESCE(auto_deploy,false), COALESCE(is_suspended,false), COALESCE(max_shutdown_delay,30), COALESCE(pre_deploy_command,''), COALESCE(static_publish_path,''), COALESCE(schedule,''), COALESCE(plan,'starter'), COALESCE(instances,1), COALESCE(status,'created'), COALESCE(container_id,''), COALESCE(host_port,0), created_at, updated_at`
+const serviceSelectCols = `id, COALESCE(workspace_id::text,''), COALESCE(project_id::text,''), COALESCE(environment_id::text,''), COALESCE(name,''), COALESCE(subdomain,''), COALESCE(type,''), COALESCE(runtime,''), COALESCE(repo_url,''), COALESCE(branch,'main'), COALESCE(build_command,''), COALESCE(start_command,''), COALESCE(dockerfile_path,''), COALESCE(docker_context,''), COALESCE(image_url,''), COALESCE(health_check_path,''), COALESCE(port,10000), COALESCE(auto_deploy,false), COALESCE(is_suspended,false), COALESCE(max_shutdown_delay,30), COALESCE(pre_deploy_command,''), COALESCE(static_publish_path,''), COALESCE(schedule,''), COALESCE(plan,'starter'), COALESCE(instances,1), COALESCE(status,'created'), COALESCE(container_id,''), COALESCE(host_port,0), created_at, updated_at`
 
 func serviceStrPtrOrNil(v string) *string {
 	if v == "" {
@@ -67,7 +73,81 @@ func ListServices(workspaceID string) ([]Service, error) {
 	for rows.Next() {
 		var s Service
 		var projectID, environmentID string
-		if err := rows.Scan(&s.ID, &s.WorkspaceID, &projectID, &environmentID, &s.Name, &s.Type, &s.Runtime, &s.RepoURL, &s.Branch, &s.BuildCommand, &s.StartCommand, &s.DockerfilePath, &s.DockerContext, &s.ImageURL, &s.HealthCheckPath, &s.Port, &s.AutoDeploy, &s.IsSuspended, &s.MaxShutdownDelay, &s.PreDeployCommand, &s.StaticPublishPath, &s.Schedule, &s.Plan, &s.Instances, &s.Status, &s.ContainerID, &s.HostPort, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.WorkspaceID, &projectID, &environmentID, &s.Name, &s.Subdomain, &s.Type, &s.Runtime, &s.RepoURL, &s.Branch, &s.BuildCommand, &s.StartCommand, &s.DockerfilePath, &s.DockerContext, &s.ImageURL, &s.HealthCheckPath, &s.Port, &s.AutoDeploy, &s.IsSuspended, &s.MaxShutdownDelay, &s.PreDeployCommand, &s.StaticPublishPath, &s.Schedule, &s.Plan, &s.Instances, &s.Status, &s.ContainerID, &s.HostPort, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, err
+		}
+		s.ProjectID = serviceStrPtrOrNil(projectID)
+		s.EnvironmentID = serviceStrPtrOrNil(environmentID)
+		svcs = append(svcs, s)
+	}
+	return svcs, nil
+}
+
+func GetServiceByWorkspaceAndName(workspaceID string, name string) (*Service, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	name = strings.TrimSpace(name)
+	if workspaceID == "" || name == "" {
+		return nil, nil
+	}
+
+	s := &Service{}
+	var projectID, environmentID string
+	err := database.DB.QueryRow(
+		"SELECT "+serviceSelectCols+" FROM services WHERE workspace_id=$1 AND lower(name)=lower($2) ORDER BY created_at ASC LIMIT 1",
+		workspaceID, name,
+	).Scan(&s.ID, &s.WorkspaceID, &projectID, &environmentID, &s.Name, &s.Subdomain, &s.Type, &s.Runtime, &s.RepoURL, &s.Branch, &s.BuildCommand, &s.StartCommand, &s.DockerfilePath, &s.DockerContext, &s.ImageURL, &s.HealthCheckPath, &s.Port, &s.AutoDeploy, &s.IsSuspended, &s.MaxShutdownDelay, &s.PreDeployCommand, &s.StaticPublishPath, &s.Schedule, &s.Plan, &s.Instances, &s.Status, &s.ContainerID, &s.HostPort, &s.CreatedAt, &s.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	s.ProjectID = serviceStrPtrOrNil(projectID)
+	s.EnvironmentID = serviceStrPtrOrNil(environmentID)
+	return s, nil
+}
+
+// ListAutoDeployServicesByRepoBranch returns all services that should auto-deploy for a given repo+branch.
+// This is used by GitHub webhooks and avoids loading the entire services table into memory.
+func ListAutoDeployServicesByRepoBranch(repoURL string, branch string) ([]Service, error) {
+	rows, err := database.DB.Query(
+		"SELECT "+serviceSelectCols+" FROM services WHERE repo_url=$1 AND branch=$2 AND auto_deploy=true ORDER BY created_at DESC",
+		repoURL, branch,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var svcs []Service
+	for rows.Next() {
+		var s Service
+		var projectID, environmentID string
+		if err := rows.Scan(&s.ID, &s.WorkspaceID, &projectID, &environmentID, &s.Name, &s.Subdomain, &s.Type, &s.Runtime, &s.RepoURL, &s.Branch, &s.BuildCommand, &s.StartCommand, &s.DockerfilePath, &s.DockerContext, &s.ImageURL, &s.HealthCheckPath, &s.Port, &s.AutoDeploy, &s.IsSuspended, &s.MaxShutdownDelay, &s.PreDeployCommand, &s.StaticPublishPath, &s.Schedule, &s.Plan, &s.Instances, &s.Status, &s.ContainerID, &s.HostPort, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, err
+		}
+		s.ProjectID = serviceStrPtrOrNil(projectID)
+		s.EnvironmentID = serviceStrPtrOrNil(environmentID)
+		svcs = append(svcs, s)
+	}
+	return svcs, nil
+}
+
+// ListBaseServicesForPreview finds "base" services for preview environments for a given repo+base branch.
+// We exclude preview-* services so previews don't recursively spawn previews.
+func ListBaseServicesForPreview(repoURL string, baseBranch string) ([]Service, error) {
+	rows, err := database.DB.Query(
+		"SELECT "+serviceSelectCols+" FROM services WHERE repo_url=$1 AND branch=$2 AND lower(name) NOT LIKE 'preview-%' ORDER BY created_at DESC",
+		repoURL, baseBranch,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var svcs []Service
+	for rows.Next() {
+		var s Service
+		var projectID, environmentID string
+		if err := rows.Scan(&s.ID, &s.WorkspaceID, &projectID, &environmentID, &s.Name, &s.Subdomain, &s.Type, &s.Runtime, &s.RepoURL, &s.Branch, &s.BuildCommand, &s.StartCommand, &s.DockerfilePath, &s.DockerContext, &s.ImageURL, &s.HealthCheckPath, &s.Port, &s.AutoDeploy, &s.IsSuspended, &s.MaxShutdownDelay, &s.PreDeployCommand, &s.StaticPublishPath, &s.Schedule, &s.Plan, &s.Instances, &s.Status, &s.ContainerID, &s.HostPort, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, err
 		}
 		s.ProjectID = serviceStrPtrOrNil(projectID)
@@ -82,7 +162,7 @@ func GetService(id string) (*Service, error) {
 	var projectID, environmentID string
 	err := database.DB.QueryRow(
 		"SELECT "+serviceSelectCols+" FROM services WHERE id=$1", id,
-	).Scan(&s.ID, &s.WorkspaceID, &projectID, &environmentID, &s.Name, &s.Type, &s.Runtime, &s.RepoURL, &s.Branch, &s.BuildCommand, &s.StartCommand, &s.DockerfilePath, &s.DockerContext, &s.ImageURL, &s.HealthCheckPath, &s.Port, &s.AutoDeploy, &s.IsSuspended, &s.MaxShutdownDelay, &s.PreDeployCommand, &s.StaticPublishPath, &s.Schedule, &s.Plan, &s.Instances, &s.Status, &s.ContainerID, &s.HostPort, &s.CreatedAt, &s.UpdatedAt)
+	).Scan(&s.ID, &s.WorkspaceID, &projectID, &environmentID, &s.Name, &s.Subdomain, &s.Type, &s.Runtime, &s.RepoURL, &s.Branch, &s.BuildCommand, &s.StartCommand, &s.DockerfilePath, &s.DockerContext, &s.ImageURL, &s.HealthCheckPath, &s.Port, &s.AutoDeploy, &s.IsSuspended, &s.MaxShutdownDelay, &s.PreDeployCommand, &s.StaticPublishPath, &s.Schedule, &s.Plan, &s.Instances, &s.Status, &s.ContainerID, &s.HostPort, &s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -92,10 +172,103 @@ func GetService(id string) (*Service, error) {
 }
 
 func CreateService(s *Service) error {
+	if s == nil {
+		return fmt.Errorf("missing service")
+	}
+
+	base := strings.TrimSpace(s.Subdomain)
+	if base == "" {
+		base = s.Name
+	}
+	base = utils.ServiceDomainLabel(base)
+	if base == "" {
+		base = "service"
+	}
+	// Reserve platform subdomains under the deploy domain (e.g., grafana.apps.railpush.com).
+	reserved := map[string]struct{}{
+		"grafana":     {},
+		"prometheus":  {},
+		"alertmanager": {},
+		"loki":        {},
+	}
+	if _, ok := reserved[base]; ok {
+		base = trimToLabelLen(base, "svc")
+	}
+
+	// Allocate a unique subdomain globally. This prevents ingress host collisions across workspaces.
+	for attempt := 0; attempt < 50; attempt++ {
+		candidate := base
+		if attempt > 0 {
+			candidate = trimToLabelLen(base, fmt.Sprintf("%d", attempt+1))
+		}
+		s.Subdomain = candidate
+
+		err := database.DB.QueryRow(
+			"INSERT INTO services (workspace_id, project_id, environment_id, name, subdomain, type, runtime, repo_url, branch, build_command, start_command, dockerfile_path, docker_context, image_url, health_check_path, port, auto_deploy, max_shutdown_delay, pre_deploy_command, static_publish_path, schedule, plan, instances) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING id, status, created_at, updated_at",
+			s.WorkspaceID, s.ProjectID, s.EnvironmentID, s.Name, s.Subdomain, s.Type, s.Runtime, s.RepoURL, s.Branch, s.BuildCommand, s.StartCommand, s.DockerfilePath, s.DockerContext, s.ImageURL, s.HealthCheckPath, s.Port, s.AutoDeploy, s.MaxShutdownDelay, s.PreDeployCommand, s.StaticPublishPath, s.Schedule, s.Plan, s.Instances,
+		).Scan(&s.ID, &s.Status, &s.CreatedAt, &s.UpdatedAt)
+		if err == nil {
+			return nil
+		}
+		if !isUniqueViolation(err, "idx_services_subdomain_unique") {
+			return err
+		}
+	}
+
+	// Last-resort: add a short random suffix.
+	rnd, _ := utils.GenerateRandomString(3) // 6 hex chars
+	if rnd == "" {
+		rnd = "rand"
+	}
+	suffix := rnd
+	if len(suffix) > 6 {
+		suffix = suffix[:6]
+	}
+	s.Subdomain = trimToLabelLen(base, suffix)
 	return database.DB.QueryRow(
-		"INSERT INTO services (workspace_id, project_id, environment_id, name, type, runtime, repo_url, branch, build_command, start_command, dockerfile_path, docker_context, image_url, health_check_path, port, auto_deploy, max_shutdown_delay, pre_deploy_command, static_publish_path, schedule, plan, instances) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING id, status, created_at, updated_at",
-		s.WorkspaceID, s.ProjectID, s.EnvironmentID, s.Name, s.Type, s.Runtime, s.RepoURL, s.Branch, s.BuildCommand, s.StartCommand, s.DockerfilePath, s.DockerContext, s.ImageURL, s.HealthCheckPath, s.Port, s.AutoDeploy, s.MaxShutdownDelay, s.PreDeployCommand, s.StaticPublishPath, s.Schedule, s.Plan, s.Instances,
+		"INSERT INTO services (workspace_id, project_id, environment_id, name, subdomain, type, runtime, repo_url, branch, build_command, start_command, dockerfile_path, docker_context, image_url, health_check_path, port, auto_deploy, max_shutdown_delay, pre_deploy_command, static_publish_path, schedule, plan, instances) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING id, status, created_at, updated_at",
+		s.WorkspaceID, s.ProjectID, s.EnvironmentID, s.Name, s.Subdomain, s.Type, s.Runtime, s.RepoURL, s.Branch, s.BuildCommand, s.StartCommand, s.DockerfilePath, s.DockerContext, s.ImageURL, s.HealthCheckPath, s.Port, s.AutoDeploy, s.MaxShutdownDelay, s.PreDeployCommand, s.StaticPublishPath, s.Schedule, s.Plan, s.Instances,
 	).Scan(&s.ID, &s.Status, &s.CreatedAt, &s.UpdatedAt)
+}
+
+func isUniqueViolation(err error, constraint string) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	if pqErr.Code != "23505" {
+		return false
+	}
+	if constraint == "" {
+		return true
+	}
+	return pqErr.Constraint == constraint
+}
+
+func trimToLabelLen(base, suffix string) string {
+	base = utils.ServiceDomainLabel(base)
+	suffix = utils.ServiceDomainLabel(suffix)
+	base = strings.Trim(base, "-")
+	suffix = strings.Trim(suffix, "-")
+	if base == "" {
+		base = "service"
+	}
+	if suffix == "" {
+		return base
+	}
+
+	// Ensure `base-suffix` fits within a single DNS label (63 chars).
+	maxBaseLen := 63 - (len(suffix) + 1)
+	if maxBaseLen < 1 {
+		maxBaseLen = 1
+	}
+	if len(base) > maxBaseLen {
+		base = strings.Trim(base[:maxBaseLen], "-")
+		if base == "" {
+			base = "service"
+		}
+	}
+	return base + "-" + suffix
 }
 
 func UpdateService(s *Service) error {

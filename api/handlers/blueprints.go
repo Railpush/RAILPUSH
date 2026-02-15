@@ -157,7 +157,7 @@ type RenderService struct {
 	BuildCommand      string             `yaml:"buildCommand"`
 	StartCommand      string             `yaml:"startCommand"`
 	Port              int                `yaml:"port"`
-	AutoDeploy        bool               `yaml:"autoDeploy"`
+	AutoDeploy        *bool              `yaml:"autoDeploy"`
 	Plan              string             `yaml:"plan"`
 	EnvVars           []RenderEnvVar     `yaml:"envVars"`
 	HealthCheckPath   string             `yaml:"healthCheckPath"`
@@ -398,6 +398,10 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 
 		existing, _ := models.GetBlueprintResourceByName(bp.ID, "service", serviceName)
 		if existing != nil {
+			// Populate svcMap so fromService refs can resolve to pre-existing blueprint services.
+			if svc, _ := models.GetService(existing.ResourceID); svc != nil {
+				svcMap[serviceName] = svc
+			}
 			continue
 		}
 
@@ -412,21 +416,43 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			imageURL = sdef.Image.URL
 		}
 
-		svc := &models.Service{
-			WorkspaceID: bp.WorkspaceID, Name: serviceName, Type: sdef.Type,
-			Runtime: sdef.Runtime, RepoURL: sdef.Repo, Branch: sdef.Branch,
-			BuildCommand: sdef.BuildCommand, StartCommand: sdef.StartCommand,
-			Port: sdef.Port, AutoDeploy: sdef.AutoDeploy, Plan: sdef.Plan,
-			HealthCheckPath: sdef.HealthCheckPath, PreDeployCommand: sdef.PreDeployCmd,
-			DockerfilePath: sdef.DockerfilePath, DockerContext: dockerCtx,
-			StaticPublishPath: sdef.StaticPublishPath, Schedule: sdef.Schedule,
-			ImageURL: imageURL,
+		desiredType := sdef.Type
+		if desiredType == "" {
+			desiredType = "web"
+		}
+
+		// If a service already exists with this name, adopt it instead of creating a duplicate.
+		svc, _ := models.GetServiceByWorkspaceAndName(bp.WorkspaceID, serviceName)
+		if svc != nil {
+			if strings.TrimSpace(svc.RepoURL) != "" && strings.TrimSpace(sdef.Repo) != "" && strings.TrimSpace(svc.RepoURL) != strings.TrimSpace(sdef.Repo) {
+				fail("service name already exists with a different repo: " + serviceName)
+				return
+			}
+			if strings.TrimSpace(svc.Type) != "" && strings.TrimSpace(desiredType) != "" && strings.TrimSpace(svc.Type) != strings.TrimSpace(desiredType) {
+				fail("service name already exists with a different type: " + serviceName)
+				return
+			}
+		} else {
+			autoDeploy := true
+			if sdef.AutoDeploy != nil {
+				autoDeploy = *sdef.AutoDeploy
+			}
+			svc = &models.Service{
+				WorkspaceID: bp.WorkspaceID, Name: serviceName, Type: desiredType,
+				Runtime: sdef.Runtime, RepoURL: sdef.Repo, Branch: sdef.Branch,
+				BuildCommand: sdef.BuildCommand, StartCommand: sdef.StartCommand,
+				Port: sdef.Port, AutoDeploy: autoDeploy, Plan: sdef.Plan,
+				HealthCheckPath: sdef.HealthCheckPath, PreDeployCommand: sdef.PreDeployCmd,
+				DockerfilePath: sdef.DockerfilePath, DockerContext: dockerCtx,
+				StaticPublishPath: sdef.StaticPublishPath, Schedule: sdef.Schedule,
+				ImageURL: imageURL,
+			}
+			if sdef.DockerCommand != "" {
+				svc.StartCommand = sdef.DockerCommand
+			}
 		}
 		if sdef.DockerCommand != "" {
 			svc.StartCommand = sdef.DockerCommand
-		}
-		if svc.Type == "" {
-			svc.Type = "web"
 		}
 		if svc.Branch == "" {
 			svc.Branch = bp.Branch
@@ -446,16 +472,64 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			svc.Instances = 1
 		}
 
-		if err := models.CreateService(svc); err != nil {
-			fail("failed to create service " + serviceName)
-			return
+		created := false
+		if strings.TrimSpace(svc.ID) == "" {
+			if err := models.CreateService(svc); err != nil {
+				fail("failed to create service " + serviceName)
+				return
+			}
+			created = true
+		} else {
+			// Keep adopted services in sync with the blueprint (only fields supported by UpdateService).
+			svc.Branch = sdef.Branch
+			if svc.Branch == "" {
+				svc.Branch = bp.Branch
+			}
+			svc.BuildCommand = sdef.BuildCommand
+			svc.StartCommand = sdef.StartCommand
+			if sdef.DockerCommand != "" {
+				svc.StartCommand = sdef.DockerCommand
+			}
+			svc.DockerfilePath = sdef.DockerfilePath
+			svc.DockerContext = dockerCtx
+			svc.ImageURL = imageURL
+			svc.HealthCheckPath = sdef.HealthCheckPath
+			svc.Port = sdef.Port
+			if svc.Port == 0 {
+				svc.Port = 10000
+			}
+			if sdef.AutoDeploy != nil {
+				svc.AutoDeploy = *sdef.AutoDeploy
+			}
+			svc.MaxShutdownDelay = 30
+			svc.PreDeployCommand = sdef.PreDeployCmd
+			svc.StaticPublishPath = sdef.StaticPublishPath
+			svc.Schedule = sdef.Schedule
+			svc.Plan = sdef.Plan
+			if svc.Plan == "" {
+				svc.Plan = "starter"
+			}
+			if sdef.NumInstances > 0 {
+				svc.Instances = sdef.NumInstances
+			} else {
+				svc.Instances = 1
+			}
+
+			if err := models.UpdateService(svc); err != nil {
+				fail("failed to update service " + serviceName)
+				return
+			}
 		}
 		models.CreateBlueprintResource(&models.BlueprintResource{
 			BlueprintID: bp.ID, ResourceType: "service",
 			ResourceID: svc.ID, ResourceName: serviceName,
 		})
 		svcMap[serviceName] = svc
-		log.Printf("Blueprint sync: created service %s", serviceName)
+		if created {
+			log.Printf("Blueprint sync: created service %s", serviceName)
+		} else {
+			log.Printf("Blueprint sync: adopted existing service %s", serviceName)
+		}
 
 		// Create custom domains
 		for _, domain := range sdef.Domains {
@@ -482,7 +556,9 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			log.Printf("Blueprint sync: created disk %s for service %s", sdef.Disk.Name, serviceName)
 		}
 
-		pending = append(pending, pendingDeploy{svc: svc, sdef: sdef})
+		if created {
+			pending = append(pending, pendingDeploy{svc: svc, sdef: sdef})
+		}
 	}
 
 	// --- Phase 3c: Create env var groups ---
@@ -564,7 +640,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			if ev.FromService != nil {
 				refName := strings.TrimSpace(ev.FromService.Name)
 				if refSvc, ok := svcMap[refName]; ok {
-					refHost := fmt.Sprintf("%s.%s", utils.ServiceDomainLabel(refSvc.Name), h.Config.Deploy.Domain)
+					refHost := fmt.Sprintf("%s.%s", utils.ServiceHostLabel(refSvc.Name, refSvc.Subdomain), h.Config.Deploy.Domain)
 					switch ev.FromService.Property {
 					case "host":
 						val = refHost

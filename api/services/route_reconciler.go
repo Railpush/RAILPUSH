@@ -67,6 +67,9 @@ func (rr *RouteReconciler) enabled() bool {
 	if rr.Config == nil {
 		return false
 	}
+	if rr.Config.Deploy.DisableRouter {
+		return false
+	}
 	domain := strings.ToLower(strings.TrimSpace(rr.Config.Deploy.Domain))
 	return domain != "" && domain != "localhost"
 }
@@ -134,7 +137,7 @@ func (rr *RouteReconciler) reconcileOnce() {
 			continue
 		}
 
-		defaultHost := fmt.Sprintf("%s.%s", utils.ServiceDomainLabel(svc.Name), deployDomain)
+		defaultHost := fmt.Sprintf("%s.%s", utils.ServiceHostLabel(svc.Name, svc.Subdomain), deployDomain)
 		if _, exists := existingHosts[defaultHost]; !exists {
 			if err := rr.Router.AddRouteUpstreams(defaultHost, upstreams); err != nil {
 				log.Printf("route reconcile: failed to add service route for %s: %v", defaultHost, err)

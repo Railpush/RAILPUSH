@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RailPush Background</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        slate: {
+                            950: '#020617',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body {
+            background-color: #020617;
+            margin: 0;
+            overflow: hidden; /* Prevent scrolling */
+        }
+
+        /* Ambient Glow */
+        .hero-glow {
+            position: absolute;
+            top: -30%;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 1200px;
+            height: 1000px;
+            background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, rgba(148, 163, 184, 0.05) 50%, transparent 80%);
+            filter: blur(100px);
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        /* 3D Canvas */
+        #canvas-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100vh;
+            z-index: 1; 
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Three.js Canvas Container -->
+    <div id="canvas-container"></div>
+    
+    <!-- CSS Glow Effect -->
+    <div class="hero-glow"></div>
+
+    <!-- Three.js Logic -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const container = document.getElementById('canvas-container');
+            
+            // --- Scene Setup ---
+            const scene = new THREE.Scene();
+            // Match the slate-950 background color for fog
+            scene.fog = new THREE.FogExp2(0x020617, 0.035); 
+
+            const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, -14, 8); 
+            camera.lookAt(0, 0, 0);
+
+            const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            container.appendChild(renderer.domElement);
+
+            // --- Fine Grid Generation ---
+            const gridSize = 100; 
+            const divisions = 80; 
+            const step = gridSize / divisions;
+            
+            const geometry = new THREE.BufferGeometry();
+            const vertices = [];
+            
+            // Lines along X
+            for (let i = 0; i <= divisions; i++) {
+                const y = -gridSize / 2 + i * step;
+                for (let j = 0; j < divisions; j++) {
+                    const x1 = -gridSize / 2 + j * step;
+                    const x2 = -gridSize / 2 + (j + 1) * step;
+                    vertices.push(x1, y, 0);
+                    vertices.push(x2, y, 0);
+                }
+            }
+
+            // Lines along Y
+            for (let i = 0; i <= divisions; i++) {
+                const x = -gridSize / 2 + i * step;
+                for (let j = 0; j < divisions; j++) {
+                    const y1 = -gridSize / 2 + j * step;
+                    const y2 = -gridSize / 2 + (j + 1) * step;
+                    vertices.push(x, y1, 0);
+                    vertices.push(x, y2, 0);
+                }
+            }
+
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+
+            // Grid Material
+            const material = new THREE.LineBasicMaterial({
+                color: 0x818cf8, // Indigo-400
+                transparent: true,
+                opacity: 0.12, 
+                blending: THREE.AdditiveBlending
+            });
+
+            const grid = new THREE.LineSegments(geometry, material);
+            scene.add(grid);
+
+            // Tilt the grid
+            grid.rotation.x = -Math.PI / 3; 
+
+            // --- Animation ---
+            const clock = new THREE.Clock();
+            const raycaster = new THREE.Raycaster();
+            const mouse = new THREE.Vector2(9999, 9999);
+            
+            // Track mouse movement
+            document.addEventListener('mousemove', (event) => {
+                mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            });
+
+            function animate() {
+                requestAnimationFrame(animate);
+                
+                const time = clock.getElapsedTime();
+                const positionAttribute = geometry.attributes.position;
+                const positions = positionAttribute.array;
+                
+                // Raycast to find mouse position on the grid plane
+                raycaster.setFromCamera(mouse, camera);
+                const targetPoint = new THREE.Vector3();
+                raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0.5, 1).normalize(), 0), targetPoint);
+
+                for (let i = 0; i < positions.length; i += 3) {
+                    const x = positions[i];
+                    const y = positions[i + 1];
+                    let z = positions[i + 2];
+                    
+                    // 1. Ambient Wave (Hypnotic breathing)
+                    const waveZ = Math.sin(x * 0.1 + time * 0.4) * Math.cos(y * 0.1 + time * 0.2) * 0.5;
+                    
+                    // 2. Interactive Elasticity
+                    let dist = 100;
+                    if (targetPoint) {
+                        const dx = x - targetPoint.x;
+                        const dy = (y - targetPoint.y) * 0.6; // Aspect correction for tilt
+                        dist = Math.sqrt(dx*dx + dy*dy);
+                    }
+
+                    let mouseInfluence = 0;
+                    if (dist < 12) {
+                        mouseInfluence = (1 - dist / 12) * -2.5; // Dip effect
+                    }
+
+                    // Smooth update
+                    const targetZ = waveZ + mouseInfluence;
+                    positions[i + 2] += (targetZ - z) * 0.05; 
+                }
+
+                positionAttribute.needsUpdate = true;
+                renderer.render(scene, camera);
+            }
+
+            animate();
+
+            // Handle Window Resize
+            window.addEventListener('resize', () => {
+                const width = window.innerWidth;
+                const height = window.innerHeight;
+                renderer.setSize(width, height);
+                camera.aspect = width / height;
+                camera.updateProjectionMatrix();
+            });
+        });
+    </script>
+</body>
+</html>

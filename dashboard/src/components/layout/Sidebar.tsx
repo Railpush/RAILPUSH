@@ -2,13 +2,14 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   LayoutDashboard, Layers, Link2, FolderKanban,
   Globe, Globe2, FileText, Lock, Cog, Clock, Database, Key,
-  Settings, BookOpen, MessageSquare, CreditCard, LogOut,
+  Settings, BookOpen, MessageSquare, CreditCard, LogOut, LifeBuoy, Coins, Server,
   ArrowLeft, BarChart3, ScrollText, Network, HardDrive, TrendingUp,
   ChevronDown, Search, Info, ShieldCheck, Save, AppWindow, List,
-  PanelLeftClose, PanelLeftOpen
+  PanelLeftClose, PanelLeftOpen, Siren, Users, Mail
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useSidebar } from '../../lib/sidebar';
+import { useSession } from '../../lib/session';
 import { LogoMark } from '../Logo';
 import { auth } from '../../lib/api';
 
@@ -26,10 +27,10 @@ function NavItem({ icon, label, path, active, collapsed }: SidebarItem & { activ
       onClick={() => navigate(path)}
       title={collapsed ? label : undefined}
       className={cn(
-        'w-full flex items-center gap-2.5 rounded-xl text-[13px] transition-all duration-100 cursor-pointer border',
+        'w-full flex items-center gap-2.5 rounded-md text-[13px] transition-colors duration-100 cursor-pointer border',
         collapsed ? 'justify-center px-0 py-2' : 'px-3 py-[9px]',
         active
-          ? 'bg-brand/10 text-brand font-semibold border-brand/30 shadow-sm'
+          ? 'bg-surface-tertiary text-content-primary font-semibold border-border-default'
           : 'text-content-secondary hover:bg-surface-tertiary hover:text-content-primary border-transparent'
       )}
     >
@@ -53,6 +54,7 @@ export function Sidebar() {
   const params = useParams();
   const path = location.pathname;
   const { collapsed, toggle } = useSidebar();
+  const { user, isOps } = useSession();
 
   // Extract route params — useParams works for child routes, but also parse from path as fallback
   const serviceId = params.serviceId;
@@ -63,7 +65,7 @@ export function Sidebar() {
   const width = collapsed ? 'w-[64px]' : 'w-[240px]';
   const asideClass = cn(
     width,
-    'app-sidebar h-screen fixed left-0 top-0 bg-surface-secondary border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-200 shadow-[12px_0_28px_rgba(15,23,42,0.08)]'
+    'app-sidebar h-screen fixed left-0 top-0 bg-surface-secondary border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-200'
   );
 
   // Service detail sidebar
@@ -191,6 +193,10 @@ export function Sidebar() {
   }
 
   // Workspace level sidebar (default)
+  const userLabel = user?.username || user?.email || 'User';
+  const userInitial = (userLabel || 'U').slice(0, 1).toUpperCase();
+  const userSub = user?.email ? user.email : (user?.role || '');
+
   return (
     <aside className={asideClass}>
       <div className="p-4 border-b border-border-subtle flex items-center justify-between">
@@ -199,7 +205,7 @@ export function Sidebar() {
             <LogoMark size={24} />
             <div className="flex flex-col leading-tight">
               <span className="font-semibold text-content-primary">RailPush</span>
-              <span className="text-[11px] text-content-tertiary">Control room</span>
+              <span className="text-[11px] text-content-tertiary">Dashboard</span>
             </div>
           </div>
         ) : (
@@ -219,12 +225,11 @@ export function Sidebar() {
       )}
 
       {!collapsed && (
-        <div className="p-2">
-          <button className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-surface-tertiary border border-border-default text-content-secondary text-sm hover:text-content-primary hover:border-border-hover transition-colors shadow-[0_4px_12px_rgba(15,23,42,0.06)]">
+        <div className="px-4 py-2 text-[11px] text-content-tertiary">
+          <span className="inline-flex items-center gap-2">
             <Search className="w-3.5 h-3.5" />
-            <span>Quick search</span>
-            <kbd className="ml-auto text-[10px] bg-surface-primary px-1.5 py-0.5 rounded border border-border-default">⌘K</kbd>
-          </button>
+            <span>Tip: use the service pages for logs, metrics, and settings.</span>
+          </span>
         </div>
       )}
 
@@ -245,11 +250,30 @@ export function Sidebar() {
 
         <SectionLabel label="Networking" collapsed={collapsed} />
         <NavItem icon={<Globe2 className="w-4 h-4" />} label="Domains" path="/domains" active={path.startsWith('/domains')} collapsed={collapsed} />
+
+        {isOps && (
+          <>
+            <SectionLabel label="Ops" collapsed={collapsed} />
+            <NavItem icon={<ShieldCheck className="w-4 h-4" />} label="Overview" path="/ops" active={path === '/ops'} collapsed={collapsed} />
+            <NavItem icon={<Users className="w-4 h-4" />} label="Customers" path="/ops/customers" active={path.startsWith('/ops/customers')} collapsed={collapsed} />
+            <NavItem icon={<AppWindow className="w-4 h-4" />} label="Services" path="/ops/services" active={path.startsWith('/ops/services')} collapsed={collapsed} />
+            <NavItem icon={<TrendingUp className="w-4 h-4" />} label="Deployments" path="/ops/deployments" active={path.startsWith('/ops/deployments')} collapsed={collapsed} />
+            <NavItem icon={<CreditCard className="w-4 h-4" />} label="Billing" path="/ops/billing" active={path.startsWith('/ops/billing')} collapsed={collapsed} />
+            <NavItem icon={<LifeBuoy className="w-4 h-4" />} label="Tickets" path="/ops/tickets" active={path.startsWith('/ops/tickets')} collapsed={collapsed} />
+            <NavItem icon={<Coins className="w-4 h-4" />} label="Credits" path="/ops/credits" active={path.startsWith('/ops/credits')} collapsed={collapsed} />
+            <NavItem icon={<Server className="w-4 h-4" />} label="Technical" path="/ops/technical" active={path.startsWith('/ops/technical')} collapsed={collapsed} />
+            <NavItem icon={<BarChart3 className="w-4 h-4" />} label="Performance" path="/ops/performance" active={path.startsWith('/ops/performance')} collapsed={collapsed} />
+            <NavItem icon={<Mail className="w-4 h-4" />} label="Email" path="/ops/email" active={path.startsWith('/ops/email')} collapsed={collapsed} />
+            <NavItem icon={<Settings className="w-4 h-4" />} label="Ops Settings" path="/ops/settings" active={path.startsWith('/ops/settings')} collapsed={collapsed} />
+            <NavItem icon={<Siren className="w-4 h-4" />} label="Incidents" path="/incidents" active={path.startsWith('/incidents')} collapsed={collapsed} />
+          </>
+        )}
       </nav>
 
       <div className="p-2 border-t border-border-subtle space-y-0.5">
         <NavItem icon={<Settings className="w-4 h-4" />} label="Settings" path="/settings" active={path === '/settings'} collapsed={collapsed} />
         <NavItem icon={<CreditCard className="w-4 h-4" />} label="Billing" path="/billing" active={path === '/billing'} collapsed={collapsed} />
+        <NavItem icon={<LifeBuoy className="w-4 h-4" />} label="Support" path="/support" active={path.startsWith('/support')} collapsed={collapsed} />
         <NavItem icon={<BookOpen className="w-4 h-4" />} label="Docs" path="/docs" active={false} collapsed={collapsed} />
         <NavItem icon={<MessageSquare className="w-4 h-4" />} label="Community" path="/community" active={false} collapsed={collapsed} />
       </div>
@@ -257,12 +281,13 @@ export function Sidebar() {
       <div className="p-3 border-t border-border-subtle">
         <div className={cn('flex items-center', collapsed ? 'justify-center' : 'gap-2')}>
           <div className="w-7 h-7 rounded-full bg-surface-tertiary flex items-center justify-center text-xs text-content-secondary">
-            U
+            {userInitial}
           </div>
           {!collapsed && (
             <>
               <div className="flex-1 min-w-0">
-                <div className="text-xs font-medium text-content-primary truncate">User</div>
+                <div className="text-xs font-medium text-content-primary truncate">{userLabel}</div>
+                {userSub && <div className="text-[11px] text-content-tertiary truncate">{userSub}</div>}
               </div>
               <button
                 onClick={() => { auth.logout(); }}

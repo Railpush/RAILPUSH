@@ -1,0 +1,7 @@
+apiVersion: v2
+name: railpush
+description: RailPush control plane (API + dashboard + controller)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+

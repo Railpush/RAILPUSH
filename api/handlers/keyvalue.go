@@ -117,6 +117,13 @@ func (h *KeyValueHandler) CreateKeyValue(w http.ResponseWriter, r *http.Request)
 		utils.RespondError(w, http.StatusInternalServerError, "failed to create key-value store: "+err.Error())
 		return
 	}
+	// In Kubernetes mode, the stable in-cluster endpoint is `sr-kv-<idPrefix>:6379`.
+	if h.Config != nil && h.Config.Kubernetes.Enabled {
+		internalHost := "sr-kv-" + kv.ID[:8]
+		kv.Host = internalHost
+		kv.Port = 6379
+		_ = models.UpdateManagedKeyValueConnection(kv.ID, 6379, internalHost)
+	}
 
 	// Add to Stripe subscription for paid plans
 	if kv.Plan != "free" && h.Stripe.Enabled() {
@@ -206,7 +213,15 @@ func (h *KeyValueHandler) DeleteKeyValue(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if kv.ContainerID != "" {
-		h.Worker.Deployer.RemoveContainer(kv.ContainerID)
+		// Legacy docker mode only; in k8s mode we delete Kubernetes resources instead.
+		if h.Config == nil || !h.Config.Kubernetes.Enabled {
+			h.Worker.Deployer.RemoveContainer(kv.ContainerID)
+		}
+	}
+	if h.Config != nil && h.Config.Kubernetes.Enabled && h.Worker != nil {
+		if kd, err := h.Worker.GetKubeDeployer(); err == nil && kd != nil {
+			_ = kd.DeleteManagedKeyValueResources(kv.ID)
+		}
 	}
 
 	if err := models.DeleteManagedKeyValue(id); err != nil {

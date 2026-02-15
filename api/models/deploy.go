@@ -55,12 +55,28 @@ func ListDeploys(serviceID string) ([]Deploy, error) {
 }
 
 func UpdateDeployStatus(id, status string) error {
-	_, err := database.DB.Exec("UPDATE deploys SET status=$1, finished_at=NOW() WHERE id=$2", status, id)
-	return err
+	switch status {
+	case "live", "failed", "canceled", "cancelled":
+		_, err := database.DB.Exec("UPDATE deploys SET status=$1, finished_at=NOW() WHERE id=$2", status, id)
+		return err
+	default:
+		_, err := database.DB.Exec("UPDATE deploys SET status=$1 WHERE id=$2", status, id)
+		return err
+	}
 }
 
 func UpdateDeployBuildLog(id, logLine string) error {
 	_, err := database.DB.Exec("UPDATE deploys SET build_log = COALESCE(build_log,'') || $1 || E'\\n' WHERE id=$2", logLine, id)
+	return err
+}
+
+// AppendDeployBuildLogChunk appends a pre-formatted chunk to build_log.
+// Use this to batch multiple log lines into a single UPDATE to reduce DB write pressure.
+func AppendDeployBuildLogChunk(id, chunk string) error {
+	if chunk == "" {
+		return nil
+	}
+	_, err := database.DB.Exec("UPDATE deploys SET build_log = COALESCE(build_log,'') || $1 WHERE id=$2", chunk, id)
 	return err
 }
 

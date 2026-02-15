@@ -43,6 +43,11 @@ func (s *Scheduler) Start() {
 func (s *Scheduler) Stop() { close(s.stop) }
 
 func (s *Scheduler) checkCronJobs() {
+	// In Kubernetes mode, cron execution is handled by K8s CronJobs.
+	// The control plane only needs to (re)deploy CronJobs when images/config change.
+	if s.Config != nil && s.Config.Kubernetes.Enabled {
+		return
+	}
 	svcs, err := models.ListServices("")
 	if err != nil {
 		return

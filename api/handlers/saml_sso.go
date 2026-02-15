@@ -41,7 +41,7 @@ func (h *SamlSSOHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if cfg == nil {
-		defaultACS := fmt.Sprintf("https://%s/api/v1/workspaces/%s/sso/saml/acs", h.Config.Deploy.Domain, workspaceID)
+		defaultACS := fmt.Sprintf("https://%s/api/v1/workspaces/%s/sso/saml/acs", h.Config.ControlPlane.Domain, workspaceID)
 		cfg = &models.SamlSSOConfig{
 			WorkspaceID: workspaceID,
 			Enabled:     false,

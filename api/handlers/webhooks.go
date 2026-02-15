@@ -3,6 +3,7 @@ package handlers
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -26,9 +27,142 @@ func NewWebhookHandler(cfg *config.Config, worker *services.Worker) *WebhookHand
 	return &WebhookHandler{Config: cfg, Worker: worker}
 }
 
-func (h *WebhookHandler) GitHubWebhook(w http.ResponseWriter, r *http.Request) {
+func bearerTokenFromAuthHeader(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parts := strings.SplitN(raw, " ", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(parts[0]), "bearer") {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
+}
+
+func constantTimeEquals(a, b string) bool {
+	// Avoid leaking length via timing; also avoid allocations.
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+// AlertmanagerWebhook receives Alertmanager v4 webhook payloads and stores them in Postgres.
+//
+// This is intended as a self-hosted "receiver of record" so alerts don't depend on external services.
+// Alert delivery is authenticated via `Authorization: Bearer <ALERT_WEBHOOK_TOKEN>`.
+func (h *WebhookHandler) AlertmanagerWebhook(w http.ResponseWriter, r *http.Request) {
+	want := strings.TrimSpace(h.Config.Ops.AlertWebhookToken)
+	if want == "" {
+		// Fail-closed: don't expose an unauthenticated sink.
+		utils.RespondError(w, http.StatusServiceUnavailable, "alert webhook not configured")
+		return
+	}
+	got := bearerTokenFromAuthHeader(r.Header.Get("Authorization"))
+	if !constantTimeEquals(want, got) {
+		utils.RespondError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	// Defensive limit: webhook payloads can be large (many alerts). Keep this reasonable for MVP.
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024) // 1 MiB
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+
+	var payload struct {
+		Status       string            `json:"status"`
+		Receiver     string            `json:"receiver"`
+		GroupKey     string            `json:"groupKey"`
+		CommonLabels map[string]string `json:"commonLabels"`
+		Alerts       []struct {
+			Status string            `json:"status"`
+			Labels map[string]string `json:"labels"`
+		} `json:"alerts"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid payload")
+		return
+	}
+
+	alertName := ""
+	severity := ""
+	namespace := ""
+	if payload.CommonLabels != nil {
+		alertName = strings.TrimSpace(payload.CommonLabels["alertname"])
+		severity = strings.TrimSpace(payload.CommonLabels["severity"])
+		namespace = strings.TrimSpace(payload.CommonLabels["namespace"])
+	}
+	// Some Alertmanager groupings omit alertname from commonLabels (e.g. grouping by severity/namespace only).
+	// For display + indexing, fall back to the alerts list if needed.
+	if strings.TrimSpace(alertName) == "" && len(payload.Alerts) > 0 {
+		seen := make(map[string]struct{}, 4)
+		for _, a := range payload.Alerts {
+			if a.Labels == nil {
+				continue
+			}
+			n := strings.TrimSpace(a.Labels["alertname"])
+			if n == "" {
+				continue
+			}
+			seen[n] = struct{}{}
+			if len(seen) > 1 {
+				break
+			}
+		}
+		if len(seen) == 1 {
+			for n := range seen {
+				alertName = n
+			}
+		} else if len(seen) > 1 {
+			alertName = "multiple"
+		}
+	}
+	if strings.TrimSpace(severity) == "" && len(payload.Alerts) > 0 && payload.Alerts[0].Labels != nil {
+		severity = strings.TrimSpace(payload.Alerts[0].Labels["severity"])
+	}
+	if strings.TrimSpace(namespace) == "" && len(payload.Alerts) > 0 && payload.Alerts[0].Labels != nil {
+		namespace = strings.TrimSpace(payload.Alerts[0].Labels["namespace"])
+	}
+
+	ev := &models.AlertEvent{
+		Status:    strings.TrimSpace(payload.Status),
+		Receiver:  strings.TrimSpace(payload.Receiver),
+		GroupKey:  strings.TrimSpace(payload.GroupKey),
+		AlertName: alertName,
+		Severity:  severity,
+		Namespace: namespace,
+		Payload:   body,
+	}
+	if err := models.CreateAlertEvent(ev); err != nil {
+		log.Printf("Alertmanager webhook: failed to store event: %v", err)
+		utils.RespondError(w, http.StatusInternalServerError, "failed to store alert")
+		return
+	}
+
+	log.Printf("Alertmanager webhook stored: id=%s status=%s receiver=%s alert=%s severity=%s namespace=%s alerts=%d",
+		ev.ID, ev.Status, ev.Receiver, ev.AlertName, ev.Severity, ev.Namespace, len(payload.Alerts))
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *WebhookHandler) GitHubWebhook(w http.ResponseWriter, r *http.Request) {
+	// Defensive limit: GitHub payloads can be large, but cap for abuse safety.
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024) // 1 MiB
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		// http.MaxBytesReader returns an error when the limit is exceeded.
+		if strings.Contains(strings.ToLower(err.Error()), "too large") {
+			utils.RespondError(w, http.StatusRequestEntityTooLarge, "payload too large")
+			return
+		}
 		utils.RespondError(w, http.StatusBadRequest, "failed to read body")
 		return
 	}
@@ -52,41 +186,48 @@ func (h *WebhookHandler) GitHubWebhook(w http.ResponseWriter, r *http.Request) {
 				CloneURL string `json:"clone_url"`
 			} `json:"repository"`
 		}
-		json.Unmarshal(body, &payload)
+		if err := json.Unmarshal(body, &payload); err != nil {
+			utils.RespondError(w, http.StatusBadRequest, "invalid push payload")
+			return
+		}
 		branch := strings.TrimPrefix(payload.Ref, "refs/heads/")
-		svcs, _ := models.ListServices("")
+		repoURL := strings.TrimSpace(payload.Repository.CloneURL)
+		if repoURL == "" || branch == "" {
+			utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
+			return
+		}
+		svcs, _ := models.ListAutoDeployServicesByRepoBranch(repoURL, branch)
 		for _, svc := range svcs {
-			if svc.RepoURL == payload.Repository.CloneURL && svc.Branch == branch && svc.AutoDeploy {
-				deploy := &models.Deploy{
-					ServiceID:     svc.ID,
-					Trigger:       "github_push",
-					CommitSHA:     payload.HeadCommit.ID,
-					CommitMessage: payload.HeadCommit.Message,
-					Branch:        branch,
-				}
-				if err := models.CreateDeploy(deploy); err != nil {
-					log.Printf("Failed to create deploy for service %s: %v", svc.ID, err)
-					continue
-				}
-				// Look up service owner's GitHub token for private repo cloning
-				var ghToken string
-				if ws, err := models.GetWorkspace(svc.WorkspaceID); err == nil && ws != nil {
-					if encToken, err := models.GetUserGitHubToken(ws.OwnerID); err == nil && encToken != "" {
-						if t, err := utils.Decrypt(encToken, h.Config.Crypto.EncryptionKey); err == nil {
-							ghToken = t
-						}
+			deploy := &models.Deploy{
+				ServiceID:     svc.ID,
+				Trigger:       "github_push",
+				CommitSHA:     payload.HeadCommit.ID,
+				CommitMessage: payload.HeadCommit.Message,
+				Branch:        branch,
+			}
+			if err := models.CreateDeploy(deploy); err != nil {
+				log.Printf("Failed to create deploy for service %s: %v", svc.ID, err)
+				continue
+			}
+			// Look up service owner's GitHub token for private repo cloning
+			var ghToken string
+			if ws, err := models.GetWorkspace(svc.WorkspaceID); err == nil && ws != nil {
+				if encToken, err := models.GetUserGitHubToken(ws.OwnerID); err == nil && encToken != "" {
+					if t, err := utils.Decrypt(encToken, h.Config.Crypto.EncryptionKey); err == nil {
+						ghToken = t
 					}
 				}
-				// Enqueue the deploy job to the background worker
-				svcCopy := svc
-				h.Worker.Enqueue(services.DeployJob{
-					Deploy:      deploy,
-					Service:     &svcCopy,
-					GitHubToken: ghToken,
-				})
-				log.Printf("Auto-deploy triggered for service %s (branch: %s)", svc.Name, branch)
 			}
+			// Enqueue the deploy job to the background worker
+			svcCopy := svc
+			h.Worker.Enqueue(services.DeployJob{
+				Deploy:      deploy,
+				Service:     &svcCopy,
+				GitHubToken: ghToken,
+			})
+			log.Printf("Auto-deploy triggered for service %s (branch: %s)", svc.Name, branch)
 		}
+		utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	case "pull_request":
 		var payload struct {
 			Action      string `json:"action"`
@@ -117,13 +258,10 @@ func (h *WebhookHandler) GitHubWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		svcs, _ := models.ListServices("")
+		baseSvcs, _ := models.ListBaseServicesForPreview(repoURL, payload.PullRequest.Base.Ref)
 		var baseService *models.Service
-		for i := range svcs {
-			if svcs[i].RepoURL == repoURL && svcs[i].Branch == payload.PullRequest.Base.Ref && !strings.HasPrefix(strings.ToLower(svcs[i].Name), "preview-") {
-				baseService = &svcs[i]
-				break
-			}
+		if len(baseSvcs) > 0 {
+			baseService = &baseSvcs[0]
 		}
 		if baseService == nil {
 			utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "no matching base service"})
@@ -145,7 +283,7 @@ func (h *WebhookHandler) GitHubWebhook(w http.ResponseWriter, r *http.Request) {
 					}
 					_ = models.DeleteServiceInstancesByService(previewSvc.ID)
 					if h.Config.Deploy.Domain != "" && h.Config.Deploy.Domain != "localhost" {
-						domain := utils.ServiceDomainLabel(previewSvc.Name) + "." + h.Config.Deploy.Domain
+						domain := utils.ServiceHostLabel(previewSvc.Name, previewSvc.Subdomain) + "." + h.Config.Deploy.Domain
 						_ = h.Worker.Router.RemoveRoute(domain)
 					}
 					_ = models.DeleteService(previewSvc.ID)
@@ -167,7 +305,7 @@ func (h *WebhookHandler) GitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if previewSvc == nil {
-			previewName := fmt.Sprintf("preview-%s-pr-%d", utils.ServiceDomainLabel(baseService.Name), payload.Number)
+			previewName := fmt.Sprintf("preview-%s-pr-%d", utils.ServiceHostLabel(baseService.Name, baseService.Subdomain), payload.Number)
 			candidate := &models.Service{
 				WorkspaceID:       baseService.WorkspaceID,
 				ProjectID:         baseService.ProjectID,

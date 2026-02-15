@@ -1,0 +1,31 @@
+# Manual alert delivery drill (Prometheus -> Alertmanager -> RailPush + Slack).
+#
+# Apply (from cpu):
+#   export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+#   kubectl apply -f /opt/railpush/deploy/k8s/monitoring/railpush-alert-drill-critical.yaml
+#
+# Wait ~2 minutes, verify it shows up in RailPush `/incidents` and posts to Slack, then delete:
+#   kubectl delete -f /opt/railpush/deploy/k8s/monitoring/railpush-alert-drill-critical.yaml
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: railpush-alert-drill-critical
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: railpush.drills
+      rules:
+        - alert: RailPushAlertDrillCritical
+          expr: vector(1)
+          for: 1m
+          labels:
+            severity: critical
+            product: railpush
+            component: alerts
+          annotations:
+            summary: "RailPush critical alert drill"
+            description: "Intentional critical test alert to validate end-to-end delivery into RailPush + Slack."
+

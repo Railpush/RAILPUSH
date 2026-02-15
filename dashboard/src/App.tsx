@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from './components/layout/Layout';
@@ -32,8 +32,29 @@ import { Projects } from './pages/Projects';
 import { ProjectDetail } from './pages/ProjectDetail';
 import { Settings } from './pages/Settings';
 import { Community } from './pages/Community';
+import { Incidents } from './pages/Incidents';
+import { IncidentDetailPage } from './pages/IncidentDetail';
+import { OpsOverviewPage } from './pages/OpsOverview';
+import { OpsCustomersPage } from './pages/OpsCustomers';
+import { OpsServicesPage } from './pages/OpsServices';
+import { OpsDeploymentsPage } from './pages/OpsDeployments';
+import { OpsEmailOutboxPage } from './pages/OpsEmailOutbox';
+import { OpsSettingsPage } from './pages/OpsSettings';
+import { OpsServiceLogsPage } from './pages/OpsServiceLogs';
+import { OpsBillingPage } from './pages/OpsBilling';
+import { OpsBillingCustomerPage } from './pages/OpsBillingCustomer';
+import { OpsTicketsPage } from './pages/OpsTickets';
+import { OpsTicketDetailPage } from './pages/OpsTicketDetail';
+import { OpsCreditsPage } from './pages/OpsCredits';
+import { OpsCreditsWorkspacePage } from './pages/OpsCreditsWorkspace';
+import { OpsTechnicalPage } from './pages/OpsTechnical';
+import { OpsPerformancePage } from './pages/OpsPerformance';
 import { auth } from './lib/api';
 import { ThemeProvider } from './lib/theme';
+import { SessionProvider } from './lib/session';
+import type { User } from './types';
+import { SupportPage } from './pages/Support';
+import { SupportTicketDetailPage } from './pages/SupportTicketDetail';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -46,21 +67,49 @@ const queryClient = new QueryClient({
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [session, setSession] = useState<{ user: User; workspace?: { id: string; name: string } } | null>(null);
 
   useEffect(() => {
     let mounted = true;
     auth
       .getUser()
-      .then(() => {
-        if (mounted) setIsAuthenticated(true);
+      .then((data) => {
+        if (!mounted) return;
+        setSession(data);
+        setIsAuthenticated(true);
       })
       .catch(() => {
-        if (mounted) setIsAuthenticated(false);
+        if (!mounted) return;
+        setSession(null);
+        setIsAuthenticated(false);
       });
     return () => {
       mounted = false;
     };
   }, []);
+
+  const refreshSession = useCallback(async () => {
+    const data = await auth.getUser();
+    setSession(data);
+  }, []);
+
+  const sessionValue = useMemo(() => {
+    const user = session?.user || null;
+    const workspace = session?.workspace || null;
+    const role = (user?.role || '').toLowerCase().trim();
+    return {
+      session,
+      user,
+      workspace,
+      isOps: role === 'admin' || role === 'ops',
+      refresh: refreshSession,
+    };
+  }, [refreshSession, session]);
+
+  const requireOps = useCallback(
+    (element: ReactElement) => (sessionValue.isOps ? element : <Navigate to="/" replace />),
+    [sessionValue.isOps]
+  );
 
   if (isAuthenticated === null) {
     return (
@@ -97,73 +146,98 @@ function App() {
   return (
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<Navigate to="/" />} />
-            <Route path="/docs" element={<Docs />} />
-            <Route path="/privacy" element={<Privacy />} />
-            <Route element={<Layout />}>
-              {/* Dashboard */}
-              <Route path="/" element={<Dashboard />} />
+        <SessionProvider value={sessionValue}>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/login" element={<Navigate to="/" />} />
+              <Route path="/docs" element={<Docs />} />
+              <Route path="/privacy" element={<Privacy />} />
+              <Route element={<Layout />}>
+                {/* Dashboard */}
+                <Route path="/" element={<Dashboard />} />
 
-              {/* Create */}
-              <Route path="/new" element={<CreateService />} />
-              <Route path="/new/:type" element={<CreateService />} />
+                {/* Create */}
+                <Route path="/new" element={<CreateService />} />
+                <Route path="/new/:type" element={<CreateService />} />
 
-              {/* Service detail routes */}
-              <Route path="/services/:serviceId" element={<ServiceDetail />} />
-              <Route path="/services/:serviceId/events" element={<ServiceEvents />} />
-              <Route path="/services/:serviceId/logs" element={<ServiceLogs />} />
-              <Route path="/services/:serviceId/environment" element={<ServiceEnvironment />} />
-              <Route path="/services/:serviceId/metrics" element={<ServiceMetrics />} />
-              <Route path="/services/:serviceId/settings" element={<ServiceSettings />} />
-              <Route path="/services/:serviceId/networking" element={<ServiceNetworking />} />
-              <Route path="/services/:serviceId/scaling" element={<ServiceScaling />} />
-              <Route path="/services/:serviceId/disks" element={<ServiceDisks />} />
+                {/* Service detail routes */}
+                <Route path="/services/:serviceId" element={<ServiceDetail />} />
+                <Route path="/services/:serviceId/events" element={<ServiceEvents />} />
+                <Route path="/services/:serviceId/logs" element={<ServiceLogs />} />
+                <Route path="/services/:serviceId/environment" element={<ServiceEnvironment />} />
+                <Route path="/services/:serviceId/metrics" element={<ServiceMetrics />} />
+                <Route path="/services/:serviceId/settings" element={<ServiceSettings />} />
+                <Route path="/services/:serviceId/networking" element={<ServiceNetworking />} />
+                <Route path="/services/:serviceId/scaling" element={<ServiceScaling />} />
+                <Route path="/services/:serviceId/disks" element={<ServiceDisks />} />
 
-              {/* Domains */}
-              <Route path="/domains" element={<Domains />} />
-              <Route path="/domains/search" element={<DomainSearch />} />
-              <Route path="/domains/:domainId" element={<DomainDetail />} />
-              <Route path="/domains/:domainId/dns" element={<DomainDetail />} />
-              <Route path="/domains/:domainId/settings" element={<DomainDetail />} />
+                {/* Domains */}
+                <Route path="/domains" element={<Domains />} />
+                <Route path="/domains/search" element={<DomainSearch />} />
+                <Route path="/domains/:domainId" element={<DomainDetail />} />
+                <Route path="/domains/:domainId/dns" element={<DomainDetail />} />
+                <Route path="/domains/:domainId/settings" element={<DomainDetail />} />
 
-              {/* Database */}
-              <Route path="/databases/:dbId" element={<DatabaseDetail />} />
-              <Route path="/databases/:dbId/*" element={<DatabaseDetail />} />
+                {/* Database */}
+                <Route path="/databases/:dbId" element={<DatabaseDetail />} />
+                <Route path="/databases/:dbId/*" element={<DatabaseDetail />} />
 
-              {/* Billing */}
-              <Route path="/billing" element={<Billing />} />
+                {/* Billing */}
+                <Route path="/billing" element={<Billing />} />
 
-              {/* Blueprints */}
-              <Route path="/blueprints" element={<Blueprints />} />
-              <Route path="/new/blueprint" element={<CreateBlueprint />} />
-              <Route path="/blueprints/:blueprintId" element={<BlueprintDetail />} />
+                {/* Blueprints */}
+                <Route path="/blueprints" element={<Blueprints />} />
+                <Route path="/new/blueprint" element={<CreateBlueprint />} />
+                <Route path="/blueprints/:blueprintId" element={<BlueprintDetail />} />
 
-              {/* Env Groups */}
-              <Route path="/env-groups" element={<EnvGroups />} />
+                {/* Env Groups */}
+                <Route path="/env-groups" element={<EnvGroups />} />
 
-              {/* Projects / Settings / Community */}
-              <Route path="/projects" element={<Projects />} />
-              <Route path="/projects/:projectId" element={<ProjectDetail />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="/community" element={<Community />} />
+                {/* Projects / Settings / Community */}
+                <Route path="/projects" element={<Projects />} />
+                <Route path="/projects/:projectId" element={<ProjectDetail />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="/community" element={<Community />} />
 
-              {/* Resource type filtered views */}
-              <Route path="/web-services" element={<Dashboard scope="web-services" />} />
-              <Route path="/static-sites" element={<Dashboard scope="static-sites" />} />
-              <Route path="/private-services" element={<Dashboard scope="private-services" />} />
-              <Route path="/workers" element={<Dashboard scope="workers" />} />
-              <Route path="/cron-jobs" element={<Dashboard scope="cron-jobs" />} />
-              <Route path="/postgres" element={<Dashboard scope="postgres" />} />
-              <Route path="/keyvalue" element={<Dashboard scope="keyvalue" />} />
-              <Route path="/keyvalue/:kvId" element={<KeyValueDetail />} />
+                {/* Ops */}
+                <Route path="/ops" element={requireOps(<OpsOverviewPage />)} />
+                <Route path="/ops/customers" element={requireOps(<OpsCustomersPage />)} />
+                <Route path="/ops/services" element={requireOps(<OpsServicesPage />)} />
+                <Route path="/ops/services/:serviceId/logs" element={requireOps(<OpsServiceLogsPage />)} />
+                <Route path="/ops/deployments" element={requireOps(<OpsDeploymentsPage />)} />
+                <Route path="/ops/email" element={requireOps(<OpsEmailOutboxPage />)} />
+                <Route path="/ops/billing" element={requireOps(<OpsBillingPage />)} />
+                <Route path="/ops/billing/:customerId" element={requireOps(<OpsBillingCustomerPage />)} />
+                <Route path="/ops/tickets" element={requireOps(<OpsTicketsPage />)} />
+                <Route path="/ops/tickets/:ticketId" element={requireOps(<OpsTicketDetailPage />)} />
+                <Route path="/ops/credits" element={requireOps(<OpsCreditsPage />)} />
+                <Route path="/ops/credits/:workspaceId" element={requireOps(<OpsCreditsWorkspacePage />)} />
+                <Route path="/ops/technical" element={requireOps(<OpsTechnicalPage />)} />
+                <Route path="/ops/performance" element={requireOps(<OpsPerformancePage />)} />
+                <Route path="/ops/settings" element={requireOps(<OpsSettingsPage />)} />
+                <Route path="/incidents" element={requireOps(<Incidents />)} />
+                <Route path="/incidents/:incidentId" element={requireOps(<IncidentDetailPage />)} />
 
-              {/* Catch-all */}
-              <Route path="*" element={<Navigate to="/" />} />
-            </Route>
-          </Routes>
-        </BrowserRouter>
+                {/* Support */}
+                <Route path="/support" element={<SupportPage />} />
+                <Route path="/support/:ticketId" element={<SupportTicketDetailPage />} />
+
+                {/* Resource type filtered views */}
+                <Route path="/web-services" element={<Dashboard scope="web-services" />} />
+                <Route path="/static-sites" element={<Dashboard scope="static-sites" />} />
+                <Route path="/private-services" element={<Dashboard scope="private-services" />} />
+                <Route path="/workers" element={<Dashboard scope="workers" />} />
+                <Route path="/cron-jobs" element={<Dashboard scope="cron-jobs" />} />
+                <Route path="/postgres" element={<Dashboard scope="postgres" />} />
+                <Route path="/keyvalue" element={<Dashboard scope="keyvalue" />} />
+                <Route path="/keyvalue/:kvId" element={<KeyValueDetail />} />
+
+                {/* Catch-all */}
+                <Route path="*" element={<Navigate to="/" />} />
+              </Route>
+            </Routes>
+          </BrowserRouter>
+        </SessionProvider>
         <ToastProvider />
       </QueryClientProvider>
     </ThemeProvider>

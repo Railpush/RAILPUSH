@@ -188,7 +188,7 @@ function InfoTab({ db }: { db: ManagedDatabase }) {
 }
 
 /* ── Metrics Tab ──────────────────────────────────────── */
-function MetricsTab({ db: _db }: { db: ManagedDatabase }) {
+function MetricsTab({ db }: { db: ManagedDatabase }) {
   // Mock metrics data for visualization
   const cpuData = Array.from({ length: 24 }, (_, i) => ({ hour: i, value: Math.random() * 30 + 5 }));
   const memData = Array.from({ length: 24 }, (_, i) => ({ hour: i, value: Math.random() * 60 + 20 }));
@@ -197,6 +197,9 @@ function MetricsTab({ db: _db }: { db: ManagedDatabase }) {
 
   return (
     <div className="space-y-6">
+      <div className="text-xs text-content-tertiary">
+        Metrics for <span className="font-mono">{db.name}</span> (placeholder data).
+      </div>
       <div className="grid grid-cols-2 gap-4">
         <MetricCard icon={<Activity className="w-4 h-4" />} title="CPU Usage" value="12.4%" subtitle="Average (24h)" data={cpuData} color="#3B82F6" />
         <MetricCard icon={<BarChart3 className="w-4 h-4" />} title="Memory Usage" value="48.2 MB" subtitle="of 256 MB" data={memData} color="#8B5CF6" />
@@ -341,7 +344,7 @@ function BackupsTab({ db }: { db: ManagedDatabase }) {
   useEffect(() => {
     dbApi.listBackups(db.id)
       .then(setBackups)
-      .catch(() => {})
+      .catch(() => { /* ignore */ })
       .finally(() => setLoading(false));
   }, [db.id]);
 
@@ -350,7 +353,7 @@ function BackupsTab({ db }: { db: ManagedDatabase }) {
     try {
       const backup = await dbApi.triggerBackup(db.id);
       setBackups(prev => [backup, ...prev]);
-    } catch {}
+    } catch { /* ignore */ }
     setCreating(false);
   };
 

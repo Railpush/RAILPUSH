@@ -9,7 +9,7 @@ import { services as servicesApi, databases as dbApi, keyvalue as kvApi, github 
 import { PLAN_SPECS } from '../lib/plans';
 import { buildDefaultServiceHostname } from '../lib/serviceUrl';
 import { toast } from 'sonner';
-import type { ServiceType, GitHubRepo, GitHubBranch } from '../types';
+import type { ServiceType, Runtime, GitHubRepo, GitHubBranch } from '../types';
 
 const serviceTypes = [
   { type: 'web' as ServiceType, icon: Globe, label: 'Web Service', desc: 'HTTP service with public URL', color: '#4351E8' },
@@ -43,10 +43,13 @@ export function CreateService() {
   const [form, setForm] = useState({
     name: '',
     repo_url: '',
+    image_url: '',
     branch: 'main',
     runtime: 'node',
     build_command: '',
     start_command: '',
+    port: '10000',
+    auto_deploy: true,
     plan: 'free',
     schedule: '',
     static_publish_path: './dist',
@@ -65,6 +68,7 @@ export function CreateService() {
   const [branchesLoading, setBranchesLoading] = useState(false);
 
   const isDatabase = selectedType === 'postgres' || selectedType === 'keyvalue';
+  const isImageRuntime = !isDatabase && form.runtime === 'image';
   const previewHostname = buildDefaultServiceHostname(form.name || 'my-service');
   const previewUrl = previewHostname ? `https://${previewHostname}` : 'http://localhost:<assigned-port>';
 
@@ -150,14 +154,22 @@ export function CreateService() {
         return;
       }
 
+      if (isImageRuntime && !form.image_url.trim()) {
+        toast.error('Image URL is required for pre-built image runtime');
+        return;
+      }
+
       await servicesApi.create({
         name: form.name,
         type: selectedType as ServiceType,
-        runtime: form.runtime as any,
-        repo_url: form.repo_url,
+        runtime: form.runtime as Runtime,
+        repo_url: isImageRuntime ? '' : form.repo_url,
+        image_url: isImageRuntime ? form.image_url : undefined,
         branch: form.branch,
         build_command: form.build_command,
         start_command: form.start_command,
+        port: parseInt(form.port, 10) || 10000,
+        auto_deploy: form.auto_deploy,
         plan: form.plan,
         schedule: selectedType === 'cron' ? form.schedule : undefined,
         static_publish_path: selectedType === 'static' ? form.static_publish_path : undefined,
@@ -252,8 +264,31 @@ export function CreateService() {
 
           {!isDatabase && (
             <>
+              <div className="grid grid-cols-2 gap-4">
+                <Select label="Runtime" options={runtimes} value={form.runtime} onChange={(e) => setForm({ ...form, runtime: e.target.value })} />
+                <Input
+                  label="Port"
+                  type="number"
+                  value={form.port}
+                  onChange={(e) => setForm({ ...form, port: e.target.value })}
+                  placeholder="10000"
+                  hint="Container port your app listens on"
+                />
+              </div>
+
+              {isImageRuntime && (
+                <Input
+                  label="Image URL"
+                  value={form.image_url}
+                  onChange={(e) => setForm({ ...form, image_url: e.target.value })}
+                  placeholder="nginxdemos/hello:plain-text"
+                  hint="Public image reference, or your private registry image (requires pull credentials)."
+                />
+              )}
+
               {/* Repository section */}
-              <div className="space-y-2">
+              {!isImageRuntime && (
+                <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="block text-sm font-medium text-content-primary">Repository</label>
                   <button
@@ -354,10 +389,11 @@ export function CreateService() {
                   />
                 )}
               </div>
+              )}
 
               {/* Branch */}
-              <div className="grid grid-cols-2 gap-4">
-                {repoMode === 'github' && branches.length > 0 ? (
+              {!isImageRuntime && (
+                repoMode === 'github' && branches.length > 0 ? (
                   <Select
                     label="Branch"
                     options={branches.map((b) => ({ value: b.name, label: b.name }))}
@@ -371,18 +407,36 @@ export function CreateService() {
                     value={form.branch}
                     onChange={(e) => setForm({ ...form, branch: e.target.value })}
                   />
-                )}
-                <Select label="Runtime" options={runtimes} value={form.runtime} onChange={(e) => setForm({ ...form, runtime: e.target.value })} />
-              </div>
+                )
+              )}
 
-              <Input
-                label="Build Command"
-                value={form.build_command}
-                onChange={(e) => setForm({ ...form, build_command: e.target.value })}
-                placeholder="npm install && npm run build"
-              />
+              {!isImageRuntime && (
+                <label className="flex items-start gap-3 p-3 rounded-md border border-border-default bg-surface-tertiary">
+                  <input
+                    type="checkbox"
+                    checked={form.auto_deploy}
+                    onChange={(e) => setForm({ ...form, auto_deploy: e.target.checked })}
+                    className="mt-0.5 accent-brand"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-content-primary">Auto deploy on push</span>
+                    <span className="block text-xs text-content-tertiary mt-0.5">
+                      When enabled, pushes to <span className="font-mono">{form.branch || 'main'}</span> trigger a deploy.
+                    </span>
+                  </span>
+                </label>
+              )}
 
-              {selectedType !== 'static' && (
+              {!isImageRuntime && (
+                <Input
+                  label="Build Command"
+                  value={form.build_command}
+                  onChange={(e) => setForm({ ...form, build_command: e.target.value })}
+                  placeholder="npm install && npm run build"
+                />
+              )}
+
+              {selectedType !== 'static' && !isImageRuntime && (
                 <Input
                   label="Start Command"
                   value={form.start_command}

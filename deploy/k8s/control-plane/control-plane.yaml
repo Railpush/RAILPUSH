@@ -1,0 +1,85 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: railpush-control-plane
+  namespace: railpush
+spec:
+  selector:
+    app: railpush-control-plane
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: railpush-control-plane
+  namespace: railpush
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: railpush-control-plane
+  template:
+    metadata:
+      labels:
+        app: railpush-control-plane
+    spec:
+      serviceAccountName: railpush-control-plane
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: control-plane
+          image: 91.98.183.19:5000/railpush/control-plane:dev
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Control-plane pods should never run deploy/build workers. A separate Deployment
+            # (`railpush-worker`) handles deploy execution via the durable DB queue.
+            - name: WORKER_ENABLED
+              value: "false"
+          envFrom:
+            - configMapRef:
+                name: railpush-config
+            - secretRef:
+                name: railpush-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/railpush
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: data
+          emptyDir: {}

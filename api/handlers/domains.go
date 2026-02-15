@@ -13,6 +13,43 @@ import (
 	"github.com/railpush/api/utils"
 )
 
+func isValidHostname(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	host = strings.TrimSuffix(host, ".")
+	if host == "" {
+		return false
+	}
+	if strings.Contains(host, "://") {
+		return false
+	}
+	if strings.ContainsAny(host, "/\\ \t\r\n") {
+		return false
+	}
+	if strings.Contains(host, ":") { // no ports, no IPv6 literals
+		return false
+	}
+	if !strings.Contains(host, ".") {
+		return false
+	}
+	labels := strings.Split(host, ".")
+	for _, l := range labels {
+		if l == "" || len(l) > 63 {
+			return false
+		}
+		if l[0] == '-' || l[len(l)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(l); i++ {
+			ch := l[i]
+			ok := (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-'
+			if !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 type DomainHandler struct {
 	Config *config.Config
 	Worker *services.Worker
@@ -43,9 +80,34 @@ func (h *DomainHandler) AddCustomDomain(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	domain := strings.ToLower(strings.TrimSpace(req.Domain))
+	domain = strings.TrimSuffix(domain, ".")
 	if domain == "" {
 		utils.RespondError(w, http.StatusBadRequest, "domain is required")
 		return
+	}
+	if !isValidHostname(domain) {
+		utils.RespondError(w, http.StatusBadRequest, "invalid domain")
+		return
+	}
+
+	// Enforce global uniqueness (also enforced by DB index).
+	if existing, err := models.GetCustomDomainByDomain(domain); err == nil && existing != nil {
+		if existing.ServiceID == serviceID {
+			utils.RespondError(w, http.StatusConflict, "domain already added")
+			return
+		}
+		utils.RespondError(w, http.StatusConflict, "domain already in use")
+		return
+	}
+
+	if h.Config.Kubernetes.Enabled {
+		switch strings.ToLower(strings.TrimSpace(svc.Type)) {
+		case "web", "static":
+			// ok
+		default:
+			utils.RespondError(w, http.StatusBadRequest, "custom domains are only supported for web/static services")
+			return
+		}
 	}
 	d := &models.CustomDomain{ServiceID: serviceID, Domain: domain}
 	if err := models.CreateCustomDomain(d); err != nil {
@@ -53,34 +115,66 @@ func (h *DomainHandler) AddCustomDomain(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Add Caddy route for the custom domain with all live upstream instances.
-	upstreamPorts := []int{}
-	if svc.HostPort > 0 {
-		upstreamPorts = append(upstreamPorts, svc.HostPort)
-	}
-	if instances, err := models.ListServiceInstances(serviceID); err == nil {
-		for _, inst := range instances {
-			if inst.HostPort > 0 {
-				upstreamPorts = append(upstreamPorts, inst.HostPort)
+	tlsProvisioned := false
+	verified := false
+
+	if h.Config.Kubernetes.Enabled {
+		if kd, err := h.Worker.GetKubeDeployer(); err == nil && kd != nil {
+			if _, err := kd.UpsertCustomDomainIngress(svc, domain); err != nil {
+				_ = models.SetCustomDomainStatus(serviceID, domain, false, false)
+				services.Audit(svc.WorkspaceID, userID, "domain.custom_added", "custom_domain", d.ID, map[string]interface{}{
+					"domain":          domain,
+					"tls_provisioned": false,
+					"verified":        false,
+					"ingress_error":   err.Error(),
+				})
+				utils.RespondJSON(w, http.StatusCreated, d)
+				return
+			}
+			if ready, err := kd.IsCustomDomainTLSReady(serviceID, domain); err == nil && ready {
+				tlsProvisioned = true
+				verified = true
+				_ = models.SetCustomDomainStatus(serviceID, domain, verified, tlsProvisioned)
+				d.Verified = verified
+				d.TLSProvisioned = tlsProvisioned
 			}
 		}
-	}
-	if len(upstreamPorts) > 0 {
-		if err := h.Worker.Router.AddRouteUpstreams(domain, upstreamPorts); err != nil {
-			_ = models.SetCustomDomainTLSProvisioned(serviceID, domain, false)
-			services.Audit(svc.WorkspaceID, userID, "domain.custom_added", "custom_domain", d.ID, map[string]interface{}{
-				"domain":          domain,
-				"tls_provisioned": false,
-				"route_error":     err.Error(),
-			})
-			utils.RespondJSON(w, http.StatusCreated, d)
-			return
+	} else {
+		// Add Caddy route for the custom domain with all live upstream instances.
+		upstreamPorts := []int{}
+		if svc.HostPort > 0 {
+			upstreamPorts = append(upstreamPorts, svc.HostPort)
 		}
-		_ = models.SetCustomDomainTLSProvisioned(serviceID, domain, true)
+		if instances, err := models.ListServiceInstances(serviceID); err == nil {
+			for _, inst := range instances {
+				if inst.HostPort > 0 {
+					upstreamPorts = append(upstreamPorts, inst.HostPort)
+				}
+			}
+		}
+		if len(upstreamPorts) > 0 && !h.Config.Deploy.DisableRouter && h.Worker != nil && h.Worker.Router != nil {
+			if err := h.Worker.Router.AddRouteUpstreams(domain, upstreamPorts); err != nil {
+				_ = models.SetCustomDomainTLSProvisioned(serviceID, domain, false)
+				services.Audit(svc.WorkspaceID, userID, "domain.custom_added", "custom_domain", d.ID, map[string]interface{}{
+					"domain":          domain,
+					"tls_provisioned": false,
+					"route_error":     err.Error(),
+				})
+				utils.RespondJSON(w, http.StatusCreated, d)
+				return
+			}
+			tlsProvisioned = true
+			verified = true
+			_ = models.SetCustomDomainStatus(serviceID, domain, verified, tlsProvisioned)
+			d.Verified = verified
+			d.TLSProvisioned = tlsProvisioned
+		}
 	}
+
 	services.Audit(svc.WorkspaceID, userID, "domain.custom_added", "custom_domain", d.ID, map[string]interface{}{
 		"domain":          domain,
-		"tls_provisioned": true,
+		"tls_provisioned": tlsProvisioned,
+		"verified":        verified,
 	})
 
 	utils.RespondJSON(w, http.StatusCreated, d)
@@ -106,12 +200,31 @@ func (h *DomainHandler) ListCustomDomains(w http.ResponseWriter, r *http.Request
 	if domains == nil {
 		domains = []models.CustomDomain{}
 	}
+
+	// In Kubernetes mode, update status based on whether the TLS secret exists.
+	if h.Config.Kubernetes.Enabled && len(domains) > 0 {
+		if kd, err := h.Worker.GetKubeDeployer(); err == nil && kd != nil {
+			for i := range domains {
+				ready, err := kd.IsCustomDomainTLSReady(serviceID, domains[i].Domain)
+				if err != nil {
+					continue
+				}
+				verified := ready
+				if domains[i].TLSProvisioned != ready || domains[i].Verified != verified {
+					_ = models.SetCustomDomainStatus(serviceID, domains[i].Domain, verified, ready)
+					domains[i].TLSProvisioned = ready
+					domains[i].Verified = verified
+				}
+			}
+		}
+	}
 	utils.RespondJSON(w, http.StatusOK, domains)
 }
 
 func (h *DomainHandler) DeleteCustomDomain(w http.ResponseWriter, r *http.Request) {
 	serviceID := mux.Vars(r)["id"]
 	domain := strings.ToLower(strings.TrimSpace(mux.Vars(r)["domain"]))
+	domain = strings.TrimSuffix(domain, ".")
 	userID := middleware.GetUserID(r)
 	svc, err := models.GetService(serviceID)
 	if err != nil || svc == nil {
@@ -123,8 +236,14 @@ func (h *DomainHandler) DeleteCustomDomain(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Remove Caddy route
-	_ = h.Worker.Router.RemoveRoute(domain)
+	if h.Config.Kubernetes.Enabled {
+		if kd, err := h.Worker.GetKubeDeployer(); err == nil && kd != nil {
+			_ = kd.DeleteCustomDomainIngress(serviceID, domain)
+		}
+	} else if !h.Config.Deploy.DisableRouter && h.Worker != nil && h.Worker.Router != nil {
+		// Remove Caddy route
+		_ = h.Worker.Router.RemoveRoute(domain)
+	}
 
 	if err := models.DeleteCustomDomain(serviceID, domain); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to delete domain")

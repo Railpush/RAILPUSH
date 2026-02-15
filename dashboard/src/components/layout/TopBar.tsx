@@ -1,70 +1,66 @@
 import { useNavigate } from 'react-router-dom';
-import { Plus, Bell, ChevronDown, Globe, FileText, Lock, Cog, Clock, Database, Key, Layers, Moon, Sun, Sparkles } from 'lucide-react';
+import { Plus, ChevronDown, Globe, FileText, Lock, Cog, Clock, Database, Key, Layers, Moon, Sun, LogOut, BookOpen } from 'lucide-react';
 import { Dropdown } from '../ui/Dropdown';
 import { useTheme } from '../../lib/theme';
+import { useSession } from '../../lib/session';
+import { auth } from '../../lib/api';
 
 export function TopBar() {
   const navigate = useNavigate();
-  const { theme, surface, toggleTheme, toggleSurface } = useTheme();
-
-  const ico = (I: any, c: string) => <I size={14} style={{ color: c }} />;
+  const { theme, toggleTheme } = useTheme();
+  const { user } = useSession();
 
   const newItems = [
     { sectionLabel: 'Services', label: '', onClick: () => {} },
-    { label: 'Web Service', icon: ico(Globe, '#4351E8'), onClick: () => navigate('/new/web') },
-    { label: 'Static Site', icon: ico(FileText, '#59FFA4'), onClick: () => navigate('/new/static') },
-    { label: 'Private Service', icon: ico(Lock, '#8A05FF'), onClick: () => navigate('/new/pserv') },
-    { label: 'Worker', icon: ico(Cog, '#FFBB33'), onClick: () => navigate('/new/worker') },
-    { label: 'Cron Job', icon: ico(Clock, '#38BDF8'), onClick: () => navigate('/new/cron') },
+    { label: 'Web Service', icon: <Globe size={14} />, onClick: () => navigate('/new/web') },
+    { label: 'Static Site', icon: <FileText size={14} />, onClick: () => navigate('/new/static') },
+    { label: 'Private Service', icon: <Lock size={14} />, onClick: () => navigate('/new/pserv') },
+    { label: 'Worker', icon: <Cog size={14} />, onClick: () => navigate('/new/worker') },
+    { label: 'Cron Job', icon: <Clock size={14} />, onClick: () => navigate('/new/cron') },
     { sectionLabel: 'Datastores', label: '', onClick: () => {} },
-    { label: 'PostgreSQL', icon: ico(Database, '#336791'), onClick: () => navigate('/new/postgres') },
-    { label: 'Key Value', icon: ico(Key, '#DC382D'), onClick: () => navigate('/new/keyvalue') },
+    { label: 'PostgreSQL', icon: <Database size={14} />, onClick: () => navigate('/new/postgres') },
+    { label: 'Key Value', icon: <Key size={14} />, onClick: () => navigate('/new/keyvalue') },
     { divider: true, label: '', onClick: () => {} },
-    { label: 'Blueprint', icon: ico(Layers, '#8A05FF'), onClick: () => navigate('/new/blueprint') },
+    { label: 'Blueprint', icon: <Layers size={14} />, onClick: () => navigate('/new/blueprint') },
+  ];
+
+  const userLabel = user?.username || user?.email || 'User';
+  const userInitial = (userLabel || 'U').slice(0, 1).toUpperCase();
+
+  const userItems = [
+    { label: 'Docs', icon: <BookOpen size={14} />, onClick: () => navigate('/docs') },
+    { divider: true, label: '', onClick: () => {} },
+    { label: theme === 'dark' ? 'Light mode' : 'Dark mode', icon: theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />, onClick: toggleTheme },
+    { divider: true, label: '', onClick: () => {} },
+    { label: 'Log out', icon: <LogOut size={14} />, danger: true, onClick: () => { auth.logout(); } },
   ];
 
   return (
-    <header className="app-topbar h-[58px] border-b border-border-default flex items-center justify-end px-4 lg:px-6 gap-3 bg-surface-secondary shadow-[0_6px_20px_rgba(15,23,42,0.05)] sticky top-0 z-30">
+    <header className="app-topbar h-[52px] border-b border-border-default flex items-center justify-end px-4 lg:px-6 gap-3 bg-surface-secondary sticky top-0 z-30">
       <Dropdown
         trigger={
-          <button className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-brand text-white rounded-lg text-sm font-semibold hover:bg-brand-hover transition-colors cursor-pointer shadow-sm">
-            <Plus className="w-4 h-4" />
+          <button className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md border border-border-default bg-surface-secondary hover:bg-surface-tertiary text-sm font-medium transition-colors cursor-pointer">
+            <Plus className="w-4 h-4 text-content-secondary" />
             New
-            <ChevronDown className="w-3.5 h-3.5" />
+            <ChevronDown className="w-3.5 h-3.5 text-content-tertiary" />
           </button>
         }
         items={newItems}
         align="right"
       />
 
-      <button className="relative p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors border border-transparent hover:border-border-default">
-        <Bell className="w-4 h-4" />
-        <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-status-error rounded-full" />
-      </button>
-
-      <button
-        className={`p-2 rounded-lg transition-colors border border-transparent hover:border-border-default hover:bg-surface-tertiary ${
-          surface === 'frost' ? 'text-brand' : 'text-content-tertiary hover:text-content-primary'
-        }`}
-        onClick={toggleSurface}
-        title={surface === 'frost' ? 'Switch to Slate' : 'Switch to Frost'}
-      >
-        <Sparkles className="w-4 h-4" />
-      </button>
-
-      <button
-        className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors border border-transparent hover:border-border-default"
-        onClick={toggleTheme}
-        title={theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
-      >
-        {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-      </button>
-
-      <button className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-surface-tertiary transition-colors border border-transparent hover:border-border-default">
-        <div className="w-8 h-8 rounded-full bg-brand/10 flex items-center justify-center text-xs font-semibold text-brand">
-          U
-        </div>
-      </button>
+      <Dropdown
+        trigger={
+          <button className="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-surface-tertiary transition-colors border border-transparent">
+            <div className="w-7 h-7 rounded-full bg-surface-tertiary border border-border-subtle flex items-center justify-center text-xs font-semibold text-content-secondary">
+              {userInitial}
+            </div>
+            <ChevronDown className="w-4 h-4 text-content-tertiary" />
+          </button>
+        }
+        items={userItems}
+        align="right"
+      />
     </header>
   );
 }

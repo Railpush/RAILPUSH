@@ -126,6 +126,13 @@ func (h *DatabaseHandler) CreateDatabase(w http.ResponseWriter, r *http.Request)
 		utils.RespondError(w, http.StatusInternalServerError, "failed to create database: "+err.Error())
 		return
 	}
+	// In Kubernetes mode, the stable in-cluster endpoint is `sr-db-<idPrefix>:5432`.
+	if h.Config != nil && h.Config.Kubernetes.Enabled {
+		internalHost := fmt.Sprintf("sr-db-%s", db.ID[:8])
+		db.Host = internalHost
+		db.Port = 5432
+		_ = models.UpdateManagedDatabaseConnection(db.ID, 5432, internalHost)
+	}
 
 	// Add to Stripe subscription for paid plans
 	if db.Plan != "free" && h.Stripe.Enabled() {
@@ -176,8 +183,8 @@ func (h *DatabaseHandler) GetDatabase(w http.ResponseWriter, r *http.Request) {
 		pw, err := utils.Decrypt(db.EncryptedPassword, h.Config.Crypto.EncryptionKey)
 		if err == nil {
 			externalHost := db.Host
-			if strings.TrimSpace(h.Config.Deploy.Domain) != "" {
-				externalHost = h.Config.Deploy.Domain
+			if strings.TrimSpace(h.Config.ControlPlane.Domain) != "" {
+				externalHost = h.Config.ControlPlane.Domain
 			}
 			type DatabaseResponse struct {
 				models.ManagedDatabase
@@ -223,7 +230,15 @@ func (h *DatabaseHandler) DeleteDatabase(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if db.ContainerID != "" {
-		h.Worker.Deployer.RemoveContainer(db.ContainerID)
+		// Legacy docker mode only; in k8s mode we delete Kubernetes resources instead.
+		if h.Config == nil || !h.Config.Kubernetes.Enabled {
+			h.Worker.Deployer.RemoveContainer(db.ContainerID)
+		}
+	}
+	if h.Config != nil && h.Config.Kubernetes.Enabled && h.Worker != nil {
+		if kd, err := h.Worker.GetKubeDeployer(); err == nil && kd != nil {
+			_ = kd.DeleteManagedDatabaseResources(db.ID)
+		}
 	}
 
 	if err := models.DeleteManagedDatabase(id); err != nil {

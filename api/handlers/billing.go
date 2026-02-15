@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -182,7 +183,7 @@ func (h *BillingHandler) CreateCheckoutSession(w http.ResponseWriter, r *http.Re
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.ReturnURL == "" {
-		body.ReturnURL = "https://" + h.Config.Deploy.Domain + "/billing"
+		body.ReturnURL = "https://" + h.Config.ControlPlane.Domain + "/billing"
 	}
 
 	url, err := h.Stripe.CreateCheckoutSession(bc.StripeCustomerID, body.ReturnURL)
@@ -236,7 +237,7 @@ func (h *BillingHandler) CreatePortalSession(w http.ResponseWriter, r *http.Requ
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.ReturnURL == "" {
-		body.ReturnURL = "https://" + h.Config.Deploy.Domain + "/billing"
+		body.ReturnURL = "https://" + h.Config.ControlPlane.Domain + "/billing"
 	}
 
 	url, err := h.Stripe.CreatePortalSession(bc.StripeCustomerID, body.ReturnURL)
@@ -256,9 +257,28 @@ func (h *BillingHandler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.Stripe == nil || !h.Stripe.WebhookEnabled() {
+		log.Printf("stripe webhook: billing not configured (missing STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET)")
+		utils.RespondError(w, http.StatusServiceUnavailable, "billing not configured")
+		return
+	}
+
 	sig := r.Header.Get("Stripe-Signature")
+	if strings.TrimSpace(sig) == "" {
+		utils.RespondError(w, http.StatusBadRequest, "missing stripe signature")
+		return
+	}
+
 	if err := h.Stripe.HandleWebhookEvent(payload, sig); err != nil {
-		utils.RespondError(w, http.StatusBadRequest, err.Error())
+		// Signature verification failures are a client/config error (Stripe will not retry).
+		if errors.Is(err, services.ErrStripeWebhookSignature) {
+			log.Printf("stripe webhook: invalid signature: %v", err)
+			utils.RespondError(w, http.StatusBadRequest, "invalid stripe signature")
+			return
+		}
+		// Processing errors should be retried by Stripe.
+		log.Printf("stripe webhook: handler error: %v", err)
+		utils.RespondError(w, http.StatusInternalServerError, "webhook processing failed")
 		return
 	}
 

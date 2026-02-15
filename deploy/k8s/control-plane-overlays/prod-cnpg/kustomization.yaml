@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Adds a CloudNativePG-managed Postgres cluster (does not cut over the control-plane yet).
+resources:
+  - ../prod
+  - cnpg-cluster.yaml
+
+# After cutover, the control-plane uses the CNPG cluster and the legacy Postgres StatefulSet
+# should not be deployed (it is only for the "fast MVP" path).
+patches:
+  - path: legacy-postgres-svc.delete.yaml
+    target:
+      kind: Service
+      name: railpush-postgres
+  - path: legacy-postgres-sts.delete.yaml
+    target:
+      kind: StatefulSet
+      name: railpush-postgres

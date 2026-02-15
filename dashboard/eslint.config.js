@@ -15,6 +15,15 @@ export default defineConfig([
       reactHooks.configs.flat.recommended,
       reactRefresh.configs.vite,
     ],
+    rules: {
+      // Useful in dev, but too restrictive for our current module patterns (contexts/hooks live together).
+      'react-refresh/only-export-components': 'off',
+
+      // These rules are opinionated and flag common patterns in this codebase.
+      // We still keep rules-of-hooks + exhaustive-deps from react-hooks.
+      'react-hooks/set-state-in-effect': 'off',
+      'react-hooks/purity': 'off',
+    },
     languageOptions: {
       ecmaVersion: 2020,
       globals: globals.browser,

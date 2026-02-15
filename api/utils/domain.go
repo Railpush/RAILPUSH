@@ -32,17 +32,35 @@ func ServiceDomainLabel(name string) string {
 	return label
 }
 
-// ServicePublicURL returns the externally reachable URL for public service types.
-func ServicePublicURL(serviceType, serviceName, deployDomain string, hostPort int) string {
+// ServiceHostLabel picks the hostname label used for default routing.
+// If `subdomain` is empty, it falls back to the display name.
+func ServiceHostLabel(serviceName, subdomain string) string {
+	label := strings.TrimSpace(subdomain)
+	if label == "" {
+		label = serviceName
+	}
+	return ServiceDomainLabel(label)
+}
+
+// ServiceDefaultHost returns "<label>.<deployDomain>" for public service types.
+func ServiceDefaultHost(serviceType, serviceName, subdomain, deployDomain string) string {
 	switch serviceType {
 	case "web", "static":
 	default:
 		return ""
 	}
-
 	domain := strings.ToLower(strings.TrimSpace(deployDomain))
-	if domain != "" && domain != "localhost" {
-		return "https://" + ServiceDomainLabel(serviceName) + "." + domain
+	if domain == "" || domain == "localhost" {
+		return ""
+	}
+	return ServiceHostLabel(serviceName, subdomain) + "." + domain
+}
+
+// ServicePublicURL returns the externally reachable URL for public service types.
+func ServicePublicURL(serviceType, serviceName, subdomain, deployDomain string, hostPort int) string {
+	host := ServiceDefaultHost(serviceType, serviceName, subdomain, deployDomain)
+	if host != "" {
+		return "https://" + host
 	}
 
 	if hostPort > 0 {

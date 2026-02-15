@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: railpush-config
+  namespace: railpush
+data:
+  # CloudNativePG creates a read-write service named `<clusterName>-rw`.
+  DB_HOST: "railpush-postgres-cnpg-rw"
+  DB_SSLMODE: "require"
+

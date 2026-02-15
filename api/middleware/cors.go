@@ -27,18 +27,23 @@ func buildAllowedOrigins(cfg *config.Config) map[string]struct{} {
 			out[normalized] = struct{}{}
 		}
 	}
+	addDomain := func(domain string) {
+		domain = strings.TrimSpace(domain)
+		if domain == "" || strings.EqualFold(domain, "localhost") {
+			return
+		}
+		add("https://" + domain)
+		add("https://www." + domain)
+		add("http://" + domain)
+		add("http://www." + domain)
+	}
 
 	if cfg != nil {
 		for _, origin := range cfg.CORS.AllowedOrigins {
 			add(origin)
 		}
-		domain := strings.TrimSpace(cfg.Deploy.Domain)
-		if domain != "" && !strings.EqualFold(domain, "localhost") {
-			add("https://" + domain)
-			add("https://www." + domain)
-			add("http://" + domain)
-			add("http://www." + domain)
-		}
+		addDomain(cfg.ControlPlane.Domain)
+		addDomain(cfg.Deploy.Domain)
 	}
 
 	add("http://localhost:3000")

@@ -51,9 +51,35 @@ func SetCustomDomainTLSProvisioned(serviceID, domain string, provisioned bool) e
 	return err
 }
 
+func SetCustomDomainVerified(serviceID, domain string, verified bool) error {
+	_, err := database.DB.Exec(
+		"UPDATE custom_domains SET verified=$1 WHERE service_id=$2 AND domain=$3",
+		verified, serviceID, domain,
+	)
+	return err
+}
+
+func SetCustomDomainStatus(serviceID, domain string, verified bool, provisioned bool) error {
+	_, err := database.DB.Exec(
+		"UPDATE custom_domains SET verified=$1, tls_provisioned=$2 WHERE service_id=$3 AND domain=$4",
+		verified, provisioned, serviceID, domain,
+	)
+	return err
+}
+
 func GetCustomDomain(serviceID, domain string) (*CustomDomain, error) {
 	d := &CustomDomain{}
 	err := database.DB.QueryRow("SELECT id, service_id, domain, verified, tls_provisioned, created_at FROM custom_domains WHERE service_id=$1 AND domain=$2", serviceID, domain).Scan(
+		&d.ID, &d.ServiceID, &d.Domain, &d.Verified, &d.TLSProvisioned, &d.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return d, err
+}
+
+func GetCustomDomainByDomain(domain string) (*CustomDomain, error) {
+	d := &CustomDomain{}
+	err := database.DB.QueryRow("SELECT id, service_id, domain, verified, tls_provisioned, created_at FROM custom_domains WHERE lower(domain)=lower($1) LIMIT 1", domain).Scan(
 		&d.ID, &d.ServiceID, &d.Domain, &d.Verified, &d.TLSProvisioned, &d.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil

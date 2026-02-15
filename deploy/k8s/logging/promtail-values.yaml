@@ -1,0 +1,13 @@
+# Promtail values for RailPush (k3s, self-hosted).
+#
+# Apply (from cpu):
+#   export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+#   helm repo add grafana https://grafana.github.io/helm-charts
+#   helm repo update
+#   helm upgrade --install promtail grafana/promtail -n logging --create-namespace \
+#     -f /opt/railpush/deploy/k8s/logging/promtail-values.yaml
+
+config:
+  clients:
+    - url: http://loki-gateway.logging.svc.cluster.local/loki/api/v1/push
+

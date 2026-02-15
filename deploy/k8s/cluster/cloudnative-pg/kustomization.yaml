@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# CloudNativePG operator (cluster-scoped).
+#
+# Version pinned for reproducibility. Update by bumping the URL below.
+resources:
+  - https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v1.28.1/cnpg-1.28.1.yaml
+  # The upstream release manifest references these but does not create them.
+  # If missing, the controller can CrashLoop on a fresh install.
+  - cnpg-controller-manager-config.yaml

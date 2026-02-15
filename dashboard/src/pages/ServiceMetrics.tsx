@@ -35,8 +35,7 @@ export function ServiceMetrics() {
         const data = await res.json();
         setMetrics(data);
       }
-    } catch {
-    } finally {
+    } catch { /* ignore */ } finally {
       setLoading(false);
     }
   };

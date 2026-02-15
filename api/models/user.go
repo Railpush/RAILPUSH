@@ -53,9 +53,10 @@ func GetUserByID(id string) (*User, error) {
 
 func CreateUser(u *User) error {
 	return database.DB.QueryRow(
-		"INSERT INTO users (github_id, username, email, avatar_url) VALUES ($1, $2, $3, $4) RETURNING id, created_at",
+		// Bootstrap: first user becomes a platform admin (useful for self-hosted installs).
+		"INSERT INTO users (github_id, username, email, avatar_url, role) VALUES ($1, $2, NULLIF($3,''), $4, (CASE WHEN (SELECT COUNT(*) FROM users)=0 THEN 'admin' ELSE 'member' END)) RETURNING id, role, created_at",
 		u.GitHubID, u.Username, u.Email, u.AvatarURL,
-	).Scan(&u.ID, &u.CreatedAt)
+	).Scan(&u.ID, &u.Role, &u.CreatedAt)
 }
 
 func GetUserByEmail(email string) (*User, error) {
@@ -71,15 +72,26 @@ func GetUserByEmail(email string) (*User, error) {
 
 func CreateUserWithPassword(u *User) error {
 	return database.DB.QueryRow(
-		"INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, role, created_at",
+		// Bootstrap: first user becomes a platform admin (useful for self-hosted installs).
+		"INSERT INTO users (username, email, password_hash, role) VALUES ($1, $2, $3, (CASE WHEN (SELECT COUNT(*) FROM users)=0 THEN 'admin' ELSE 'member' END)) RETURNING id, role, created_at",
 		u.Username, u.Email, u.PasswordHash,
 	).Scan(&u.ID, &u.Role, &u.CreatedAt)
 }
 
 func UpdateUser(u *User) error {
 	_, err := database.DB.Exec(
-		"UPDATE users SET username=$1, email=$2, avatar_url=$3 WHERE id=$4",
+		"UPDATE users SET username=$1, email=NULLIF($2,''), avatar_url=$3 WHERE id=$4",
 		u.Username, u.Email, u.AvatarURL, u.ID,
+	)
+	return err
+}
+
+// LinkGitHubToUser attaches a GitHub identity to an existing (non-GitHub) user.
+// This avoids duplicate accounts when a user signs up with email/password then connects GitHub.
+func LinkGitHubToUser(userID string, githubID int64, username string, email string, avatarURL string) error {
+	_, err := database.DB.Exec(
+		"UPDATE users SET github_id=$1, username=$2, email=NULLIF($3,''), avatar_url=$4 WHERE id=$5 AND (github_id IS NULL OR github_id=0)",
+		githubID, username, email, avatarURL, userID,
 	)
 	return err
 }

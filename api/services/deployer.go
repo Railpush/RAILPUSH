@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -85,22 +86,48 @@ func (d *Deployer) RunContainerWithEnvNamed(svc *models.Service, imageTag string
 		args = append(args, "-p", fmt.Sprintf("127.0.0.1:%d:%d", port, svc.Port))
 	}
 
-	// Add environment variables
+	// Add environment variables via an env-file to avoid exposing secrets in process args.
+	envFile, err := os.CreateTemp("", "railpush-env-*")
+	if err != nil {
+		return "", 0, err
+	}
+	envPath := envFile.Name()
+	_ = os.Chmod(envPath, 0600)
+	defer func() {
+		envFile.Close()
+		_ = os.Remove(envPath)
+	}()
+
 	for _, ev := range envVars {
 		val := ev.Value
 		if val == "" && ev.EncryptedValue != "" {
 			decrypted, err := utils.Decrypt(ev.EncryptedValue, encKey)
-			if err == nil {
-				val = decrypted
+			if err != nil {
+				return "", 0, fmt.Errorf("decrypt env var %s: %w", ev.Key, err)
 			}
+			val = decrypted
 		}
-		if val != "" {
-			args = append(args, "-e", fmt.Sprintf("%s=%s", ev.Key, val))
+		key := strings.TrimSpace(ev.Key)
+		if key == "" || strings.ContainsAny(key, "=\n\r") {
+			continue
+		}
+		if strings.ContainsAny(val, "\n\r") {
+			// Docker env files do not support multiline values reliably.
+			return "", 0, fmt.Errorf("env var %s contains newline", key)
+		}
+		if _, err := envFile.WriteString(fmt.Sprintf("%s=%s\n", key, val)); err != nil {
+			return "", 0, err
 		}
 	}
 
-	// Add PORT env var
-	args = append(args, "-e", fmt.Sprintf("PORT=%d", svc.Port))
+	// Add PORT env var (non-secret).
+	if _, err := envFile.WriteString(fmt.Sprintf("PORT=%d\n", svc.Port)); err != nil {
+		return "", 0, err
+	}
+	if err := envFile.Close(); err != nil {
+		return "", 0, err
+	}
+	args = append(args, "--env-file", envPath)
 
 	args = append(args, imageTag)
 	out, err := exec.Command("docker", args...).CombinedOutput()

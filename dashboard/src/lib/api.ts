@@ -1,4 +1,10 @@
-import type { Service, Deploy, EnvVar, ManagedDatabase, ManagedKeyValue, Blueprint, BlueprintResource, EnvGroup, CustomDomain, User, Backup, LogEntry, BillingOverview, GitHubRepo, GitHubBranch, RegisteredDomain, DnsRecord, DomainSearchResult, Project, ProjectFolder, Environment, PreviewEnvironment, OneOffJob, AutoscalingPolicy, DatabaseReplica, WorkspaceMember, AuditLogEntry, SamlSSOConfig } from '../types';
+import type {
+  Service, Deploy, EnvVar, ManagedDatabase, ManagedKeyValue, Blueprint, BlueprintResource, EnvGroup, CustomDomain, User, Backup, LogEntry, BillingOverview,
+  GitHubRepo, GitHubBranch, RegisteredDomain, DnsRecord, DomainSearchResult, Project, ProjectFolder, Environment, PreviewEnvironment, OneOffJob, AutoscalingPolicy,
+  DatabaseReplica, WorkspaceMember, AuditLogEntry, SamlSSOConfig, Incident, IncidentDetail, OpsOverview, OpsUserItem, OpsWorkspaceItem, OpsServiceItem, OpsDeployItem,
+  OpsEmailOutboxItem, OpsBillingCustomerItem, OpsBillingCustomerDetail, OpsTicketItem, OpsTicketDetail, OpsWorkspaceCreditItem, OpsWorkspaceCreditDetail,
+  OpsKubeSummary, OpsPerformanceSummary, SupportTicket, SupportTicketMessage,
+} from '../types';
 
 const BASE = '/api/v1';
 
@@ -236,6 +242,146 @@ export const dnsRecords = {
     request<DnsRecord>(`/domains/${domainId}/dns/${recordId}`, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (domainId: string, recordId: string) =>
     request<void>(`/domains/${domainId}/dns/${recordId}`, { method: 'DELETE' }),
+};
+
+// Ops / Incidents
+export const ops = {
+  overview: () => request<OpsOverview>('/ops/overview'),
+  getSettings: () => request<Record<string, unknown>>('/ops/settings'),
+  enableAutoDeployAll: (confirm: string) =>
+    request<{ status: string; updated: number }>('/ops/actions/auto-deploy/enable-all', { method: 'POST', body: JSON.stringify({ confirm }) }),
+  // Billing
+  listBillingCustomers: (params?: { query?: string; status?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.query) qs.set('query', params.query);
+    if (params?.status) qs.set('status', params.status);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<OpsBillingCustomerItem[]>(`/ops/billing/customers${suffix}`);
+  },
+  getBillingCustomer: (id: string) => request<OpsBillingCustomerDetail>(`/ops/billing/customers/${encodeURIComponent(id)}`),
+
+  // Tickets
+  listTickets: (params?: { query?: string; status?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.query) qs.set('query', params.query);
+    if (params?.status) qs.set('status', params.status);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<OpsTicketItem[]>(`/ops/tickets${suffix}`);
+  },
+  getTicket: (id: string) => request<OpsTicketDetail>(`/ops/tickets/${encodeURIComponent(id)}`),
+  updateTicket: (id: string, data: { status?: string; priority?: string; assigned_to?: string }) =>
+    request<{ status: string }>(`/ops/tickets/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  createTicketMessage: (id: string, data: { message: string; is_internal?: boolean }) =>
+    request<SupportTicketMessage>(`/ops/tickets/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify(data) }),
+
+  // Credits
+  listCreditsWorkspaces: (params?: { query?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.query) qs.set('query', params.query);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<OpsWorkspaceCreditItem[]>(`/ops/credits/workspaces${suffix}`);
+  },
+  getCreditsWorkspace: (workspaceId: string) =>
+    request<OpsWorkspaceCreditDetail>(`/ops/credits/workspaces/${encodeURIComponent(workspaceId)}`),
+  grantCredits: (workspaceId: string, data: { amount_cents: number; reason?: string }) =>
+    request<{ status: string; balance_cents: number }>(`/ops/credits/workspaces/${encodeURIComponent(workspaceId)}/grant`, { method: 'POST', body: JSON.stringify(data) }),
+
+  // Technical / Performance
+  getKubeSummary: () => request<OpsKubeSummary>('/ops/kube/summary'),
+  getPerformanceSummary: (params?: { window_hours?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.window_hours) qs.set('window_hours', String(params.window_hours));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<OpsPerformanceSummary>(`/ops/performance${suffix}`);
+  },
+  listUsers: (params?: { query?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.query) qs.set('query', params.query);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<OpsUserItem[]>(`/ops/users${suffix}`);
+  },
+  listWorkspaces: (params?: { query?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.query) qs.set('query', params.query);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<OpsWorkspaceItem[]>(`/ops/workspaces${suffix}`);
+  },
+  listServices: (params?: { query?: string; status?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.query) qs.set('query', params.query);
+    if (params?.status) qs.set('status', params.status);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<OpsServiceItem[]>(`/ops/services${suffix}`);
+  },
+  listDeploys: (params?: { query?: string; status?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.query) qs.set('query', params.query);
+    if (params?.status) qs.set('status', params.status);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<OpsDeployItem[]>(`/ops/deploys${suffix}`);
+  },
+  listEmailOutbox: (params?: { status?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.status) qs.set('status', params.status);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<OpsEmailOutboxItem[]>(`/ops/email/outbox${suffix}`);
+  },
+  queryServiceLogs: (serviceId: string, params?: { limit?: number; type?: 'runtime' | 'deploy' }) => {
+    const qs = new URLSearchParams();
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.type) qs.set('type', params.type);
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<unknown>(`/ops/services/${encodeURIComponent(serviceId)}/logs${suffix}`);
+  },
+  listIncidents: (params?: { state?: 'active' | 'resolved' | 'all'; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    qs.set('state', params?.state || 'active');
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    return request<Incident[]>(`/ops/incidents?${qs}`);
+  },
+  getIncident: (id: string, params?: { events_limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.events_limit) qs.set('events_limit', String(params.events_limit));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<IncidentDetail>(`/ops/incidents/${encodeURIComponent(id)}${suffix}`);
+  },
+  acknowledgeIncident: (id: string, data?: { note?: string }) =>
+    request<{ status: string; ack?: unknown }>(`/ops/incidents/${encodeURIComponent(id)}/ack`, { method: 'POST', body: JSON.stringify(data || {}) }),
+  silenceIncident: (id: string, data?: { scope?: 'group' | 'alertname'; duration_minutes?: number; comment?: string }) =>
+    request<{ status: string; silence?: unknown }>(`/ops/incidents/${encodeURIComponent(id)}/silence`, { method: 'POST', body: JSON.stringify(data || {}) }),
+};
+
+// Support (customer-facing)
+export const support = {
+  listTickets: (params?: { limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<SupportTicket[]>(`/support/tickets${suffix}`);
+  },
+  createTicket: (data: { subject: string; message: string; priority?: string }) =>
+    request<{ ticket: SupportTicket; messages: SupportTicketMessage[] }>('/support/tickets', { method: 'POST', body: JSON.stringify(data) }),
+  getTicket: (id: string) => request<{ ticket: SupportTicket; messages: SupportTicketMessage[] }>(`/support/tickets/${encodeURIComponent(id)}`),
+  createMessage: (id: string, data: { message: string }) =>
+    request<SupportTicketMessage>(`/support/tickets/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify(data) }),
 };
 
 // Logs

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/railpush/api/config"
 	"github.com/railpush/api/middleware"
 	"github.com/railpush/api/models"
+	"github.com/railpush/api/services"
 	"github.com/railpush/api/utils"
 )
 
@@ -70,6 +72,14 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	// Auto-create a default workspace
 	ws := &models.Workspace{Name: username + "'s workspace", OwnerID: user.ID, DeployPolicy: "cancel"}
 	models.CreateWorkspace(ws)
+
+	// Best-effort welcome email (async via outbox).
+	if h != nil && h.Config != nil && h.Config.Email.Enabled() && strings.TrimSpace(user.Email) != "" {
+		subj, text, html := services.BuildWelcomeEmail(h.Config, user, ws.Name)
+		if _, err := models.EnqueueEmail("welcome:"+user.ID, "welcome", user.Email, subj, text, html); err != nil {
+			log.Printf("email enqueue failed: type=welcome user=%s err=%v", user.ID, err)
+		}
+	}
 
 	tokenStr, err := h.generateJWT(user)
 	if err != nil {
@@ -156,12 +166,40 @@ func (h *AuthHandler) GitHubCallback(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to get user info: "+err.Error())
 		return
 	}
+
+	// /user often returns email=nil when the user has a private email; fetch it via /user/emails.
+	if strings.TrimSpace(ghUser.Email) == "" {
+		if email, err := h.getGitHubPrimaryEmail(accessToken); err == nil {
+			ghUser.Email = strings.TrimSpace(email)
+		} else {
+			log.Printf("GitHub: failed to fetch user emails: %v", err)
+		}
+	}
+
 	user, err := models.GetUserByGitHubID(ghUser.ID)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "database error: "+err.Error())
 		return
 	}
+	createdNew := false
+	var createdWS *models.Workspace
+
+	// If the GitHubID isn't linked yet, attempt to link by email to prevent duplicate accounts.
+	if user == nil && strings.TrimSpace(ghUser.Email) != "" {
+		if byEmail, err := models.GetUserByEmail(strings.TrimSpace(ghUser.Email)); err == nil && byEmail != nil && byEmail.GitHubID == 0 {
+			if err := models.LinkGitHubToUser(byEmail.ID, ghUser.ID, ghUser.Login, ghUser.Email, ghUser.AvatarURL); err != nil {
+				log.Printf("GitHub: failed to link user by email=%s: %v", ghUser.Email, err)
+			} else {
+				byEmail.GitHubID = ghUser.ID
+				byEmail.Username = ghUser.Login
+				byEmail.Email = ghUser.Email
+				byEmail.AvatarURL = ghUser.AvatarURL
+				user = byEmail
+			}
+		}
+	}
 	if user == nil {
+		createdNew = true
 		user = &models.User{GitHubID: ghUser.ID, Username: ghUser.Login, Email: ghUser.Email, AvatarURL: ghUser.AvatarURL}
 		if err := models.CreateUser(user); err != nil {
 			utils.RespondError(w, http.StatusInternalServerError, "failed to create user: "+err.Error())
@@ -169,6 +207,7 @@ func (h *AuthHandler) GitHubCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		ws := &models.Workspace{Name: ghUser.Login + "'s workspace", OwnerID: user.ID, DeployPolicy: "cancel"}
 		models.CreateWorkspace(ws)
+		createdWS = ws
 	} else {
 		user.Username = ghUser.Login
 		user.Email = ghUser.Email
@@ -179,6 +218,18 @@ func (h *AuthHandler) GitHubCallback(w http.ResponseWriter, r *http.Request) {
 	// Save encrypted GitHub access token for repo browsing and private clone
 	if encToken, err := utils.Encrypt(accessToken, h.Config.Crypto.EncryptionKey); err == nil {
 		models.UpdateUserGitHubToken(user.ID, encToken)
+	}
+
+	// Best-effort welcome email for new GitHub signups.
+	if createdNew && h != nil && h.Config != nil && h.Config.Email.Enabled() && strings.TrimSpace(user.Email) != "" {
+		wsName := ""
+		if createdWS != nil {
+			wsName = createdWS.Name
+		}
+		subj, text, html := services.BuildWelcomeEmail(h.Config, user, wsName)
+		if _, err := models.EnqueueEmail("welcome:"+user.ID, "welcome", user.Email, subj, text, html); err != nil {
+			log.Printf("email enqueue failed: type=welcome user=%s err=%v", user.ID, err)
+		}
 	}
 
 	tokenStr, err := h.generateJWT(user)
@@ -268,6 +319,10 @@ func (h *AuthHandler) exchangeGitHubCode(code string) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("github token exchange failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
 	var tokenResp gitHubTokenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
 		return "", err
@@ -278,17 +333,72 @@ func (h *AuthHandler) exchangeGitHubCode(code string) (string, error) {
 func (h *AuthHandler) getGitHubUser(token string) (*gitHubUser, error) {
 	req, _ := http.NewRequest("GET", "https://api.github.com/user", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("github user fetch failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
 	body, _ := io.ReadAll(resp.Body)
 	var user gitHubUser
 	if err := json.Unmarshal(body, &user); err != nil {
 		return nil, err
 	}
 	return &user, nil
+}
+
+type gitHubEmail struct {
+	Email      string `json:"email"`
+	Primary    bool   `json:"primary"`
+	Verified   bool   `json:"verified"`
+	Visibility string `json:"visibility"`
+}
+
+func (h *AuthHandler) getGitHubPrimaryEmail(token string) (string, error) {
+	req, _ := http.NewRequest("GET", "https://api.github.com/user/emails", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("github emails fetch failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var emails []gitHubEmail
+	if err := json.NewDecoder(resp.Body).Decode(&emails); err != nil {
+		return "", err
+	}
+
+	// Prefer primary + verified; fall back to anything usable.
+	for _, e := range emails {
+		if e.Primary && e.Verified && strings.TrimSpace(e.Email) != "" {
+			return e.Email, nil
+		}
+	}
+	for _, e := range emails {
+		if e.Primary && strings.TrimSpace(e.Email) != "" {
+			return e.Email, nil
+		}
+	}
+	for _, e := range emails {
+		if e.Verified && strings.TrimSpace(e.Email) != "" {
+			return e.Email, nil
+		}
+	}
+	for _, e := range emails {
+		if strings.TrimSpace(e.Email) != "" {
+			return e.Email, nil
+		}
+	}
+	return "", nil
 }
 
 func (h *AuthHandler) generateJWT(user *models.User) (string, error) {

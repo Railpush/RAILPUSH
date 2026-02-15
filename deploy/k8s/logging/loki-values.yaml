@@ -1,0 +1,62 @@
+# Loki values for RailPush (k3s, self-hosted).
+#
+# Apply (from cpu):
+#   export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+#   helm repo add grafana https://grafana.github.io/helm-charts
+#   helm repo update
+#   helm upgrade --install loki grafana/loki -n logging --create-namespace \
+#     -f /opt/railpush/deploy/k8s/logging/loki-values.yaml
+
+deploymentMode: SingleBinary
+
+loki:
+  # Internal cluster-only usage (Grafana talks to Loki over the service).
+  auth_enabled: false
+
+  commonConfig:
+    replication_factor: 1
+
+  # Store chunks/index on the Loki PVC (no external object storage yet).
+  storage:
+    type: filesystem
+
+  # Schema: TSDB + filesystem object store.
+  # Note: this is intentionally simple for MVP; we can migrate to object storage (MinIO) later.
+  schemaConfig:
+    configs:
+      - from: 2024-04-01
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+
+  # Retention (requires compactor retention_enabled).
+  limits_config:
+    retention_period: 168h # 7 days
+
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    storageClass: longhorn-r2
+    size: 100Gi
+
+gateway:
+  enabled: true
+
+ingress:
+  enabled: false
+
+# Ensure SimpleScalable targets are disabled (chart validates these are 0 for SingleBinary mode).
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0

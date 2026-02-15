@@ -1,0 +1,98 @@
+# Basic platform alert rules for RailPush (MVP).
+#
+# Apply (from cpu):
+#   export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+#   kubectl apply -f /opt/railpush/deploy/k8s/monitoring/railpush-alert-rules.yaml
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: railpush-platform
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: railpush.platform
+      rules:
+        # Core control-plane health
+        - alert: RailPushControlPlaneDown
+          expr: kube_deployment_status_replicas_available{namespace="railpush",deployment="railpush-control-plane"} < 1
+          for: 5m
+          labels:
+            severity: critical
+            product: railpush
+            component: control-plane
+          annotations:
+            summary: "RailPush control-plane has no available replicas"
+            description: "The RailPush API/dashboard is unavailable in namespace railpush."
+
+        - alert: RailPushWorkerDown
+          expr: kube_deployment_status_replicas_available{namespace="railpush",deployment="railpush-worker"} < 1
+          for: 5m
+          labels:
+            severity: critical
+            product: railpush
+            component: worker
+          annotations:
+            summary: "RailPush worker has no available replicas"
+            description: "No deploy/build workers are running; deploys will not complete."
+
+        - alert: RailPushPostgresDown
+          # CNPG is the control-plane DB. Alert if no CNPG Postgres pods are Ready.
+          expr: sum(kube_pod_status_ready{namespace="railpush",condition="true",pod=~"railpush-postgres-cnpg-.*"}) < 1
+          for: 5m
+          labels:
+            severity: critical
+            product: railpush
+            component: postgres
+          annotations:
+            summary: "RailPush Postgres has no ready replicas"
+            description: "RailPush control-plane DB appears down or not ready."
+
+        # Ingress availability (if this is down, everything looks like 404/503 externally)
+        - alert: IngressNginxControllerDown
+          expr: kube_deployment_status_replicas_available{namespace="ingress-nginx",deployment="ingress-nginx-controller"} < 1
+          for: 2m
+          labels:
+            severity: critical
+            product: railpush
+            component: ingress-nginx
+          annotations:
+            summary: "ingress-nginx controller has no available replicas"
+            description: "External traffic to railpush.com and *.apps.railpush.com may fail."
+
+        # Node pressure (kube-state-metrics)
+        - alert: KubeNodeDiskPressure
+          expr: max by (node) (kube_node_status_condition{condition="DiskPressure",status="true"}) == 1
+          for: 5m
+          labels:
+            severity: warning
+            product: railpush
+            component: node
+          annotations:
+            summary: "Node is reporting DiskPressure"
+            description: "Kubernetes is reporting DiskPressure on node {{ $labels.node }}."
+
+        # Cert-manager / TLS (cert-manager metrics)
+        - alert: CertManagerCertificateNotReady
+          expr: max by (exported_namespace, name) (certmanager_certificate_ready_status{condition="True",exported_namespace=~"railpush|monitoring"}) == 0
+          for: 10m
+          labels:
+            severity: warning
+            product: railpush
+            component: cert-manager
+          annotations:
+            summary: "Certificate is not Ready"
+            description: "Certificate {{ $labels.exported_namespace }}/{{ $labels.name }} is not Ready. TLS may fail or renewals may be stuck."
+
+        - alert: CertManagerCertificateExpiringSoon
+          expr: (certmanager_certificate_expiration_timestamp_seconds{exported_namespace=~"railpush|monitoring"} - time()) < 1209600
+          for: 30m
+          labels:
+            severity: warning
+            product: railpush
+            component: cert-manager
+          annotations:
+            summary: "Certificate expiring within 14 days"
+            description: "Certificate {{ $labels.exported_namespace }}/{{ $labels.name }} expires soon. Ensure cert-manager can renew."

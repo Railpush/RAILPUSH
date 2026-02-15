@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -76,7 +77,21 @@ func (h *OneOffJobHandler) RunServiceJob(w http.ResponseWriter, r *http.Request)
 
 	go func(jobID string, service *models.Service, command string) {
 		_ = models.MarkOneOffJobRunning(jobID)
-		out, exitCode, err := h.Executor.RunForService(service, command)
+		out := ""
+		exitCode := 0
+		var err error
+		if h.Worker != nil && h.Worker.Config != nil && h.Worker.Config.Kubernetes.Enabled {
+			kd, kerr := h.Worker.GetKubeDeployer()
+			if kerr != nil || kd == nil {
+				out = "failed to initialize kubernetes client"
+				exitCode = 1
+				err = fmt.Errorf("kubernetes client: %v", kerr)
+			} else {
+				out, exitCode, err = kd.RunOneOffJob(jobID, service, command)
+			}
+		} else {
+			out, exitCode, err = h.Executor.RunForService(service, command)
+		}
 		status := "succeeded"
 		if err != nil || exitCode != 0 {
 			status = "failed"

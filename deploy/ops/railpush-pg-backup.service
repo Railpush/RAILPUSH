@@ -1,0 +1,12 @@
+[Unit]
+Description=RailPush Postgres backup to data server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/railpush-pg-backup-to-data
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+

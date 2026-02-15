@@ -1,18 +1,77 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
+import { services as servicesApi, ApiError } from '../lib/api';
+import { PLAN_SPECS } from '../lib/plans';
 import { toast } from 'sonner';
-
-const instanceTypes = [
-  { id: 'starter', name: 'Starter', cpu: '0.5 CPU', memory: '512 MB', price: '$7/mo' },
-  { id: 'standard', name: 'Standard', cpu: '1 CPU', memory: '2 GB', price: '$25/mo' },
-  { id: 'pro', name: 'Pro', cpu: '2 CPU', memory: '4 GB', price: '$85/mo' },
-  { id: 'pro-plus', name: 'Pro Plus', cpu: '4 CPU', memory: '8 GB', price: '$175/mo' },
-];
+import type { PlanID } from '../lib/plans';
+import type { Service } from '../types';
 
 export function ServiceScaling() {
-  const [selectedPlan, setSelectedPlan] = useState('starter');
+  const { serviceId } = useParams<{ serviceId: string }>();
+  const [service, setService] = useState<Service | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [selectedPlan, setSelectedPlan] = useState<PlanID>('starter');
   const [instances, setInstances] = useState(1);
+
+  useEffect(() => {
+    if (!serviceId) return;
+    setLoading(true);
+    servicesApi.get(serviceId)
+      .then((s) => {
+        setService(s);
+        const plan = (s.plan as PlanID) || 'starter';
+        setSelectedPlan(plan);
+        setInstances(s.instances > 0 ? s.instances : 1);
+      })
+      .catch(() => {
+        setService(null);
+      })
+      .finally(() => setLoading(false));
+  }, [serviceId]);
+
+  const dirty = useMemo(() => {
+    if (!service) return false;
+    return service.plan !== selectedPlan || service.instances !== instances;
+  }, [service, selectedPlan, instances]);
+
+  const handleSave = async () => {
+    if (!serviceId) return;
+    setSaving(true);
+    try {
+      const updated = await servicesApi.update(serviceId, { plan: selectedPlan, instances });
+      setService(updated);
+      toast.success('Scaling updated');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 402) {
+        toast.error('Payment method required. Redirecting to billing...');
+        window.location.href = '/billing';
+        return;
+      }
+      toast.error(err instanceof Error ? err.message : 'Failed to update scaling');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div>
+        <h1 className="text-2xl font-semibold text-content-primary mb-6">Scaling</h1>
+        <div className="text-sm text-content-secondary">Loading...</div>
+      </div>
+    );
+  }
+  if (!service) {
+    return (
+      <div>
+        <h1 className="text-2xl font-semibold text-content-primary mb-6">Scaling</h1>
+        <div className="text-sm text-content-secondary">Service not found.</div>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -24,22 +83,25 @@ export function ServiceScaling() {
           Instance Type
         </h2>
         <div className="grid grid-cols-2 gap-3">
-          {instanceTypes.map((type) => (
+          {PLAN_SPECS.map((plan) => (
             <Card
-              key={type.id}
+              key={plan.id}
               hover
-              onClick={() => setSelectedPlan(type.id)}
-              className={selectedPlan === type.id ? 'border-brand ring-2 ring-brand/15' : ''}
+              onClick={() => setSelectedPlan(plan.id)}
+              className={selectedPlan === plan.id ? 'border-brand ring-2 ring-brand/15' : ''}
             >
               <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-semibold text-content-primary">{type.name}</span>
-                {selectedPlan === type.id && (
+                <span className="text-sm font-semibold text-content-primary">{plan.name}</span>
+                {plan.id === service.plan && selectedPlan === plan.id && (
                   <span className="text-[11px] px-2 py-0.5 rounded-full bg-brand/10 text-brand font-medium">Current</span>
+                )}
+                {plan.id !== service.plan && selectedPlan === plan.id && (
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-surface-tertiary text-content-secondary font-medium border border-border-default">Selected</span>
                 )}
               </div>
               <div className="text-xs text-content-secondary space-y-0.5">
-                <div>{type.cpu} &middot; {type.memory}</div>
-                <div className="text-content-primary font-medium">{type.price}</div>
+                <div>{plan.cpu} &middot; {plan.mem}</div>
+                <div className="text-content-primary font-medium">{plan.priceLabel}</div>
               </div>
             </Card>
           ))}
@@ -70,7 +132,9 @@ export function ServiceScaling() {
             <span>Min: 1</span>
             <span>Max: 10</span>
           </div>
-          <Button onClick={() => toast.success(`Scaled to ${instances} instance(s)`)}>Save Changes</Button>
+          <Button onClick={handleSave} disabled={!dirty || saving}>
+            {saving ? 'Saving...' : 'Save Changes'}
+          </Button>
         </Card>
       </div>
 

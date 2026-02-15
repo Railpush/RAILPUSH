@@ -1,0 +1,139 @@
+# kube-prometheus-stack values for RailPush (k3s, self-hosted).
+#
+# Install/upgrade (from cpu):
+#   helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+#     -n monitoring --create-namespace \
+#     -f /opt/railpush/deploy/k8s/monitoring/values.yaml
+#
+# Grafana admin credentials are provided via an existing secret:
+#   monitoring/monitoring-grafana-admin
+
+# k3s does not expose these components as standard pods/services; disable to avoid noisy "down" alerts.
+defaultRules:
+  rules:
+    etcd: false
+    kubeControllerManager: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeProxy: false
+
+kubeControllerManager:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+# node-exporter defaults to host networking; on our nodes, port 9100 is already in use on cpu/gpu.
+# Run node-exporter on the pod network instead (Prometheus scrapes it via ServiceMonitor anyway).
+prometheus-node-exporter:
+  hostNetwork: false
+  hostPID: false
+
+prometheus:
+  prometheusSpec:
+    retention: 15d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: longhorn-r2
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 30Gi
+
+alertmanager:
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: longhorn-r2
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 5Gi
+    # Mount Alertmanager->RailPush auth token.
+    secrets:
+      - alertmanager-webhook-token
+
+  # Alert delivery:
+  # - Always deliver to RailPush webhook receiver (in-cluster).
+  config:
+    global:
+      resolve_timeout: 5m
+    inhibit_rules:
+      - equal: ["namespace", "alertname"]
+        source_matchers: ["severity = critical"]
+        target_matchers: ["severity =~ warning|info"]
+      - equal: ["namespace", "alertname"]
+        source_matchers: ["severity = warning"]
+        target_matchers: ["severity = info"]
+      - equal: ["namespace"]
+        source_matchers: ["alertname = InfoInhibitor"]
+        target_matchers: ["severity = info"]
+      - target_matchers: ["alertname = InfoInhibitor"]
+    receivers:
+      - name: "null"
+      - name: "railpush-webhook"
+        webhook_configs:
+          - url: "http://railpush-control-plane.railpush.svc.cluster.local:8080/api/v1/webhooks/alertmanager"
+            send_resolved: true
+            http_config:
+              authorization:
+                type: Bearer
+                credentials_file: /etc/alertmanager/secrets/alertmanager-webhook-token/token
+    route:
+      group_by: ["namespace"]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      receiver: "railpush-webhook"
+      routes:
+        - matchers: [alertname = "Watchdog"]
+          receiver: "null"
+    templates:
+      - /etc/alertmanager/config/*.tmpl
+
+grafana:
+  admin:
+    existingSecret: monitoring-grafana-admin
+
+  # Provision Loki datasource (installed separately in the `logging` namespace).
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      access: proxy
+      url: http://loki-gateway.logging.svc.cluster.local
+      isDefault: false
+      editable: false
+
+  # Persist user-created dashboards, alert rules, etc.
+  persistence:
+    enabled: true
+    type: pvc
+    storageClassName: longhorn-r2
+    accessModes:
+      - ReadWriteOnce
+    size: 5Gi
+
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    annotations:
+      # Issue a dedicated cert in the monitoring namespace (avoids cross-namespace TLS secrets).
+      cert-manager.io/cluster-issuer: letsencrypt-http01-prod
+    hosts:
+      - grafana.apps.railpush.com
+    tls:
+      - secretName: grafana-tls
+        hosts:
+          - grafana.apps.railpush.com
+
+# The Prometheus Operator self-scrape (ServiceMonitor) is optional. In some environments,
+# its auto-generated serving cert SANs can be malformed and cause noisy TargetDown alerts.
+# We rely on kube-state-metrics + deployment health alerts instead.
+prometheusOperator:
+  serviceMonitor:
+    selfMonitor: false

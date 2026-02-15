@@ -62,4 +62,197 @@ var migrationSQL = []string{
 	`ALTER TABLE services ADD COLUMN IF NOT EXISTS project_id UUID`,
 	`ALTER TABLE services ADD COLUMN IF NOT EXISTS environment_id UUID`,
 	`CREATE TABLE IF NOT EXISTS saml_sso_configs (workspace_id UUID PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE, enabled BOOLEAN DEFAULT FALSE, entity_id VARCHAR(512) NOT NULL, acs_url VARCHAR(1024) NOT NULL, metadata_url VARCHAR(1024), idp_sso_url VARCHAR(1024), idp_cert_pem TEXT, allowed_domains TEXT[] DEFAULT '{}', created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())`,
+
+	// Durable deploy queue leasing (enables horizontal worker scaling + crash recovery).
+	`ALTER TABLE deploys ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`,
+	`ALTER TABLE deploys ADD COLUMN IF NOT EXISTS lease_owner TEXT`,
+	`ALTER TABLE deploys ADD COLUMN IF NOT EXISTS lease_acquired_at TIMESTAMPTZ`,
+	`ALTER TABLE deploys ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ`,
+	`ALTER TABLE deploys ADD COLUMN IF NOT EXISTS attempts INT DEFAULT 0`,
+	`ALTER TABLE deploys ADD COLUMN IF NOT EXISTS last_error TEXT`,
+	`CREATE INDEX IF NOT EXISTS idx_deploys_queue ON deploys(status, lease_expires_at, created_at)`,
+
+	// Custom domains must be globally unique to prevent host routing conflicts.
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_domains_domain_unique ON custom_domains ((lower(domain)))`,
+
+	// GitHub OAuth may not provide a public email; store empty emails as NULL to avoid uniqueness conflicts.
+	`UPDATE users SET email=NULL WHERE email=''`,
+
+	// Webhook lookup performance: repo+branch targeting (avoid full-table scans).
+	`CREATE INDEX IF NOT EXISTS idx_services_repo_branch ON services(repo_url, branch)`,
+	`CREATE INDEX IF NOT EXISTS idx_services_repo_branch_autodeploy ON services(repo_url, branch) WHERE auto_deploy = true`,
+
+	// Alertmanager webhook sink (internal alert delivery).
+	`CREATE TABLE IF NOT EXISTS alert_events (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		received_at TIMESTAMPTZ DEFAULT NOW(),
+		status TEXT,
+		receiver TEXT,
+		group_key TEXT,
+		alertname TEXT,
+		severity TEXT,
+		namespace TEXT,
+		payload JSONB NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_alert_events_received_at ON alert_events(received_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_alert_events_alertname_received_at ON alert_events(alertname, received_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_alert_events_group_key_received_at ON alert_events(group_key, received_at DESC)`,
+
+	// Ops incidents: acknowledgements + silences (created via the RailPush UI).
+	`CREATE TABLE IF NOT EXISTS incident_acknowledgements (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		group_key TEXT NOT NULL,
+		acknowledged_by UUID REFERENCES users(id) ON DELETE SET NULL,
+		note TEXT,
+		created_at TIMESTAMPTZ DEFAULT NOW()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_incident_acks_group_key_created_at ON incident_acknowledgements(group_key, created_at DESC)`,
+
+	`CREATE TABLE IF NOT EXISTS incident_silences (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		group_key TEXT NOT NULL,
+		silence_id TEXT NOT NULL,
+		scope TEXT NOT NULL DEFAULT 'group',
+		created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+		comment TEXT,
+		matchers JSONB NOT NULL,
+		starts_at TIMESTAMPTZ NOT NULL,
+		ends_at TIMESTAMPTZ NOT NULL,
+		created_at TIMESTAMPTZ DEFAULT NOW()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_incident_silences_group_key_ends_at ON incident_silences(group_key, ends_at DESC)`,
+
+	// Deterministic "subdomain label" function for uniqueness + routing. Must match utils.ServiceDomainLabel.
+	`CREATE OR REPLACE FUNCTION railpush_service_domain_label(input text) RETURNS text AS $$
+DECLARE
+	label text;
+BEGIN
+	IF input IS NULL THEN
+		input := '';
+	END IF;
+	label := lower(btrim(input));
+	label := replace(label, '_', '-');
+	label := replace(label, '.', '-');
+	label := regexp_replace(label, '[^a-z0-9-]+', '-', 'g');
+	label := regexp_replace(label, '-+', '-', 'g');
+	label := regexp_replace(label, '(^-+|-+$)', '', 'g');
+	IF label = '' THEN
+		label := 'service';
+	END IF;
+	IF length(label) > 63 THEN
+		label := left(label, 63);
+		label := regexp_replace(label, '(^-+|-+$)', '', 'g');
+		IF label = '' THEN
+			label := 'service';
+		END IF;
+	END IF;
+	RETURN label;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE`,
+
+	// Stable service subdomain label, separate from display name.
+	`ALTER TABLE services ADD COLUMN IF NOT EXISTS subdomain VARCHAR(63)`,
+	`UPDATE services SET subdomain = railpush_service_domain_label(name) WHERE (subdomain IS NULL OR subdomain='') AND COALESCE(name,'') <> ''`,
+	// If duplicates exist, deterministically disambiguate by suffixing a short ID fragment.
+	`WITH ranked AS (
+		SELECT id, subdomain,
+		       row_number() OVER (PARTITION BY lower(subdomain) ORDER BY created_at ASC, id ASC) AS rn
+		FROM services
+		WHERE COALESCE(subdomain,'') <> ''
+	)
+	UPDATE services s
+	SET subdomain = railpush_service_domain_label(r.subdomain || '-' || left(replace(s.id::text, '-', ''), 8))
+	FROM ranked r
+	WHERE s.id = r.id AND r.rn > 1`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_services_subdomain_unique ON services ((lower(subdomain))) WHERE COALESCE(subdomain,'') <> ''`,
+
+	// Stripe webhook idempotency + debugging (avoid duplicate processing on retries).
+	`CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+		event_id TEXT PRIMARY KEY,
+		event_type TEXT,
+		livemode BOOLEAN,
+		api_version TEXT,
+		received_at TIMESTAMPTZ DEFAULT NOW(),
+		processed_at TIMESTAMPTZ DEFAULT NOW()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_stripe_webhook_events_received_at ON stripe_webhook_events(received_at DESC)`,
+
+	// Billing safety: prevent double-charging by enforcing 1 billing item per resource.
+	`DELETE FROM billing_items b USING (
+		SELECT id,
+		       row_number() OVER (PARTITION BY resource_type, resource_id ORDER BY created_at DESC, id DESC) AS rn
+		FROM billing_items
+	) d
+	WHERE b.id = d.id AND d.rn > 1`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_items_resource_unique ON billing_items(resource_type, resource_id)`,
+
+	// Transactional email outbox (reliable, async delivery).
+	`CREATE TABLE IF NOT EXISTS email_outbox (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		dedupe_key TEXT,
+		message_type TEXT NOT NULL,
+		to_email TEXT NOT NULL,
+		subject TEXT NOT NULL,
+		body_text TEXT NOT NULL,
+		body_html TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'pending',
+		attempts INT NOT NULL DEFAULT 0,
+		last_error TEXT,
+		next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		lease_owner TEXT,
+		lease_acquired_at TIMESTAMPTZ,
+		lease_expires_at TIMESTAMPTZ,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		sent_at TIMESTAMPTZ
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_email_outbox_queue ON email_outbox(status, next_attempt_at, lease_expires_at)`,
+	`CREATE INDEX IF NOT EXISTS idx_email_outbox_created_at ON email_outbox(created_at DESC)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_email_outbox_dedupe ON email_outbox(dedupe_key)
+		WHERE dedupe_key IS NOT NULL`,
+
+	// Backfill: some services created before the auto-deploy default was enforced in handlers
+	// ended up with auto_deploy=false. Flip them once, without overriding future user changes.
+	`UPDATE services
+	    SET auto_deploy=true
+	  WHERE auto_deploy IS DISTINCT FROM true
+	    AND updated_at < '2026-02-15T05:00:00Z'::timestamptz`,
+
+	// Support tickets (customer support surface + ops triage).
+	`CREATE TABLE IF NOT EXISTS support_tickets (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL,
+		created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		subject TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'open',
+		priority TEXT NOT NULL DEFAULT 'normal',
+		assigned_to UUID REFERENCES users(id) ON DELETE SET NULL,
+		last_customer_reply_at TIMESTAMPTZ,
+		last_ops_reply_at TIMESTAMPTZ,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_support_tickets_created_at ON support_tickets(created_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_support_tickets_status_updated_at ON support_tickets(status, updated_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_support_tickets_workspace ON support_tickets(workspace_id, created_at DESC)`,
+
+	`CREATE TABLE IF NOT EXISTS support_ticket_messages (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		ticket_id UUID NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+		author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+		body TEXT NOT NULL,
+		is_internal BOOLEAN NOT NULL DEFAULT FALSE,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_support_ticket_messages_ticket_created_at ON support_ticket_messages(ticket_id, created_at ASC)`,
+
+	// Workspace credits (ops-granted credits/adjustments; balance is SUM(amount_cents)).
+	`CREATE TABLE IF NOT EXISTS workspace_credit_ledger (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+		amount_cents INT NOT NULL,
+		reason TEXT,
+		created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_workspace_credit_ledger_workspace_created_at ON workspace_credit_ledger(workspace_id, created_at DESC)`,
 }

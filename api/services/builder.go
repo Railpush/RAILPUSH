@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -8,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/railpush/api/config"
 )
 
@@ -20,18 +24,84 @@ func NewBuilder(cfg *config.Config) *Builder {
 }
 
 func (b *Builder) CloneRepo(repoURL, branch, destDir, token string) error {
-	os.MkdirAll(destDir, 0755)
-	cloneURL := repoURL
-	// Inject token for authenticated GitHub HTTPS cloning
-	if token != "" && strings.Contains(cloneURL, "github.com") && strings.HasPrefix(cloneURL, "https://") {
-		cloneURL = strings.Replace(cloneURL, "https://github.com/", "https://x-access-token:"+token+"@github.com/", 1)
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return err
 	}
-	cmd := exec.Command("git", "clone", "--depth", "1", "-b", branch, cloneURL, destDir)
+
+	// Prefer git CLI when available (better compatibility: submodules, LFS, etc).
+	// Our runtime image is distroless (no /usr/bin/git), so we fall back to a pure-go clone.
+	if err := cloneRepoWithGitCLI(repoURL, branch, destDir, token); err == nil {
+		return nil
+	} else if !isGitNotFound(err) {
+		return err
+	}
+
+	return cloneRepoWithGoGit(repoURL, branch, destDir, token)
+}
+
+func isGitNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ee *exec.Error
+	return errors.As(err, &ee) && errors.Is(ee.Err, exec.ErrNotFound)
+}
+
+func cloneRepoWithGitCLI(repoURL, branch, destDir, token string) error {
+	cmd := exec.Command("git", "clone", "--depth", "1", "-b", branch, repoURL, destDir)
+	cmd.Env = os.Environ()
+
+	// Avoid embedding secrets in clone URLs and process args. Use GIT_ASKPASS instead.
+	token = strings.TrimSpace(token)
+	if token != "" && strings.Contains(repoURL, "github.com") && strings.HasPrefix(repoURL, "https://") {
+		f, err := os.CreateTemp("", "railpush-git-askpass-*")
+		if err != nil {
+			return err
+		}
+		askpassPath := f.Name()
+		f.Close()
+
+		script := `#!/bin/sh
+case "$1" in
+  *Username*) echo "x-access-token" ;;
+  *) echo "${GITHUB_TOKEN}" ;;
+esac
+`
+		if err := os.WriteFile(askpassPath, []byte(script), 0700); err != nil {
+			_ = os.Remove(askpassPath)
+			return err
+		}
+		defer os.Remove(askpassPath)
+
+		cmd.Env = append(cmd.Env,
+			"GIT_ASKPASS="+askpassPath,
+			"GIT_TERMINAL_PROMPT=0",
+			"GITHUB_TOKEN="+token,
+		)
+	}
+
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%v: %s", err, string(out))
+		// Wrap the original error so callers can detect exec.ErrNotFound and fall back.
+		return fmt.Errorf("git clone failed: %w: %s", err, string(out))
 	}
 	return nil
+}
+
+func cloneRepoWithGoGit(repoURL, branch, destDir, token string) error {
+	token = strings.TrimSpace(token)
+	cloneOpts := &git.CloneOptions{
+		URL:           repoURL,
+		Depth:         1,
+		SingleBranch:  true,
+		ReferenceName: plumbing.NewBranchReferenceName(branch),
+	}
+	if token != "" && strings.Contains(repoURL, "github.com") && strings.HasPrefix(repoURL, "https://") {
+		cloneOpts.Auth = &http.BasicAuth{Username: "x-access-token", Password: token}
+	}
+
+	_, err := git.PlainClone(destDir, false, cloneOpts)
+	return err
 }
 
 func (b *Builder) DetectRuntime(dir string) string {

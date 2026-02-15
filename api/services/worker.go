@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -19,6 +20,8 @@ import (
 	"github.com/railpush/api/config"
 	"github.com/railpush/api/models"
 	"github.com/railpush/api/utils"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type DeployJob struct {
@@ -33,58 +36,260 @@ type Worker struct {
 	Deployer   *Deployer
 	Router     *Router
 	Logger     *Logger
+	Emailer    Emailer
+	Kube       *KubeDeployer
+	kubeMu     sync.Mutex
+	emailMu    sync.Mutex
+	Owner      string
+	stopCh     chan struct{}
 	Jobs       chan DeployJob
 	OnBuildLog func(deployID string, line string) // callback for WebSocket broadcasting
 	wg         sync.WaitGroup
 }
 
 func NewWorker(cfg *config.Config) *Worker {
+	hostname, _ := os.Hostname()
+	if strings.TrimSpace(hostname) == "" {
+		hostname = "railpush"
+	}
+	owner := fmt.Sprintf("%s-%d-%d", hostname, os.Getpid(), time.Now().UnixNano())
+
 	return &Worker{
 		Config:   cfg,
 		Builder:  NewBuilder(cfg),
 		Deployer: NewDeployer(cfg),
 		Router:   NewRouter(cfg),
 		Logger:   NewLogger(cfg),
+		Kube:     nil,
+		Owner:    owner,
+		stopCh:   make(chan struct{}),
 		Jobs:     make(chan DeployJob, 100),
 	}
 }
 
+func (w *Worker) GetKubeDeployer() (*KubeDeployer, error) {
+	if w == nil || w.Config == nil {
+		return nil, fmt.Errorf("missing config")
+	}
+	if w.Kube != nil {
+		return w.Kube, nil
+	}
+	w.kubeMu.Lock()
+	defer w.kubeMu.Unlock()
+	if w.Kube != nil {
+		return w.Kube, nil
+	}
+	kd, err := NewKubeDeployer(w.Config)
+	if err != nil {
+		return nil, err
+	}
+	w.Kube = kd
+	return kd, nil
+}
+
+func (w *Worker) GetEmailer() (Emailer, error) {
+	if w == nil || w.Config == nil {
+		return nil, fmt.Errorf("missing config")
+	}
+	if w.Emailer != nil {
+		return w.Emailer, nil
+	}
+	w.emailMu.Lock()
+	defer w.emailMu.Unlock()
+	if w.Emailer != nil {
+		return w.Emailer, nil
+	}
+	if !w.Config.Email.Enabled() {
+		return nil, fmt.Errorf("email disabled")
+	}
+	switch strings.ToLower(strings.TrimSpace(w.Config.Email.Provider)) {
+	case "smtp":
+		e, err := NewSMTPEmailer(&w.Config.Email)
+		if err != nil {
+			return nil, err
+		}
+		w.Emailer = e
+		return w.Emailer, nil
+	default:
+		return nil, fmt.Errorf("unsupported email provider")
+	}
+}
+
 func (w *Worker) Start(numWorkers int) {
+	if w == nil {
+		return
+	}
+	if numWorkers <= 0 {
+		numWorkers = 1
+	}
 	for i := 0; i < numWorkers; i++ {
 		w.wg.Add(1)
 		go w.run(i)
+	}
+	w.wg.Add(1)
+	go w.pollLoop(numWorkers)
+	// Transactional email outbox sender (runs only in worker pods).
+	if w.Config != nil && w.Config.Email.Enabled() {
+		w.wg.Add(1)
+		go w.emailOutboxLoop()
 	}
 	log.Printf("Deploy worker started with %d workers", numWorkers)
 }
 
 func (w *Worker) Stop() {
-	close(w.Jobs)
+	if w == nil {
+		return
+	}
+	select {
+	case <-w.stopCh:
+		// already stopped
+	default:
+		close(w.stopCh)
+	}
 	w.wg.Wait()
 	log.Println("Deploy worker stopped")
 }
 
 func (w *Worker) Enqueue(job DeployJob) {
-	w.Jobs <- job
+	// When WORKER_ENABLED=false (common for API/control-plane pods), the in-process
+	// worker is intentionally disabled. In that mode, deploys must be picked up by
+	// a separate worker Deployment via the durable DB poll loop.
+	if w == nil || w.Config == nil || !w.Config.Worker.Enabled || job.Deploy == nil || job.Service == nil {
+		return
+	}
+	// Durable queue: claim the deploy lease before processing so multiple workers/pods
+	// won't duplicate work.
+	ok, err := models.ClaimDeployLease(job.Deploy.ID, w.Owner, w.Config.Worker.LeaseSeconds, w.Config.Worker.MaxAttempts)
+	if err != nil {
+		log.Printf("worker enqueue: claim lease failed for deploy=%s: %v", job.Deploy.ID, err)
+		return
+	}
+	if !ok {
+		return
+	}
+	select {
+	case w.Jobs <- job:
+	case <-w.stopCh:
+	}
 }
 
 func (w *Worker) run(id int) {
 	defer w.wg.Done()
-	for job := range w.Jobs {
-		log.Printf("[worker-%d] Processing deploy %s for service %s", id, job.Deploy.ID, job.Service.Name)
-		w.processJob(job)
+	for {
+		select {
+		case job := <-w.Jobs:
+			if job.Deploy == nil || job.Service == nil {
+				continue
+			}
+			log.Printf("[worker-%d] Processing deploy %s for service %s", id, job.Deploy.ID, job.Service.Name)
+			w.processJob(job)
+		case <-w.stopCh:
+			return
+		}
 	}
 }
 
 func (w *Worker) processJob(job DeployJob) {
 	deploy := job.Deploy
 	svc := job.Service
+	if deploy == nil || svc == nil {
+		return
+	}
+
+	// Always release the lease after the job completes (success or failure).
+	defer func() {
+		_ = models.ReleaseDeployLease(deploy.ID, w.Owner)
+	}()
+
+	// Keep the lease alive while we process (builds can take longer than the initial lease).
+	leaseStop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				_ = models.ExtendDeployLease(deploy.ID, w.Owner, w.Config.Worker.LeaseSeconds)
+			case <-leaseStop:
+				return
+			case <-w.stopCh:
+				return
+			}
+		}
+	}()
+	defer close(leaseStop)
+
+	// Batch build log persistence to avoid one DB UPDATE per line.
+	var logMu sync.Mutex
+	var logBuf []string
+	var logBytes int
+	flushLogs := func() {
+		logMu.Lock()
+		if len(logBuf) == 0 {
+			logMu.Unlock()
+			return
+		}
+		lines := logBuf
+		logBuf = nil
+		logBytes = 0
+		logMu.Unlock()
+		chunk := strings.Join(lines, "\n") + "\n"
+		if err := models.AppendDeployBuildLogChunk(deploy.ID, chunk); err != nil {
+			log.Printf("[deploy:%s] WARNING: failed to persist build logs: %v", deploy.ID[:8], err)
+		}
+	}
+	logStop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				flushLogs()
+			case <-logStop:
+				flushLogs()
+				return
+			case <-w.stopCh:
+				flushLogs()
+				return
+			}
+		}
+	}()
+	defer close(logStop)
 
 	appendLog := func(line string) {
 		log.Printf("[deploy:%s] %s", deploy.ID[:8], line)
-		models.UpdateDeployBuildLog(deploy.ID, line)
+		// In Kubernetes mode, large build output lives in Loki (via Promtail).
+		// Keep only high-level metadata in Postgres to avoid DB bloat.
+		persist := true
+		if w != nil && w.Config != nil && w.Config.Kubernetes.Enabled {
+			// Build output lines are consistently indented (we prefix them with "    ").
+			if strings.HasPrefix(line, "    ") {
+				persist = false
+			}
+		}
+
+		if persist {
+			shouldFlush := false
+			logMu.Lock()
+			logBuf = append(logBuf, line)
+			logBytes += len(line) + 1
+			if len(logBuf) >= 50 || logBytes >= 64*1024 {
+				shouldFlush = true
+			}
+			logMu.Unlock()
+			if shouldFlush {
+				flushLogs()
+			}
+		}
 		if w.OnBuildLog != nil {
 			w.OnBuildLog(deploy.ID, line)
 		}
+	}
+
+	if w.Config.Kubernetes.Enabled {
+		w.processJobKubernetes(job, appendLog)
+		return
 	}
 
 	// 1. Mark as building
@@ -179,7 +384,7 @@ func (w *Worker) processJob(job DeployJob) {
 		}
 
 		// 5. Build image
-		imageTag = fmt.Sprintf("railpush/%s:%s", utils.ServiceDomainLabel(svc.Name), deploy.ID[:8])
+		imageTag = fmt.Sprintf("railpush/%s:%s", utils.ServiceHostLabel(svc.Name, svc.Subdomain), deploy.ID[:8])
 		appendLog(fmt.Sprintf("==> Building image %s...", imageTag))
 
 		buildContext := effectiveDir
@@ -291,8 +496,12 @@ func (w *Worker) processJob(job DeployJob) {
 	}
 
 	// 10. Update Caddy route if domain is configured
-	if (svc.Type == "web" || svc.Type == "static" || svc.Type == "pserv") && w.Config.Deploy.Domain != "" && w.Config.Deploy.Domain != "localhost" {
-		domain := fmt.Sprintf("%s.%s", utils.ServiceDomainLabel(svc.Name), w.Config.Deploy.Domain)
+	if (svc.Type == "web" || svc.Type == "static" || svc.Type == "pserv") &&
+		!w.Config.Deploy.DisableRouter &&
+		w.Router != nil &&
+		w.Config.Deploy.Domain != "" &&
+		w.Config.Deploy.Domain != "localhost" {
+		domain := fmt.Sprintf("%s.%s", utils.ServiceHostLabel(svc.Name, svc.Subdomain), w.Config.Deploy.Domain)
 		appendLog(fmt.Sprintf("==> Adding route: %s -> ports=%v", domain, upstreamPorts))
 		if err := w.Router.AddRouteUpstreams(domain, upstreamPorts); err != nil {
 			appendLog(fmt.Sprintf("WARNING: Failed to add Caddy route: %v", err))
@@ -300,25 +509,27 @@ func (w *Worker) processJob(job DeployJob) {
 	}
 
 	// 10b. Update Caddy routes for any custom domains and flag TLS provisioning state.
-	customDomains, err := models.ListCustomDomains(svc.ID)
-	if err != nil {
-		appendLog(fmt.Sprintf("WARNING: Failed to load custom domains: %v", err))
-	} else {
-		for _, cd := range customDomains {
-			host := strings.ToLower(strings.TrimSpace(cd.Domain))
-			if host == "" {
-				continue
-			}
+	if !w.Config.Deploy.DisableRouter && w.Router != nil {
+		customDomains, err := models.ListCustomDomains(svc.ID)
+		if err != nil {
+			appendLog(fmt.Sprintf("WARNING: Failed to load custom domains: %v", err))
+		} else {
+			for _, cd := range customDomains {
+				host := strings.ToLower(strings.TrimSpace(cd.Domain))
+				if host == "" {
+					continue
+				}
 
-			appendLog(fmt.Sprintf("==> Adding custom domain route: %s -> ports=%v", host, upstreamPorts))
-			if err := w.Router.AddRouteUpstreams(host, upstreamPorts); err != nil {
-				appendLog(fmt.Sprintf("WARNING: Failed to add custom domain route for %s: %v", host, err))
-				_ = models.SetCustomDomainTLSProvisioned(svc.ID, host, false)
-				continue
-			}
+				appendLog(fmt.Sprintf("==> Adding custom domain route: %s -> ports=%v", host, upstreamPorts))
+				if err := w.Router.AddRouteUpstreams(host, upstreamPorts); err != nil {
+					appendLog(fmt.Sprintf("WARNING: Failed to add custom domain route for %s: %v", host, err))
+					_ = models.SetCustomDomainTLSProvisioned(svc.ID, host, false)
+					continue
+				}
 
-			if err := models.SetCustomDomainTLSProvisioned(svc.ID, host, true); err != nil {
-				appendLog(fmt.Sprintf("WARNING: Route added but failed to mark TLS for %s: %v", host, err))
+				if err := models.SetCustomDomainTLSProvisioned(svc.ID, host, true); err != nil {
+					appendLog(fmt.Sprintf("WARNING: Route added but failed to mark TLS for %s: %v", host, err))
+				}
 			}
 		}
 	}
@@ -327,14 +538,458 @@ func (w *Worker) processJob(job DeployJob) {
 	models.UpdateServiceStatus(svc.ID, "live", cid, port)
 	models.UpdateDeployStatus(deploy.ID, "live")
 	appendLog(fmt.Sprintf("==> Deploy complete! Service is live on port %d", port))
+	w.notifyDeployResult(svc, deploy, true)
 
 	// 12. Start log tailing in background
 	go w.Logger.TailContainer(cid)
 }
 
+func (w *Worker) processJobKubernetes(job DeployJob, appendLog func(string)) {
+	deploy := job.Deploy
+	svc := job.Service
+
+	if deploy == nil || svc == nil {
+		return
+	}
+
+	// 1. Mark as building
+	_ = models.UpdateDeployStatus(deploy.ID, "building")
+	_ = models.UpdateServiceStatus(svc.ID, "building", svc.ContainerID, 0)
+	appendLog("==> Kubernetes deploy: preparing...")
+
+	// Determine image tag and build strategy.
+	imageTag := ""
+	needsBuild := false
+	if strings.TrimSpace(deploy.ImageTag) != "" && deploy.Trigger == "rollback" {
+		imageTag = strings.TrimSpace(deploy.ImageTag)
+		appendLog(fmt.Sprintf("==> Rollback: using existing image %s", imageTag))
+	} else if strings.TrimSpace(svc.ImageURL) != "" {
+		imageTag = strings.TrimSpace(svc.ImageURL)
+		appendLog(fmt.Sprintf("==> Using prebuilt image: %s", imageTag))
+	} else {
+		registry := strings.TrimSuffix(strings.TrimSpace(w.Config.Docker.Registry), "/")
+		if registry == "" {
+			appendLog("ERROR: Kubernetes git builds require DOCKER_REGISTRY (e.g. 91.98.183.19:5000/railpush)")
+			w.failDeploy(deploy, svc)
+			return
+		}
+		if strings.TrimSpace(svc.RepoURL) == "" {
+			appendLog("ERROR: No repository URL configured")
+			w.failDeploy(deploy, svc)
+			return
+		}
+		repoName := "svc-" + strings.ToLower(strings.TrimSpace(svc.ID))
+		imageTag = fmt.Sprintf("%s/%s:%s", registry, repoName, strings.ToLower(strings.TrimSpace(deploy.ID)))
+		needsBuild = true
+		appendLog(fmt.Sprintf("==> Kubernetes build: will build and push %s", imageTag))
+	}
+
+	// 2. Update deploy with image tag (and started_at)
+	_ = models.UpdateDeployStarted(deploy.ID, imageTag)
+
+	// 3. Resolve env vars (decrypt secrets) and always include PORT.
+	rawEnv, _ := models.ListEnvVars("service", svc.ID)
+	env := map[string]string{}
+	for _, ev := range rawEnv {
+		key := strings.TrimSpace(ev.Key)
+		if key == "" {
+			continue
+		}
+		val := strings.TrimSpace(ev.Value)
+		if val == "" && strings.TrimSpace(ev.EncryptedValue) != "" {
+			if decrypted, err := utils.Decrypt(ev.EncryptedValue, w.Config.Crypto.EncryptionKey); err == nil {
+				val = decrypted
+			}
+		}
+		if val == "" {
+			continue
+		}
+		env[key] = val
+	}
+	if svc.Port <= 0 {
+		svc.Port = 10000
+	}
+	env["PORT"] = fmt.Sprintf("%d", svc.Port)
+
+	kd, err := w.GetKubeDeployer()
+	if err != nil {
+		appendLog(fmt.Sprintf("ERROR: Failed to initialize Kubernetes client: %v", err))
+		w.failDeploy(deploy, svc)
+		return
+	}
+
+	if needsBuild {
+		appendLog("==> Starting Kubernetes build job...")
+		if err := kd.BuildImageWithKaniko(deploy.ID, svc, svc.RepoURL, svc.Branch, deploy.CommitSHA, svc.DockerContext, svc.DockerfilePath, imageTag, job.GitHubToken, appendLog); err != nil {
+			appendLog(fmt.Sprintf("ERROR: Build failed: %v", err))
+			w.failDeploy(deploy, svc)
+			return
+		}
+		appendLog("==> Build complete")
+	}
+
+	_ = models.UpdateDeployStatus(deploy.ID, "deploying")
+	_ = models.UpdateServiceStatus(svc.ID, "deploying", svc.ContainerID, 0)
+	appendLog("==> Applying Kubernetes resources...")
+
+	switch strings.ToLower(strings.TrimSpace(svc.Type)) {
+	case "cron", "cron_job":
+		cronName, err := kd.DeployCronJob(job.Deploy.ID, svc, imageTag, env)
+		if err != nil {
+			appendLog(fmt.Sprintf("ERROR: Kubernetes cron deploy failed: %v", err))
+			w.failDeploy(deploy, svc)
+			return
+		}
+		_ = models.UpdateServiceStatus(svc.ID, "live", "k8s-cron:"+cronName, 0)
+		_ = models.UpdateDeployStatus(deploy.ID, "live")
+		appendLog("==> Deploy complete! CronJob is scheduled.")
+		w.notifyDeployResult(svc, deploy, true)
+	default:
+		deploymentName, err := kd.DeployService(job.Deploy.ID, svc, imageTag, env)
+		if err != nil {
+			appendLog(fmt.Sprintf("ERROR: Kubernetes deploy failed: %v", err))
+			w.failDeploy(deploy, svc)
+			return
+		}
+
+		appendLog("==> Waiting for rollout...")
+		if err := kd.WaitForServiceReady(deploymentName, svc); err != nil {
+			appendLog(fmt.Sprintf("ERROR: Rollout failed: %v", err))
+			w.failDeploy(deploy, svc)
+			return
+		}
+
+		_ = models.UpdateServiceStatus(svc.ID, "live", "k8s:"+deploymentName, 0)
+		_ = models.UpdateDeployStatus(deploy.ID, "live")
+		appendLog("==> Deploy complete! Service is live.")
+		w.notifyDeployResult(svc, deploy, true)
+	}
+}
+
+func (w *Worker) pollLoop(batchSize int) {
+	defer w.wg.Done()
+	if w == nil || w.Config == nil {
+		return
+	}
+
+	pollEvery := time.Duration(w.Config.Worker.PollIntervalMS) * time.Millisecond
+	if pollEvery <= 0 {
+		pollEvery = 1 * time.Second
+	}
+	if pollEvery < 250*time.Millisecond {
+		pollEvery = 250 * time.Millisecond
+	}
+	if batchSize <= 0 {
+		batchSize = 1
+	}
+
+	pollTicker := time.NewTicker(pollEvery)
+	defer pollTicker.Stop()
+	staleTicker := time.NewTicker(60 * time.Second)
+	defer staleTicker.Stop()
+	managedTicker := time.NewTicker(60 * time.Second)
+	defer managedTicker.Stop()
+
+	for {
+		select {
+		case <-pollTicker.C:
+			w.pollOnce(batchSize)
+		case <-staleTicker.C:
+			if n, err := models.MarkStaleDeploysFailed(w.Config.Worker.MaxAttempts); err != nil {
+				log.Printf("worker: failed to mark stale deploys: %v", err)
+			} else if n > 0 {
+				log.Printf("worker: marked %d stale deploy(s) as failed (max attempts)", n)
+			}
+		case <-managedTicker.C:
+			w.reconcileManagedResources()
+		case <-w.stopCh:
+			return
+		}
+	}
+}
+
+func (w *Worker) reconcileManagedResources() {
+	if w == nil || w.Config == nil || !w.Config.Kubernetes.Enabled {
+		return
+	}
+	// Best-effort reconciliation so users don't get stuck with broken managed DB/KV resources after
+	// restarts or transient failures.
+	w.reconcileManagedDatabases()
+	w.reconcileManagedKeyValues()
+}
+
+func (w *Worker) reconcileManagedDatabases() {
+	kd, err := w.GetKubeDeployer()
+	if err != nil {
+		log.Printf("worker: reconcile databases: kube deployer init failed: %v", err)
+		return
+	}
+	dbs, err := models.ListManagedDatabases()
+	if err != nil {
+		log.Printf("worker: reconcile databases: list failed: %v", err)
+		return
+	}
+	for _, d := range dbs {
+		status := strings.ToLower(strings.TrimSpace(d.Status))
+		if status == "available" {
+			continue
+		}
+
+		full, err := models.GetManagedDatabase(d.ID)
+		if err != nil || full == nil || strings.TrimSpace(full.EncryptedPassword) == "" {
+			continue
+		}
+		pw, err := utils.Decrypt(full.EncryptedPassword, w.Config.Crypto.EncryptionKey)
+		if err != nil || strings.TrimSpace(pw) == "" {
+			continue
+		}
+
+		name, err := kd.EnsureManagedDatabase(full, pw)
+		if err != nil {
+			log.Printf("worker: reconcile databases: ensure %s failed: %v", full.ID, err)
+			continue
+		}
+		_ = models.UpdateManagedDatabaseConnection(full.ID, 5432, name)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ss, getErr := kd.Client.AppsV1().StatefulSets(kd.namespace()).Get(ctx, name, metav1.GetOptions{})
+		cancel()
+		if getErr == nil && ss != nil && ss.Status.ReadyReplicas >= 1 {
+			_ = models.UpdateManagedDatabaseStatus(full.ID, "available", "k8s:"+name)
+		}
+	}
+}
+
+func (w *Worker) reconcileManagedKeyValues() {
+	kd, err := w.GetKubeDeployer()
+	if err != nil {
+		log.Printf("worker: reconcile keyvalues: kube deployer init failed: %v", err)
+		return
+	}
+	kvs, err := models.ListManagedKeyValues()
+	if err != nil {
+		log.Printf("worker: reconcile keyvalues: list failed: %v", err)
+		return
+	}
+	for _, kv := range kvs {
+		status := strings.ToLower(strings.TrimSpace(kv.Status))
+		if status == "available" {
+			continue
+		}
+
+		full, err := models.GetManagedKeyValue(kv.ID)
+		if err != nil || full == nil || strings.TrimSpace(full.EncryptedPassword) == "" {
+			continue
+		}
+		pw, err := utils.Decrypt(full.EncryptedPassword, w.Config.Crypto.EncryptionKey)
+		if err != nil || strings.TrimSpace(pw) == "" {
+			continue
+		}
+
+		name, err := kd.EnsureManagedKeyValue(full, pw)
+		if err != nil {
+			log.Printf("worker: reconcile keyvalues: ensure %s failed: %v", full.ID, err)
+			continue
+		}
+		_ = models.UpdateManagedKeyValueConnection(full.ID, 6379, name)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ss, getErr := kd.Client.AppsV1().StatefulSets(kd.namespace()).Get(ctx, name, metav1.GetOptions{})
+		cancel()
+		if getErr == nil && ss != nil && ss.Status.ReadyReplicas >= 1 {
+			_ = models.UpdateManagedKeyValueStatus(full.ID, "available", "k8s:"+name)
+		}
+	}
+}
+
+func (w *Worker) pollOnce(batchSize int) {
+	if w == nil || w.Config == nil {
+		return
+	}
+	deploys, err := models.ClaimExpiredDeploys(w.Owner, batchSize, w.Config.Worker.LeaseSeconds, w.Config.Worker.MaxAttempts)
+	if err != nil {
+		log.Printf("worker: claim deploys failed: %v", err)
+		return
+	}
+	for i := range deploys {
+		d := deploys[i] // copy
+		svc, err := models.GetService(d.ServiceID)
+		if err != nil || svc == nil {
+			_ = models.UpdateDeployStatus(d.ID, "failed")
+			_ = models.ReleaseDeployLease(d.ID, w.Owner)
+			continue
+		}
+		ghToken := w.resolveGitHubToken(&d, svc)
+		job := DeployJob{Deploy: &d, Service: svc, GitHubToken: ghToken}
+		select {
+		case w.Jobs <- job:
+		case <-w.stopCh:
+			return
+		}
+	}
+}
+
+func (w *Worker) resolveGitHubToken(deploy *models.Deploy, svc *models.Service) string {
+	if w == nil || w.Config == nil {
+		return ""
+	}
+	userID := ""
+	if deploy != nil && deploy.CreatedBy != nil {
+		userID = strings.TrimSpace(*deploy.CreatedBy)
+	}
+	if userID == "" && svc != nil {
+		if ws, err := models.GetWorkspace(svc.WorkspaceID); err == nil && ws != nil {
+			userID = strings.TrimSpace(ws.OwnerID)
+		}
+	}
+	if userID == "" {
+		return ""
+	}
+	encToken, err := models.GetUserGitHubToken(userID)
+	if err != nil || strings.TrimSpace(encToken) == "" {
+		return ""
+	}
+	t, err := utils.Decrypt(encToken, w.Config.Crypto.EncryptionKey)
+	if err != nil {
+		return ""
+	}
+	return t
+}
+
 func (w *Worker) failDeploy(deploy *models.Deploy, svc *models.Service) {
 	models.UpdateDeployStatus(deploy.ID, "failed")
 	models.UpdateServiceStatus(svc.ID, "deploy_failed", svc.ContainerID, svc.HostPort)
+	w.notifyDeployResult(svc, deploy, false)
+}
+
+func (w *Worker) notifyDeployResult(svc *models.Service, deploy *models.Deploy, ok bool) {
+	if w == nil || w.Config == nil || svc == nil || deploy == nil {
+		return
+	}
+	if !w.Config.Email.Enabled() {
+		return
+	}
+	// Best-effort only: never block deploy completion.
+	go func() {
+		ws, err := models.GetWorkspace(svc.WorkspaceID)
+		if err != nil || ws == nil {
+			return
+		}
+		u, err := models.GetUserByID(ws.OwnerID)
+		if err != nil || u == nil || strings.TrimSpace(u.Email) == "" {
+			return
+		}
+
+		// Reload deploy so email includes started_at/branch populated by DB updates.
+		fresh, _ := models.GetDeploy(deploy.ID)
+		if fresh != nil {
+			deploy = fresh
+		}
+
+		subj, text, html := BuildDeployResultEmail(w.Config, svc, deploy, ok)
+		dedupe := "deploy-result:" + strings.TrimSpace(deploy.ID)
+		if _, err := models.EnqueueEmail(dedupe, "deploy_result", u.Email, subj, text, html); err != nil {
+			// Avoid logging recipient PII.
+			log.Printf("email enqueue failed: type=deploy_result deploy=%s err=%v", deploy.ID, err)
+		}
+	}()
+}
+
+func (w *Worker) emailOutboxLoop() {
+	defer w.wg.Done()
+	if w == nil || w.Config == nil || !w.Config.Email.Enabled() {
+		return
+	}
+
+	pollEvery := time.Duration(w.Config.Email.Outbox.PollIntervalMS) * time.Millisecond
+	if pollEvery <= 0 {
+		pollEvery = 2 * time.Second
+	}
+	if pollEvery < 250*time.Millisecond {
+		pollEvery = 250 * time.Millisecond
+	}
+	batchSize := w.Config.Email.Outbox.BatchSize
+	if batchSize <= 0 {
+		batchSize = 10
+	}
+	leaseSeconds := w.Config.Email.Outbox.LeaseSeconds
+	if leaseSeconds <= 0 {
+		leaseSeconds = 120
+	}
+	maxAttempts := w.Config.Email.Outbox.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 10
+	}
+
+	ticker := time.NewTicker(pollEvery)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			w.emailOutboxOnce(batchSize, leaseSeconds, maxAttempts)
+		case <-w.stopCh:
+			return
+		}
+	}
+}
+
+func (w *Worker) emailOutboxOnce(batchSize int, leaseSeconds int, maxAttempts int) {
+	if w == nil || w.Config == nil || !w.Config.Email.Enabled() {
+		return
+	}
+	emailer, err := w.GetEmailer()
+	if err != nil || emailer == nil {
+		return
+	}
+
+	msgs, err := models.ClaimEmailOutboxBatch(w.Owner, batchSize, leaseSeconds, maxAttempts)
+	if err != nil || len(msgs) == 0 {
+		return
+	}
+
+	for _, m := range msgs {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		sendErr := emailer.Send(ctx, EmailMessage{
+			To:       m.ToEmail,
+			Subject:  m.Subject,
+			TextBody: m.BodyText,
+			HTMLBody: m.BodyHTML,
+		})
+		cancel()
+
+		if sendErr == nil {
+			_ = models.MarkEmailOutboxSent(m.ID, w.Owner)
+			log.Printf("email sent: type=%s id=%s", strings.TrimSpace(m.MessageType), m.ID[:8])
+			continue
+		}
+
+		// Backoff with jitter; cap to 60 minutes.
+		attempt := m.Attempts
+		if attempt < 1 {
+			attempt = 1
+		}
+		shift := attempt - 1
+		if shift > 6 {
+			shift = 6
+		}
+		delay := 15 * time.Second * time.Duration(1<<shift)
+		if delay > 60*time.Minute {
+			delay = 60 * time.Minute
+		}
+		// 0-10s jitter.
+		jitter := time.Duration(time.Now().UnixNano()%int64(10*time.Second)) * time.Nanosecond
+		delay += jitter
+
+		errMsg := sendErr.Error()
+		if m.Attempts >= maxAttempts {
+			_ = models.MarkEmailOutboxDead(m.ID, w.Owner, errMsg)
+			log.Printf("email dead: type=%s id=%s err=%v", strings.TrimSpace(m.MessageType), m.ID[:8], sendErr)
+			continue
+		}
+		_ = models.MarkEmailOutboxRetry(m.ID, w.Owner, errMsg, delay)
+		log.Printf("email retry: type=%s id=%s err=%v", strings.TrimSpace(m.MessageType), m.ID[:8], sendErr)
+	}
 }
 
 func fileExists(path string) bool {
@@ -431,6 +1086,32 @@ func (w *Worker) ProvisionDatabase(db *models.ManagedDatabase, password string) 
 	go func() {
 		log.Printf("Provisioning database %s...", db.Name)
 		models.UpdateManagedDatabaseStatus(db.ID, "creating", "")
+
+		// Kubernetes mode: provision a StatefulSet + Service so in-cluster apps can connect via
+		// `sr-db-<idPrefix>:5432` (Render-compatible).
+		if w != nil && w.Config != nil && w.Config.Kubernetes.Enabled {
+			kd, err := w.GetKubeDeployer()
+			if err != nil {
+				log.Printf("Failed to initialize kube deployer for database %s: %v", db.Name, err)
+				_ = models.UpdateManagedDatabaseStatus(db.ID, "failed", "")
+				return
+			}
+			name, err := kd.EnsureManagedDatabase(db, password)
+			if err != nil {
+				log.Printf("Failed to provision database %s in k8s: %v", db.Name, err)
+				_ = models.UpdateManagedDatabaseStatus(db.ID, "failed", "")
+				return
+			}
+			if err := kd.WaitForStatefulSetReady(name, 1); err != nil {
+				log.Printf("Database %s did not become ready in time (k8s): %v", db.Name, err)
+				_ = models.UpdateManagedDatabaseStatus(db.ID, "failed", "k8s:"+name)
+				return
+			}
+			_ = models.UpdateManagedDatabaseStatus(db.ID, "available", "k8s:"+name)
+			_ = models.UpdateManagedDatabaseConnection(db.ID, 5432, name)
+			log.Printf("Database %s provisioned successfully in k8s (%s)", db.Name, name)
+			return
+		}
 
 		containerName := fmt.Sprintf("sr-db-%s", db.ID[:8])
 		port := w.Deployer.findFreePort()
@@ -592,6 +1273,32 @@ func (w *Worker) ProvisionKeyValue(kv *models.ManagedKeyValue, password string) 
 	go func() {
 		log.Printf("Provisioning key-value store %s...", kv.Name)
 		models.UpdateManagedKeyValueStatus(kv.ID, "creating", "")
+
+		// Kubernetes mode: provision a StatefulSet + Service so in-cluster apps can connect via
+		// `sr-kv-<idPrefix>:6379`.
+		if w != nil && w.Config != nil && w.Config.Kubernetes.Enabled {
+			kd, err := w.GetKubeDeployer()
+			if err != nil {
+				log.Printf("Failed to initialize kube deployer for keyvalue %s: %v", kv.Name, err)
+				_ = models.UpdateManagedKeyValueStatus(kv.ID, "failed", "")
+				return
+			}
+			name, err := kd.EnsureManagedKeyValue(kv, password)
+			if err != nil {
+				log.Printf("Failed to provision keyvalue %s in k8s: %v", kv.Name, err)
+				_ = models.UpdateManagedKeyValueStatus(kv.ID, "failed", "")
+				return
+			}
+			if err := kd.WaitForStatefulSetReady(name, 1); err != nil {
+				log.Printf("Keyvalue %s did not become ready in time (k8s): %v", kv.Name, err)
+				_ = models.UpdateManagedKeyValueStatus(kv.ID, "failed", "k8s:"+name)
+				return
+			}
+			_ = models.UpdateManagedKeyValueStatus(kv.ID, "available", "k8s:"+name)
+			_ = models.UpdateManagedKeyValueConnection(kv.ID, 6379, name)
+			log.Printf("Key-value store %s provisioned successfully in k8s (%s)", kv.Name, name)
+			return
+		}
 
 		containerName := fmt.Sprintf("sr-kv-%s", kv.ID[:8])
 		port := w.Deployer.findFreePort()

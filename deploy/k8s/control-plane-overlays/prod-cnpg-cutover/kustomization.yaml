@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Cut over RailPush control-plane to CloudNativePG Postgres.
+resources:
+  - ../prod-cnpg
+
+patches:
+  - path: configmap-cnpg.patch.yaml
+    target:
+      kind: ConfigMap
+      name: railpush-config
+

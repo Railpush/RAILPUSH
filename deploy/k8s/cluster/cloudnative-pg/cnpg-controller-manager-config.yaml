@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cnpg-controller-manager-config
+  namespace: cnpg-system
+data: {}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cnpg-controller-manager-config
+  namespace: cnpg-system
+type: Opaque
+data: {}
+

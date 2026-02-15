@@ -1,0 +1,31 @@
+# Manual alert delivery drill (Prometheus -> Alertmanager -> RailPush).
+#
+# Apply (from cpu):
+#   export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+#   kubectl apply -f /opt/railpush/deploy/k8s/monitoring/railpush-alert-drill.yaml
+#
+# Wait ~2 minutes, verify it shows up in RailPush `/incidents`, then delete:
+#   kubectl delete -f /opt/railpush/deploy/k8s/monitoring/railpush-alert-drill.yaml
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: railpush-alert-drill
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: railpush.drills
+      rules:
+        - alert: RailPushAlertDrill
+          expr: vector(1)
+          for: 1m
+          labels:
+            severity: warning
+            product: railpush
+            component: alerts
+          annotations:
+            summary: "RailPush alert drill"
+            description: "This is an intentional test alert to validate end-to-end delivery into RailPush."
+

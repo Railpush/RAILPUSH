@@ -3,6 +3,8 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -25,11 +27,34 @@ func NewServiceHandler(cfg *config.Config, worker *services.Worker, stripe *serv
 	return &ServiceHandler{Config: cfg, Worker: worker, Stripe: stripe}
 }
 
+func (h *ServiceHandler) ensureServiceDomainLabelAvailable(workspaceID, currentServiceID, desiredName string) error {
+	desired := utils.ServiceDomainLabel(desiredName)
+	if desired == "" {
+		return fmt.Errorf("invalid service name")
+	}
+	svcs, err := models.ListServices(workspaceID)
+	if err != nil {
+		return err
+	}
+	for _, s := range svcs {
+		if s.ID == currentServiceID {
+			continue
+		}
+		if utils.ServiceDomainLabel(s.Name) == desired {
+			if strings.TrimSpace(h.Config.Deploy.Domain) != "" && h.Config.Deploy.Domain != "localhost" {
+				return fmt.Errorf("service name conflicts with existing subdomain: %s.%s", desired, h.Config.Deploy.Domain)
+			}
+			return fmt.Errorf("service name conflicts with an existing service")
+		}
+	}
+	return nil
+}
+
 func (h *ServiceHandler) decorateServicePublicURL(svc *models.Service) {
 	if svc == nil {
 		return
 	}
-	svc.PublicURL = utils.ServicePublicURL(svc.Type, svc.Name, h.Config.Deploy.Domain, svc.HostPort)
+	svc.PublicURL = utils.ServicePublicURL(svc.Type, svc.Name, svc.Subdomain, h.Config.Deploy.Domain, svc.HostPort)
 }
 
 func (h *ServiceHandler) ensureAccess(w http.ResponseWriter, userID, workspaceID, minRole string) bool {
@@ -82,9 +107,23 @@ func (h *ServiceHandler) ListServices(w http.ResponseWriter, r *http.Request) {
 
 func (h *ServiceHandler) CreateService(w http.ResponseWriter, r *http.Request) {
 	var svc models.Service
-	if err := json.NewDecoder(r.Body).Decode(&svc); err != nil {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+	if err := json.Unmarshal(body, &svc); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// Default: auto-deploy should be ON unless explicitly disabled.
+	// We use a pointer here to distinguish "missing" from "false".
+	var req struct {
+		AutoDeploy *bool `json:"auto_deploy"`
+	}
+	_ = json.Unmarshal(body, &req)
+	if req.AutoDeploy == nil {
+		svc.AutoDeploy = true
 	}
 	svc.Name = strings.TrimSpace(svc.Name)
 	svc.Type = strings.TrimSpace(svc.Type)
@@ -199,7 +238,7 @@ func (h *ServiceHandler) CreateService(w http.ResponseWriter, r *http.Request) {
 			if encToken, err := models.GetUserGitHubToken(userID); err == nil && encToken != "" {
 				if ghToken, err := utils.Decrypt(encToken, h.Config.Crypto.EncryptionKey); err == nil {
 					gh := services.NewGitHub(h.Config)
-					webhookURL := "https://" + h.Config.Deploy.Domain + "/api/v1/webhooks/github"
+					webhookURL := "https://" + h.Config.ControlPlane.Domain + "/api/v1/webhooks/github"
 					if err := gh.CreateWebhook(ghToken, owner, repo, webhookURL, h.Config.GitHub.WebhookSecret); err != nil {
 						log.Printf("Warning: failed to auto-register webhook for %s/%s: %v", owner, repo, err)
 					}
@@ -252,6 +291,7 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	if h.isProtectedEnvironment(svc.EnvironmentID) && !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleAdmin) {
 		return
 	}
+	oldInstances := svc.Instances
 	oldPlan := svc.Plan
 	var updates map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
@@ -286,6 +326,9 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	}
 	if v, ok := updates["instances"].(float64); ok {
 		svc.Instances = int(v)
+		if svc.Instances < 1 {
+			svc.Instances = 1
+		}
 	}
 	if v, ok := updates["dockerfile_path"].(string); ok {
 		svc.DockerfilePath = v
@@ -352,6 +395,9 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if svc.Instances < 1 {
+		svc.Instances = 1
+	}
 	if err := models.UpdateService(svc); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to update service")
 		return
@@ -379,6 +425,31 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 			// Switching between paid plans: update subscription item
 			if err := h.Stripe.UpdateSubscriptionItemPlan("service", svc.ID, svc.Plan); err != nil {
 				log.Printf("Warning: failed to update billing plan for service %s: %v", svc.ID, err)
+			}
+		}
+	}
+
+	// Best-effort: apply scaling/resource changes immediately for Kubernetes runtimes.
+	// This improves UX for the Scaling page without requiring a full "deploy".
+	if h.Config != nil && h.Config.Kubernetes.Enabled {
+		svcType := strings.ToLower(strings.TrimSpace(svc.Type))
+		isKubeDeployed := strings.HasPrefix(strings.TrimSpace(svc.ContainerID), "k8s:")
+		if isKubeDeployed && svcType != "cron" && svcType != "cron_job" {
+			if kd, err := h.Worker.GetKubeDeployer(); err == nil && kd != nil {
+				if oldPlan != svc.Plan {
+					if err := kd.UpdateServiceDeploymentResources(svc); err != nil {
+						log.Printf("WARNING: k8s update resources failed service=%s: %v", svc.ID, err)
+					}
+				}
+				if oldInstances != svc.Instances && !svc.IsSuspended {
+					desired := int32(1)
+					if svc.Instances > 0 {
+						desired = int32(svc.Instances)
+					}
+					if err := kd.ScaleService(svc, desired); err != nil {
+						log.Printf("WARNING: k8s scale failed service=%s desired=%d: %v", svc.ID, desired, err)
+					}
+				}
 			}
 		}
 	}
@@ -420,21 +491,27 @@ func (h *ServiceHandler) DeleteService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Stop and remove Docker container
-	if svc.ContainerID != "" {
-		h.Worker.Deployer.RemoveContainer(svc.ContainerID)
-	}
-	if instances, err := models.ListServiceInstances(id); err == nil {
-		for _, inst := range instances {
-			if inst.ContainerID != "" {
-				_ = h.Worker.Deployer.RemoveContainer(inst.ContainerID)
+	if h.Config.Kubernetes.Enabled {
+		if kd, err := h.Worker.GetKubeDeployer(); err == nil && kd != nil {
+			_ = kd.DeleteServiceResources(svc)
+		}
+	} else {
+		if svc.ContainerID != "" {
+			h.Worker.Deployer.RemoveContainer(svc.ContainerID)
+		}
+		if instances, err := models.ListServiceInstances(id); err == nil {
+			for _, inst := range instances {
+				if inst.ContainerID != "" {
+					_ = h.Worker.Deployer.RemoveContainer(inst.ContainerID)
+				}
 			}
 		}
-	}
-	_ = models.DeleteServiceInstancesByService(id)
-	// Remove Caddy route
-	if h.Config.Deploy.Domain != "" && h.Config.Deploy.Domain != "localhost" {
-		domain := utils.ServiceDomainLabel(svc.Name) + "." + h.Config.Deploy.Domain
-		h.Worker.Router.RemoveRoute(domain)
+		_ = models.DeleteServiceInstancesByService(id)
+		// Remove Caddy route
+		if h.Config.Deploy.Domain != "" && h.Config.Deploy.Domain != "localhost" && !h.Config.Deploy.DisableRouter {
+			domain := utils.ServiceHostLabel(svc.Name, svc.Subdomain) + "." + h.Config.Deploy.Domain
+			h.Worker.Router.RemoveRoute(domain)
+		}
 	}
 	if err := models.DeleteService(id); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to delete service")
@@ -455,10 +532,6 @@ func (h *ServiceHandler) RestartService(w http.ResponseWriter, r *http.Request) 
 		utils.RespondError(w, http.StatusNotFound, "service not found")
 		return
 	}
-	if svc.ContainerID == "" {
-		utils.RespondError(w, http.StatusBadRequest, "no container to restart")
-		return
-	}
 	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleDeveloper) {
 		return
 	}
@@ -467,6 +540,23 @@ func (h *ServiceHandler) RestartService(w http.ResponseWriter, r *http.Request) 
 	}
 	models.UpdateServiceStatus(id, "restarting", svc.ContainerID, svc.HostPort)
 	go func() {
+		if h.Config.Kubernetes.Enabled {
+			if kd, err := h.Worker.GetKubeDeployer(); err == nil && kd != nil {
+				if err := kd.RestartService(svc); err != nil {
+					models.UpdateServiceStatus(id, "deploy_failed", svc.ContainerID, svc.HostPort)
+					return
+				}
+				models.UpdateServiceStatus(id, "live", svc.ContainerID, svc.HostPort)
+				return
+			}
+			models.UpdateServiceStatus(id, "deploy_failed", svc.ContainerID, svc.HostPort)
+			return
+		}
+
+		if svc.ContainerID == "" {
+			models.UpdateServiceStatus(id, "deploy_failed", svc.ContainerID, svc.HostPort)
+			return
+		}
 		if err := h.Worker.Deployer.RestartContainer(svc.ContainerID); err != nil {
 			models.UpdateServiceStatus(id, "deploy_failed", svc.ContainerID, svc.HostPort)
 			return
@@ -492,8 +582,14 @@ func (h *ServiceHandler) SuspendService(w http.ResponseWriter, r *http.Request) 
 	if h.isProtectedEnvironment(svc.EnvironmentID) && !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleAdmin) {
 		return
 	}
-	if svc.ContainerID != "" {
-		h.Worker.Deployer.StopContainer(svc.ContainerID)
+	if h.Config.Kubernetes.Enabled {
+		if kd, err := h.Worker.GetKubeDeployer(); err == nil && kd != nil {
+			_ = kd.ScaleService(svc, 0)
+		}
+	} else {
+		if svc.ContainerID != "" {
+			h.Worker.Deployer.StopContainer(svc.ContainerID)
+		}
 	}
 	// Set is_suspended flag
 	models.SetServiceSuspended(id, true)
@@ -511,10 +607,6 @@ func (h *ServiceHandler) ResumeService(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusNotFound, "service not found")
 		return
 	}
-	if svc.ContainerID == "" {
-		utils.RespondError(w, http.StatusBadRequest, "no container to resume; trigger a new deploy")
-		return
-	}
 	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleDeveloper) {
 		return
 	}
@@ -524,6 +616,27 @@ func (h *ServiceHandler) ResumeService(w http.ResponseWriter, r *http.Request) {
 	models.SetServiceSuspended(id, false)
 	models.UpdateServiceStatus(id, "deploying", svc.ContainerID, svc.HostPort)
 	go func() {
+		if h.Config.Kubernetes.Enabled {
+			desired := int32(1)
+			if svc.Instances > 0 {
+				desired = int32(svc.Instances)
+			}
+			if kd, err := h.Worker.GetKubeDeployer(); err == nil && kd != nil {
+				if err := kd.ScaleService(svc, desired); err != nil {
+					models.UpdateServiceStatus(id, "deploy_failed", svc.ContainerID, svc.HostPort)
+					return
+				}
+				models.UpdateServiceStatus(id, "live", svc.ContainerID, svc.HostPort)
+				return
+			}
+			models.UpdateServiceStatus(id, "deploy_failed", svc.ContainerID, svc.HostPort)
+			return
+		}
+
+		if svc.ContainerID == "" {
+			models.UpdateServiceStatus(id, "deploy_failed", svc.ContainerID, svc.HostPort)
+			return
+		}
 		if err := h.Worker.Deployer.StartContainer(svc.ContainerID); err != nil {
 			models.UpdateServiceStatus(id, "deploy_failed", svc.ContainerID, svc.HostPort)
 			return

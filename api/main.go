@@ -42,7 +42,7 @@ func main() {
 
 	// Ensure Caddy dynamic server for subdomain routing
 	caddyRouter := services.NewRouter(cfg)
-	if cfg.Deploy.Domain != "" && cfg.Deploy.Domain != "localhost" {
+	if !cfg.Deploy.DisableRouter && cfg.Deploy.Domain != "" && cfg.Deploy.Domain != "localhost" {
 		if err := caddyRouter.EnsureDynamicServer(); err != nil {
 			log.Printf("WARNING: Could not create Caddy dynamic server: %v (subdomain routing may not work)", err)
 		}
@@ -51,7 +51,11 @@ func main() {
 	// Start deploy worker
 	worker := services.NewWorker(cfg)
 	worker.Router = caddyRouter
-	worker.Start(4)
+	if cfg.Worker.Enabled {
+		worker.Start(cfg.Worker.Concurrency)
+	} else {
+		log.Println("Deploy worker disabled (WORKER_ENABLED=false)")
+	}
 	autoscaler := services.NewAutoscaler(cfg, worker)
 	autoscaler.Start()
 	routeReconciler := services.NewRouteReconciler(cfg, caddyRouter)
@@ -70,10 +74,33 @@ func main() {
 	}
 
 	r := mux.NewRouter()
+	r.Use(middleware.CanonicalHostMiddleware(cfg))
 	r.Use(middleware.CORSMiddleware(cfg))
-	r.Use(middleware.RateLimitMiddleware)
+	r.Use(middleware.RateLimitMiddleware(cfg))
 
 	setupRoutes(r, cfg, worker, wsH)
+
+	r.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}).Methods("GET")
+
+	r.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if database.DB == nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("db not initialized"))
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := database.DB.PingContext(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("db not ready"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready"))
+	}).Methods("GET")
 
 	r.PathPrefix("/").HandlerFunc(spaHandler)
 
@@ -127,7 +154,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	kvH := handlers.NewKeyValueHandler(cfg, worker, stripeService)
 	bpH := handlers.NewBlueprintHandler(cfg, worker)
 	domH := handlers.NewDomainHandler(cfg, worker)
-	logH := handlers.NewLogHandler(cfg)
+	logH := handlers.NewLogHandler(cfg, worker)
 	whH := handlers.NewWebhookHandler(cfg, worker)
 	metH := handlers.NewMetricsHandler(cfg)
 	billH := handlers.NewBillingHandler(cfg, stripeService)
@@ -150,6 +177,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	api.HandleFunc("/auth/github/callback", auth.GitHubCallback).Methods("GET")
 	api.HandleFunc("/webhooks/github", whH.GitHubWebhook).Methods("POST")
 	api.HandleFunc("/webhooks/stripe", billH.StripeWebhook).Methods("POST")
+	api.HandleFunc("/webhooks/alertmanager", whH.AlertmanagerWebhook).Methods("POST")
 	api.HandleFunc("/domains/search", rdH.SearchDomains).Methods("POST")
 	api.HandleFunc("/workspaces/{id}/sso/saml/metadata", samlH.Metadata).Methods("GET")
 	api.HandleFunc("/workspaces/{id}/sso/saml/acs", samlH.ACS).Methods("POST")
@@ -161,9 +189,52 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/auth/api-keys", auth.CreateAPIKey).Methods("POST")
 	authed.HandleFunc("/auth/api-keys/{id}", auth.DeleteAPIKey).Methods("DELETE")
 
+	opsH := handlers.NewOpsIncidentsHandler(cfg)
+	authed.HandleFunc("/ops/incidents", opsH.ListIncidents).Methods("GET")
+	authed.HandleFunc("/ops/incidents/{id}", opsH.GetIncident).Methods("GET")
+	authed.HandleFunc("/ops/incidents/{id}/ack", opsH.AcknowledgeIncident).Methods("POST")
+	authed.HandleFunc("/ops/incidents/{id}/silence", opsH.SilenceIncident).Methods("POST")
+
+	opsDashH := handlers.NewOpsDashboardHandler(cfg)
+	authed.HandleFunc("/ops/overview", opsDashH.Overview).Methods("GET")
+	authed.HandleFunc("/ops/users", opsDashH.ListUsers).Methods("GET")
+	authed.HandleFunc("/ops/workspaces", opsDashH.ListWorkspaces).Methods("GET")
+	authed.HandleFunc("/ops/services", opsDashH.ListServices).Methods("GET")
+	authed.HandleFunc("/ops/deploys", opsDashH.ListDeploys).Methods("GET")
+	authed.HandleFunc("/ops/email/outbox", opsDashH.ListEmailOutbox).Methods("GET")
+	authed.HandleFunc("/ops/settings", opsDashH.Settings).Methods("GET")
+	authed.HandleFunc("/ops/actions/auto-deploy/enable-all", opsDashH.EnableAutoDeployAll).Methods("POST")
+
+	opsBillH := handlers.NewOpsBillingHandler(cfg)
+	authed.HandleFunc("/ops/billing/customers", opsBillH.ListCustomers).Methods("GET")
+	authed.HandleFunc("/ops/billing/customers/{id}", opsBillH.GetCustomer).Methods("GET")
+
+	opsTicketsH := handlers.NewOpsTicketsHandler(cfg)
+	authed.HandleFunc("/ops/tickets", opsTicketsH.ListTickets).Methods("GET")
+	authed.HandleFunc("/ops/tickets/{id}", opsTicketsH.GetTicket).Methods("GET")
+	authed.HandleFunc("/ops/tickets/{id}", opsTicketsH.UpdateTicket).Methods("PATCH")
+	authed.HandleFunc("/ops/tickets/{id}/messages", opsTicketsH.CreateMessage).Methods("POST")
+
+	opsCreditsH := handlers.NewOpsCreditsHandler(cfg)
+	authed.HandleFunc("/ops/credits/workspaces", opsCreditsH.ListWorkspaces).Methods("GET")
+	authed.HandleFunc("/ops/credits/workspaces/{id}", opsCreditsH.GetWorkspace).Methods("GET")
+	authed.HandleFunc("/ops/credits/workspaces/{id}/grant", opsCreditsH.Grant).Methods("POST")
+
+	opsTechH := handlers.NewOpsTechnicalHandler(cfg)
+	authed.HandleFunc("/ops/kube/summary", opsTechH.KubeSummary).Methods("GET")
+
+	opsPerfH := handlers.NewOpsPerformanceHandler(cfg)
+	authed.HandleFunc("/ops/performance", opsPerfH.Summary).Methods("GET")
+
 	ghH := handlers.NewGitHubHandler(cfg, services.NewGitHub(cfg))
 	authed.HandleFunc("/github/repos", ghH.ListRepos).Methods("GET")
 	authed.HandleFunc("/github/repos/{owner}/{repo}/branches", ghH.ListBranches).Methods("GET")
+
+	supportH := handlers.NewSupportHandler(cfg)
+	authed.HandleFunc("/support/tickets", supportH.ListTickets).Methods("GET")
+	authed.HandleFunc("/support/tickets", supportH.CreateTicket).Methods("POST")
+	authed.HandleFunc("/support/tickets/{id}", supportH.GetTicket).Methods("GET")
+	authed.HandleFunc("/support/tickets/{id}/messages", supportH.CreateMessage).Methods("POST")
 
 	authed.HandleFunc("/services", svcH.ListServices).Methods("GET")
 	authed.HandleFunc("/services", svcH.CreateService).Methods("POST")
@@ -192,6 +263,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/services/{id}/custom-domains/{domain}", domH.DeleteCustomDomain).Methods("DELETE")
 
 	authed.HandleFunc("/services/{id}/logs", logH.QueryLogs).Methods("GET")
+	authed.HandleFunc("/ops/services/{id}/logs", logH.QueryLogsOps).Methods("GET")
 	authed.HandleFunc("/services/{id}/metrics", metH.GetServiceMetrics).Methods("GET")
 	authed.HandleFunc("/services/{id}/metrics/history", metH.GetServiceMetricsHistory).Methods("GET")
 

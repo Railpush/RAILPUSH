@@ -1,0 +1,31 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: railpush-postgres-cnpg
+  namespace: railpush
+spec:
+  # HA: run 3 instances (1 primary + 2 replicas).
+  instances: 3
+
+  # Best-effort synchronous replication: prefer 1 sync standby when available,
+  # but do not block writes if no replica is ready.
+  maxSyncReplicas: 1
+  minSyncReplicas: 0
+
+  affinity:
+    enablePodAntiAffinity: true
+    podAntiAffinityType: required
+    topologyKey: kubernetes.io/hostname
+
+  # Bootstrap a `railpush` DB owned by the `railpush` role.
+  # The referenced secret must contain `username` and `password`.
+  bootstrap:
+    initdb:
+      database: railpush
+      owner: railpush
+      secret:
+        name: railpush-postgres-cnpg-app
+
+  storage:
+    size: 30Gi
+    storageClass: longhorn-r2

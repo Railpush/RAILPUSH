@@ -27,6 +27,7 @@ type StripeService struct {
 }
 
 var ErrNoDefaultPaymentMethod = errors.New("payment method required")
+var ErrStripeWebhookSignature = errors.New("stripe webhook signature verification failed")
 
 func NewStripeService(cfg *config.Config) *StripeService {
 	stripe.Key = cfg.Stripe.SecretKey
@@ -35,6 +36,10 @@ func NewStripeService(cfg *config.Config) *StripeService {
 
 func (s *StripeService) Enabled() bool {
 	return s.Config.Stripe.SecretKey != ""
+}
+
+func (s *StripeService) WebhookEnabled() bool {
+	return s != nil && s.Enabled() && strings.TrimSpace(s.Config.Stripe.WebhookSecret) != ""
 }
 
 func (s *StripeService) PriceIDForPlan(plan string) string {
@@ -270,6 +275,16 @@ func (s *StripeService) getDefaultPaymentMethod(bc *models.BillingCustomer) (str
 
 // AddSubscriptionItem adds a resource to the user's subscription. Creates a subscription if one doesn't exist.
 func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, resourceType, resourceID, name, plan string) error {
+	// Idempotency: don't double-bill the same resource if a request is retried.
+	if existing, err := models.GetBillingItemByResource(resourceType, resourceID); err != nil {
+		return fmt.Errorf("failed to query existing billing item: %w", err)
+	} else if existing != nil {
+		if strings.TrimSpace(existing.Plan) != strings.TrimSpace(plan) {
+			return s.UpdateSubscriptionItemPlan(resourceType, resourceID, plan)
+		}
+		return nil
+	}
+
 	priceID := s.PriceIDForPlan(plan)
 	if priceID == "" {
 		return fmt.Errorf("no Stripe price configured for plan: %s", plan)
@@ -421,26 +436,77 @@ func (s *StripeService) UpdateSubscriptionItemPlan(resourceType, resourceID, new
 
 // HandleWebhookEvent verifies and dispatches a Stripe webhook event.
 func (s *StripeService) HandleWebhookEvent(payload []byte, signature string) error {
-	event, err := webhook.ConstructEvent(payload, signature, s.Config.Stripe.WebhookSecret)
+	// Stripe may send events using an API version (release train) that doesn't match the
+	// stripe-go library. Signature verification is still valid; we only rely on a small
+	// subset of stable fields, so we ignore API version mismatches here.
+	event, err := webhook.ConstructEventWithOptions(payload, signature, s.Config.Stripe.WebhookSecret, webhook.ConstructEventOptions{
+		IgnoreAPIVersionMismatch: true,
+	})
 	if err != nil {
-		return fmt.Errorf("webhook signature verification failed: %w", err)
+		return fmt.Errorf("%w: %w", ErrStripeWebhookSignature, err)
 	}
 
+	// Idempotency: Stripe can retry the same event multiple times (network errors, 5xx, timeouts).
+	// Our handlers are mostly idempotent, but recording processed IDs prevents noisy duplicate work.
+	if processed, err := s.webhookEventProcessed(event.ID); err != nil {
+		return fmt.Errorf("failed to check webhook idempotency: %w", err)
+	} else if processed {
+		return nil
+	}
+
+	var handleErr error
 	switch event.Type {
 	case "checkout.session.completed":
-		return s.handleCheckoutCompleted(event)
+		handleErr = s.handleCheckoutCompleted(event)
 	case "customer.subscription.created":
-		return s.handleSubscriptionUpdated(event)
+		handleErr = s.handleSubscriptionUpdated(event)
 	case "customer.subscription.updated":
-		return s.handleSubscriptionUpdated(event)
+		handleErr = s.handleSubscriptionUpdated(event)
 	case "customer.subscription.deleted":
-		return s.handleSubscriptionDeleted(event)
+		handleErr = s.handleSubscriptionDeleted(event)
 	case "invoice.payment_succeeded":
-		return s.handlePaymentSucceeded(event)
+		handleErr = s.handlePaymentSucceeded(event)
 	case "invoice.payment_failed":
-		return s.handlePaymentFailed(event)
+		handleErr = s.handlePaymentFailed(event)
+	}
+
+	if handleErr != nil {
+		return handleErr
+	}
+
+	if err := s.recordWebhookEventProcessed(event); err != nil {
+		// Don't fail the webhook due to dedupe bookkeeping.
+		log.Printf("Warning: failed to record stripe webhook event %s: %v", event.ID, err)
 	}
 	return nil
+}
+
+func (s *StripeService) webhookEventProcessed(eventID string) (bool, error) {
+	eventID = strings.TrimSpace(eventID)
+	if eventID == "" {
+		return false, nil
+	}
+
+	var exists bool
+	if err := database.DB.QueryRow("SELECT EXISTS (SELECT 1 FROM stripe_webhook_events WHERE event_id=$1)", eventID).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func (s *StripeService) recordWebhookEventProcessed(event stripe.Event) error {
+	id := strings.TrimSpace(event.ID)
+	if id == "" {
+		return nil
+	}
+	_, err := database.DB.Exec(
+		"INSERT INTO stripe_webhook_events (event_id, event_type, livemode, api_version, received_at, processed_at) VALUES ($1,$2,$3,$4,NOW(),NOW()) ON CONFLICT DO NOTHING",
+		id,
+		strings.TrimSpace(string(event.Type)),
+		event.Livemode,
+		strings.TrimSpace(event.APIVersion),
+	)
+	return err
 }
 
 func (s *StripeService) handleCheckoutCompleted(event stripe.Event) error {
@@ -454,7 +520,10 @@ func (s *StripeService) handleCheckoutCompleted(event stripe.Event) error {
 
 	bc, err := models.GetBillingCustomerByStripeID(sess.Customer.ID)
 	if err != nil || bc == nil {
-		return fmt.Errorf("billing customer not found for Stripe ID: %s", sess.Customer.ID)
+		// This can happen for events related to customers created outside RailPush or
+		// before a data migration. Don't fail the webhook (Stripe will retry).
+		log.Printf("Webhook: billing customer not found for Stripe ID: %s", sess.Customer.ID)
+		return nil
 	}
 
 	// Webhook event only includes IDs for nested objects, so we need to
@@ -468,20 +537,16 @@ func (s *StripeService) handleCheckoutCompleted(event stripe.Event) error {
 		} else if si.PaymentMethod != nil {
 			pmID := si.PaymentMethod.ID
 
-			// Fetch full payment method details
-			pm, err := paymentmethod.Get(pmID, nil)
-			if err != nil {
-				log.Printf("Warning: failed to fetch payment method %s: %v", pmID, err)
-			} else if pm.Card != nil {
-				bc.PaymentMethodLast4 = pm.Card.Last4
-				bc.PaymentMethodBrand = string(pm.Card.Brand)
+			// Use the expanded payment method details directly to avoid extra API calls.
+			if si.PaymentMethod.Card != nil {
+				bc.PaymentMethodLast4 = strings.TrimSpace(si.PaymentMethod.Card.Last4)
+				bc.PaymentMethodBrand = strings.TrimSpace(string(si.PaymentMethod.Card.Brand))
 			}
 
-			// Attach the payment method as the customer's default so subscriptions can charge it
-			_, err = paymentmethod.Attach(pmID, &stripe.PaymentMethodAttachParams{
+			// Ensure the payment method is attached (best-effort; Stripe may have already attached it).
+			if _, err := paymentmethod.Attach(pmID, &stripe.PaymentMethodAttachParams{
 				Customer: stripe.String(sess.Customer.ID),
-			})
-			if err != nil {
+			}); err != nil {
 				log.Printf("Warning: failed to attach payment method to customer: %v", err)
 			}
 

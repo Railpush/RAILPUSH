@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily RailPush Postgres backup
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=railpush-pg-backup.service
+
+[Install]
+WantedBy=timers.target
+

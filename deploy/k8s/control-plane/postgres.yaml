@@ -1,0 +1,118 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: railpush-postgres
+  namespace: railpush
+spec:
+  selector:
+    app: railpush-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: railpush-postgres
+  namespace: railpush
+spec:
+  serviceName: railpush-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: railpush-postgres
+  template:
+    metadata:
+      labels:
+        app: railpush-postgres
+    spec:
+      initContainers:
+        - name: tls-init
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              cp /tls-src/server.crt /tls/server.crt
+              cp /tls-src/server.key /tls/server.key
+              # Postgres in alpine images typically runs as uid/gid 70.
+              chown 70:70 /tls/server.crt /tls/server.key
+              chmod 0644 /tls/server.crt
+              chmod 0600 /tls/server.key
+          volumeMounts:
+            - name: tls-src
+              mountPath: /tls-src
+              readOnly: true
+            - name: tls
+              mountPath: /tls
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          args:
+            - postgres
+            - -c
+            - ssl=on
+            - -c
+            - ssl_cert_file=/etc/postgres-ssl/server.crt
+            - -c
+            - ssl_key_file=/etc/postgres-ssl/server.key
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: railpush
+            - name: POSTGRES_USER
+              value: railpush
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: railpush-secrets
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: tls
+              mountPath: /etc/postgres-ssl
+              readOnly: true
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U railpush -d railpush
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U railpush -d railpush
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+      volumes:
+        - name: tls-src
+          secret:
+            secretName: railpush-postgres-tls
+        - name: tls
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 30Gi

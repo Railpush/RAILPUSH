@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useLocation } from 'react-router-dom';
 import { Search, Maximize2, Minimize2, AlertTriangle, XCircle, RefreshCw } from 'lucide-react';
 import { logs as logsApi, connectLogStream } from '../lib/api';
 import { formatTime } from '../lib/utils';
@@ -14,6 +14,7 @@ interface DeployLog {
 
 export function ServiceLogs() {
   const { serviceId } = useParams<{ serviceId: string }>();
+  const location = useLocation();
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [deployLogs, setDeployLogs] = useState<DeployLog[]>([]);
   const [search, setSearch] = useState('');
@@ -23,6 +24,13 @@ export function ServiceLogs() {
   const [logType, setLogType] = useState<'runtime' | 'deploy'>('runtime');
   const containerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
+
+  // Allow linking directly to deploy logs (e.g. /services/:id/logs?type=deploy).
+  useEffect(() => {
+    const type = new URLSearchParams(location.search).get('type');
+    if (type === 'deploy') setLogType('deploy');
+    if (type === 'runtime') setLogType('runtime');
+  }, [location.search]);
 
   const fetchLogs = () => {
     if (!serviceId) return;
@@ -37,7 +45,7 @@ export function ServiceLogs() {
             setEntries([]);
           }
         })
-        .catch(() => {})
+        .catch(() => { /* ignore */ })
         .finally(() => setLoading(false));
     } else {
       logsApi.query(serviceId, { limit: 10, type: 'deploy' })
@@ -49,7 +57,7 @@ export function ServiceLogs() {
             setDeployLogs([]);
           }
         })
-        .catch(() => {})
+        .catch(() => { /* ignore */ })
         .finally(() => setLoading(false));
     }
   };
@@ -63,7 +71,7 @@ export function ServiceLogs() {
         wsRef.current = connectLogStream(serviceId, (entry) => {
           setEntries((prev) => [...prev, entry].slice(-1000));
         });
-      } catch {}
+      } catch { /* ignore */ }
     }
 
     return () => { wsRef.current?.close(); };

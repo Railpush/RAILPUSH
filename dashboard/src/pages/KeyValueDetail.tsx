@@ -39,7 +39,7 @@ export function KeyValueDetail() {
 
   const handleDelete = async () => {
     if (!kv || deleting) return;
-    if (!window.confirm(`Delete key value store \"${kv.name}\"? This action cannot be undone.`)) return;
+    if (!window.confirm(`Delete key value store "${kv.name}"? This action cannot be undone.`)) return;
 
     setDeleting(true);
     try {

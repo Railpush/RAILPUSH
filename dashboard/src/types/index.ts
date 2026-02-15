@@ -52,6 +52,7 @@ export interface Service {
   project_id: string | null;
   environment_id: string | null;
   name: string;
+  subdomain?: string;
   public_url?: string;
   type: ServiceType;
   runtime: Runtime;
@@ -394,4 +395,263 @@ export interface DomainSearchResult {
   available: boolean;
   price_cents: number;
   currency: string;
+}
+
+// Ops / Incidents (Alertmanager)
+export interface Incident {
+  id: string;
+  status: string;
+  receiver: string;
+  alertname: string;
+  severity: string;
+  namespace: string;
+  summary: string;
+  description: string;
+  runbook_url: string;
+  alerts_count: number;
+  latest_event_id: string;
+  latest_received_at: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  event_count: number;
+
+  acknowledged_at?: string | null;
+  acknowledged_by?: string | null;
+  ack_note?: string | null;
+  silence_id?: string | null;
+  silenced_until?: string | null;
+  silenced_by?: string | null;
+}
+
+export interface IncidentEvent {
+  id: string;
+  received_at: string;
+  status: string;
+  receiver: string;
+  alerts_count: number;
+}
+
+export interface IncidentDetail extends Incident {
+  latest_payload: unknown;
+  events: IncidentEvent[];
+}
+
+// Ops / Dashboard
+export interface OpsOverview {
+  users_total: number;
+  workspaces_total: number;
+  services_total: number;
+
+  deploys_pending: number;
+  deploys_building: number;
+  deploys_deploying: number;
+  deploys_failed_24h: number;
+
+  email_pending: number;
+  email_retry: number;
+  email_dead: number;
+}
+
+export interface OpsUserItem {
+  id: string;
+  username: string;
+  email: string;
+  role: string;
+  created_at: string;
+}
+
+export interface OpsWorkspaceItem {
+  id: string;
+  name: string;
+  owner_id: string;
+  owner_email: string;
+  created_at: string;
+}
+
+export interface OpsServiceItem {
+  id: string;
+  workspace_id: string;
+  workspace_name: string;
+  name: string;
+  subdomain: string;
+  type: string;
+  runtime: string;
+  status: string;
+  repo_url: string;
+  branch: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OpsDeployItem {
+  id: string;
+  service_id: string;
+  service_name: string;
+  status: string;
+  trigger: string;
+  branch: string;
+  commit_sha: string;
+  commit_message: string;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  last_error?: string | null;
+}
+
+export interface OpsEmailOutboxItem {
+  id: string;
+  message_type: string;
+  to_email: string;
+  subject: string;
+  status: string;
+  attempts: number;
+  last_error?: string | null;
+  next_attempt_at: string;
+  created_at: string;
+  sent_at?: string | null;
+}
+
+// Support (customer-facing)
+export interface SupportTicket {
+  id: string;
+  workspace_id: string;
+  created_by: string;
+  subject: string;
+  status: string;
+  priority: string;
+  assigned_to: string;
+  last_customer_reply_at?: string | null;
+  last_ops_reply_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SupportTicketMessage {
+  id: string;
+  ticket_id: string;
+  author_id: string;
+  body: string;
+  is_internal: boolean;
+  created_at: string;
+}
+
+// Ops: Billing
+export interface OpsBillingCustomerItem {
+  id: string;
+  user_id: string;
+  email: string;
+  username: string;
+  stripe_customer_id: string;
+  stripe_subscription_id: string;
+  subscription_status: string;
+  payment_method_brand: string;
+  payment_method_last4: string;
+  items_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OpsBillingItem {
+  id: string;
+  resource_type: string;
+  resource_id: string;
+  resource_name: string;
+  plan: string;
+  stripe_price_id: string;
+  stripe_subscription_item_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OpsBillingCustomerDetail {
+  customer: OpsBillingCustomerItem;
+  items: OpsBillingItem[];
+}
+
+// Ops: Tickets
+export interface OpsTicketItem extends SupportTicket {
+  workspace_name: string;
+  created_by_email: string;
+  created_by_username: string;
+}
+
+export interface OpsTicketDetail {
+  ticket: OpsTicketItem;
+  messages: SupportTicketMessage[];
+}
+
+// Ops: Credits
+export interface OpsWorkspaceCreditItem {
+  workspace_id: string;
+  workspace_name: string;
+  owner_email: string;
+  balance_cents: number;
+  created_at: string;
+}
+
+export interface WorkspaceCreditLedgerEntry {
+  id: string;
+  workspace_id: string;
+  amount_cents: number;
+  reason: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface OpsWorkspaceCreditDetail {
+  workspace_id: string;
+  workspace_name: string;
+  balance_cents: number;
+  ledger: WorkspaceCreditLedgerEntry[];
+}
+
+// Ops: Technical / Kube
+export interface OpsKubeDeploymentSummary {
+  name: string;
+  desired_replicas: number;
+  updated_replicas: number;
+  ready_replicas: number;
+  available_replicas: number;
+  age_seconds: number;
+}
+
+export interface OpsKubePodSummary {
+  name: string;
+  phase: string;
+  ready: boolean;
+  restarts: number;
+  node_name: string;
+  age_seconds: number;
+}
+
+export interface OpsKubeSummary {
+  enabled: boolean;
+  namespace: string;
+  deployments?: OpsKubeDeploymentSummary[];
+  pods?: OpsKubePodSummary[];
+  error?: string;
+}
+
+// Ops: Performance
+export interface OpsPerformanceSummary {
+  window_hours: number;
+  deploys: {
+    total: number;
+    pending: number;
+    building: number;
+    deploying: number;
+    live: number;
+    failed: number;
+  };
+  queue_wait_seconds: {
+    avg?: number;
+    p50?: number;
+    p95?: number;
+  };
+  deploy_duration_seconds: {
+    avg?: number;
+    p50?: number;
+    p95?: number;
+  };
+  top_failures: Array<{ service_id: string; service_name: string; failures: number }>;
 }

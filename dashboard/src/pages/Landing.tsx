@@ -20,6 +20,8 @@ import {
 import { SEO } from '../components/SEO';
 import { Logo } from '../components/Logo';
 import { PLAN_SPECS } from '../lib/plans';
+import { auth } from '../lib/api';
+import { RailpushHeroBackground } from '../components/RailpushHeroBackground';
 
 // ─── Scroll Reveal Hook ────────────────────────────────────────────
 function useScrollReveal() {
@@ -236,14 +238,26 @@ export function Landing() {
       </nav>
 
       {/* ── Hero ─────────────────────────────────────── */}
-      <section className="relative min-h-screen flex items-center justify-center animate-aurora overflow-hidden">
-        {/* Decorative orbs */}
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-brand/20 rounded-full blur-[128px] animate-float" />
-        <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-brand-purple/15 rounded-full blur-[128px] animate-float delay-300" />
+      <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-[#020617] theme-dark">
+        <RailpushHeroBackground className="absolute inset-0 pointer-events-none" />
+        <div
+          className="absolute top-[-30%] left-1/2 -translate-x-1/2 w-[1200px] h-[1000px] blur-[100px] pointer-events-none"
+          style={{
+            background:
+              'radial-gradient(circle, rgba(99,102,241,0.15) 0%, rgba(148,163,184,0.05) 50%, transparent 80%)',
+          }}
+        />
+        <div
+          className="absolute inset-x-0 bottom-0 h-28 pointer-events-none"
+          style={{
+            background:
+              'linear-gradient(to bottom, rgba(2,6,23,0) 0%, var(--color-surface-primary) 100%)',
+          }}
+        />
 
         <div className="relative z-10 max-w-4xl mx-auto px-6 text-center pt-24">
           {/* Badge */}
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-border-default bg-surface-secondary/70 backdrop-blur-sm mb-8 animate-slide-up-landing delay-100">
+          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-border-default bg-surface-secondary/60 backdrop-blur-sm mb-8 animate-slide-up-landing delay-100">
             <Radio className="w-3.5 h-3.5 text-brand" />
             <span className="text-xs font-medium text-content-secondary">
               Unified platform for modern apps
@@ -271,7 +285,7 @@ export function Landing() {
               <ArrowRight className="w-4 h-4" />
             </button>
             <button
-              onClick={() => navigate('/login')}
+              onClick={() => auth.loginGithub()}
               className="inline-flex items-center gap-2 border border-border-default hover:border-border-hover text-content-primary font-medium px-6 py-3 rounded-lg transition-colors text-sm bg-surface-secondary/40"
             >
               <Github className="w-4 h-4" />
@@ -286,7 +300,7 @@ export function Landing() {
 
           {/* Terminal mockup */}
           <div className="max-w-2xl mx-auto animate-slide-up-landing delay-500">
-            <div className="rounded-xl border border-border-default bg-surface-secondary/80 backdrop-blur-sm overflow-hidden shadow-2xl shadow-black/40">
+            <div className="rounded-xl border border-border-default bg-surface-secondary/70 backdrop-blur-sm overflow-hidden shadow-2xl shadow-black/40">
               {/* Title bar */}
               <div className="flex items-center gap-2 px-4 py-3 border-b border-border-subtle">
                 <div className="w-3 h-3 rounded-full bg-[#FF5F57]" />

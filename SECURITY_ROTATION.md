@@ -66,3 +66,28 @@ Expected:
 - env file permissions `-rw-------`
 - service status `active`
 - `/api/v1/auth/user` returns `401` without token
+
+## 5. Kubernetes: Rotate Alertmanager -> RailPush Webhook Token
+
+This rotates the bearer token used by Alertmanager to deliver alerts to the RailPush self-hosted webhook receiver.
+
+Run on `cpu` (or any node with kubectl access):
+
+```bash
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+NEW_TOKEN="$(openssl rand -hex 32)"
+
+kubectl -n monitoring create secret generic alertmanager-webhook-token \
+  --from-literal=token="$NEW_TOKEN" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+NEW_TOKEN_B64="$(printf %s "$NEW_TOKEN" | base64 | tr -d '\n')"
+kubectl -n railpush patch secret railpush-secrets -p "{\"data\":{\"ALERT_WEBHOOK_TOKEN\":\"$NEW_TOKEN_B64\"}}"
+
+unset NEW_TOKEN NEW_TOKEN_B64
+
+# Optional but recommended: restart pods so env/config is reloaded immediately.
+kubectl -n railpush rollout restart deploy/railpush-control-plane
+kubectl -n monitoring delete pod -l app.kubernetes.io/name=alertmanager
+```

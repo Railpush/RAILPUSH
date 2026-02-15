@@ -1,0 +1,13 @@
+.git
+.github
+.claude
+.DS_Store
+
+**/node_modules
+**/dist
+**/.vite
+
+*.log
+*.env
+*.env.*
+
