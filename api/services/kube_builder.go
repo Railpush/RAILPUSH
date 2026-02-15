@@ -10,6 +10,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/railpush/api/models"
@@ -268,6 +269,24 @@ if [ ! -f "$DOCKERFILE_PATH" ]; then
 fi
 `)
 
+		// Build jobs must be resource-bounded to avoid starving the cluster.
+		cloneRequests := corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("100m"),
+			corev1.ResourceMemory: resource.MustParse("128Mi"),
+		}
+		cloneLimits := corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("500m"),
+			corev1.ResourceMemory: resource.MustParse("512Mi"),
+		}
+		kanikoRequests := corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("500m"),
+			corev1.ResourceMemory: resource.MustParse("1Gi"),
+		}
+		kanikoLimits := corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("4"),
+			corev1.ResourceMemory: resource.MustParse("8Gi"),
+		}
+
 		job := &batchv1.Job{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      jobName,
@@ -298,6 +317,10 @@ fi
 								VolumeMounts: []corev1.VolumeMount{
 									{Name: "workspace", MountPath: "/workspace"},
 								},
+								Resources: corev1.ResourceRequirements{
+									Requests: cloneRequests,
+									Limits:   cloneLimits,
+								},
 							},
 						},
 						Containers: []corev1.Container{
@@ -308,11 +331,14 @@ fi
 									"--context=dir://" + effectiveDir,
 									"--dockerfile=" + dfRelForKaniko,
 									"--destination=" + destImage,
-									"--insecure",
 									"--insecure-registry=" + registryHost,
 								},
 								VolumeMounts: []corev1.VolumeMount{
 									{Name: "workspace", MountPath: "/workspace"},
+								},
+								Resources: corev1.ResourceRequirements{
+									Requests: kanikoRequests,
+									Limits:   kanikoLimits,
 								},
 							},
 						},

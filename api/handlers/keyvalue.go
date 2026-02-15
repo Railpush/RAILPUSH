@@ -63,8 +63,11 @@ func (h *KeyValueHandler) CreateKeyValue(w http.ResponseWriter, r *http.Request)
 	if kv.Port == 0 {
 		kv.Port = 6379
 	}
-	if kv.MaxmemoryPolicy == "" {
-		kv.MaxmemoryPolicy = "allkeys-lru"
+	if p, ok := services.NormalizeRedisMaxmemoryPolicy(kv.MaxmemoryPolicy); ok {
+		kv.MaxmemoryPolicy = p
+	} else {
+		utils.RespondError(w, http.StatusBadRequest, "invalid maxmemory_policy")
+		return
 	}
 	kv.Host = "localhost"
 

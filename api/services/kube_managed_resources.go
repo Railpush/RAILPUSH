@@ -276,7 +276,8 @@ func (k *KubeDeployer) EnsureManagedDatabase(db *models.ManagedDatabase, passwor
 							},
 							ReadinessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
-									Exec: &corev1.ExecAction{Command: []string{"sh", "-lc", fmt.Sprintf("pg_isready -U %s -d %s", user, dbName)}},
+									// Pass args directly (avoid shell interpolation).
+									Exec: &corev1.ExecAction{Command: []string{"pg_isready", "-U", user, "-d", dbName}},
 								},
 								PeriodSeconds:    5,
 								TimeoutSeconds:   3,
@@ -284,7 +285,8 @@ func (k *KubeDeployer) EnsureManagedDatabase(db *models.ManagedDatabase, passwor
 							},
 							LivenessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
-									Exec: &corev1.ExecAction{Command: []string{"sh", "-lc", fmt.Sprintf("pg_isready -U %s -d %s", user, dbName)}},
+									// Pass args directly (avoid shell interpolation).
+									Exec: &corev1.ExecAction{Command: []string{"pg_isready", "-U", user, "-d", dbName}},
 								},
 								PeriodSeconds:       10,
 								TimeoutSeconds:      3,
@@ -444,6 +446,7 @@ func (k *KubeDeployer) EnsureManagedKeyValue(kv *models.ManagedKeyValue, passwor
 
 	replicas := int32(1)
 	requests, limits := kubeResourcesForPlan(kv.Plan)
+	policy, _ := NormalizeRedisMaxmemoryPolicy(kv.MaxmemoryPolicy)
 
 	ss := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -472,7 +475,8 @@ func (k *KubeDeployer) EnsureManagedKeyValue(kv *models.ManagedKeyValue, passwor
 							},
 							Command: []string{"sh", "-lc"},
 							Args: []string{
-								fmt.Sprintf("exec redis-server --appendonly yes --requirepass \"$REDIS_PASSWORD\" --maxmemory-policy %s", strings.TrimSpace(kv.MaxmemoryPolicy)),
+								// `policy` is validated/normalized (avoid shell injection via user input).
+								fmt.Sprintf("exec redis-server --appendonly yes --requirepass \"$REDIS_PASSWORD\" --maxmemory-policy %s", policy),
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "data", MountPath: "/data"},
