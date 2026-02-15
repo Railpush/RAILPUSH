@@ -67,7 +67,13 @@ func (h *DatabaseHandler) CreateDatabase(w http.ResponseWriter, r *http.Request)
 		db.PGVersion = 16
 	}
 	if db.Plan == "" {
-		db.Plan = "starter"
+		db.Plan = services.PlanStarter
+	}
+	if p, ok := services.NormalizePlan(db.Plan); ok {
+		db.Plan = p
+	} else {
+		utils.RespondError(w, http.StatusBadRequest, "invalid plan")
+		return
 	}
 	if db.Port == 0 {
 		db.Port = 5432

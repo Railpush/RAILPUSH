@@ -58,7 +58,13 @@ func (h *KeyValueHandler) CreateKeyValue(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if kv.Plan == "" {
-		kv.Plan = "starter"
+		kv.Plan = services.PlanStarter
+	}
+	if p, ok := services.NormalizePlan(kv.Plan); ok {
+		kv.Plan = p
+	} else {
+		utils.RespondError(w, http.StatusBadRequest, "invalid plan")
+		return
 	}
 	if kv.Port == 0 {
 		kv.Port = 6379

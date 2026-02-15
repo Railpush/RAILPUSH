@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -297,6 +298,40 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			return
 		}
 		failMsg = msg
+	}
+
+	// Stripe billing: blueprint sync can create paid resources, so we must bill (or block) here too.
+	var stripeSvc *services.StripeService
+	if h != nil && h.Config != nil {
+		if s := services.NewStripeService(h.Config); s != nil && s.Enabled() {
+			stripeSvc = s
+		}
+	}
+	var billingCustomer *models.BillingCustomer
+	getBillingCustomer := func() (*models.BillingCustomer, error) {
+		if stripeSvc == nil {
+			return nil, nil
+		}
+		if billingCustomer != nil {
+			return billingCustomer, nil
+		}
+		ws, err := models.GetWorkspace(bp.WorkspaceID)
+		if err != nil || ws == nil || strings.TrimSpace(ws.OwnerID) == "" {
+			return nil, fmt.Errorf("workspace not found")
+		}
+		owner, err := models.GetUserByID(ws.OwnerID)
+		if err != nil || owner == nil || strings.TrimSpace(owner.Email) == "" {
+			return nil, fmt.Errorf("workspace owner not found")
+		}
+		bc, err := stripeSvc.EnsureCustomer(owner.ID, owner.Email)
+		if err != nil || bc == nil {
+			if err == nil {
+				err = fmt.Errorf("billing customer not found")
+			}
+			return nil, err
+		}
+		billingCustomer = bc
+		return billingCustomer, nil
 	}
 
 	rollback := func() {
@@ -598,7 +633,13 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			DBName: dbName, Username: dbUser,
 		}
 		if db.Plan == "" {
-			db.Plan = "starter"
+			db.Plan = services.PlanStarter
+		}
+		if p, ok := services.NormalizePlan(db.Plan); ok {
+			db.Plan = p
+		} else {
+			fail("invalid plan for database " + ddef.Name)
+			return
 		}
 		if db.PGVersion == 0 {
 			db.PGVersion = 16
@@ -611,6 +652,24 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		if err := models.CreateManagedDatabase(db); err != nil {
 			fail("failed to create database " + ddef.Name)
 			return
+		}
+		if stripeSvc != nil && db.Plan != services.PlanFree {
+			bc, err := getBillingCustomer()
+			if err != nil || bc == nil {
+				if err == nil {
+					err = fmt.Errorf("billing customer not found")
+				}
+				fail("billing error: " + err.Error())
+				return
+			}
+			if err := stripeSvc.AddSubscriptionItem(bc, "database", db.ID, db.Name, db.Plan); err != nil {
+				if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
+					fail("payment method required. Please add a default payment method in billing settings.")
+					return
+				}
+				fail("billing error: " + err.Error())
+				return
+			}
 		}
 		st.createdDBIDs = append(st.createdDBIDs, db.ID)
 		dbProvision = append(dbProvision, pendingDBProvision{db: db, password: pw})
@@ -644,7 +703,13 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			Plan: kvdef.Plan, MaxmemoryPolicy: kvdef.MaxmemoryPolicy,
 		}
 		if kv.Plan == "" {
-			kv.Plan = "starter"
+			kv.Plan = services.PlanStarter
+		}
+		if p, ok := services.NormalizePlan(kv.Plan); ok {
+			kv.Plan = p
+		} else {
+			fail("invalid plan for key-value store " + kvdef.Name)
+			return
 		}
 		if kv.MaxmemoryPolicy == "" {
 			kv.MaxmemoryPolicy = "allkeys-lru"
@@ -657,6 +722,24 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		if err := models.CreateManagedKeyValue(kv); err != nil {
 			fail("failed to create key-value store " + kvdef.Name)
 			return
+		}
+		if stripeSvc != nil && kv.Plan != services.PlanFree {
+			bc, err := getBillingCustomer()
+			if err != nil || bc == nil {
+				if err == nil {
+					err = fmt.Errorf("billing customer not found")
+				}
+				fail("billing error: " + err.Error())
+				return
+			}
+			if err := stripeSvc.AddSubscriptionItem(bc, "keyvalue", kv.ID, kv.Name, kv.Plan); err != nil {
+				if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
+					fail("payment method required. Please add a default payment method in billing settings.")
+					return
+				}
+				fail("billing error: " + err.Error())
+				return
+			}
 		}
 		st.createdKVIDs = append(st.createdKVIDs, kv.ID)
 		kvProvision = append(kvProvision, pendingKVProvision{kv: kv, password: pw})
@@ -741,7 +824,13 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			svc.Port = 10000
 		}
 		if svc.Plan == "" {
-			svc.Plan = "starter"
+			svc.Plan = services.PlanStarter
+		}
+		if p, ok := services.NormalizePlan(svc.Plan); ok {
+			svc.Plan = p
+		} else {
+			fail("invalid plan for service " + serviceName)
+			return
 		}
 		if sdef.NumInstances > 0 {
 			svc.Instances = sdef.NumInstances
@@ -754,6 +843,24 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			if err := models.CreateService(svc); err != nil {
 				fail("failed to create service " + serviceName)
 				return
+			}
+			if stripeSvc != nil && svc.Plan != services.PlanFree {
+				bc, err := getBillingCustomer()
+				if err != nil || bc == nil {
+					if err == nil {
+						err = fmt.Errorf("billing customer not found")
+					}
+					fail("billing error: " + err.Error())
+					return
+				}
+				if err := stripeSvc.AddSubscriptionItem(bc, "service", svc.ID, svc.Name, svc.Plan); err != nil {
+					if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
+						fail("payment method required. Please add a default payment method in billing settings.")
+						return
+					}
+					fail("billing error: " + err.Error())
+					return
+				}
 			}
 			created = true
 			st.createdServices = append(st.createdServices, svc)
@@ -786,7 +893,13 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			svc.Schedule = sdef.Schedule
 			svc.Plan = sdef.Plan
 			if svc.Plan == "" {
-				svc.Plan = "starter"
+				svc.Plan = services.PlanStarter
+			}
+			if p, ok := services.NormalizePlan(svc.Plan); ok {
+				svc.Plan = p
+			} else {
+				fail("invalid plan for service " + serviceName)
+				return
 			}
 			if sdef.NumInstances > 0 {
 				svc.Instances = sdef.NumInstances
@@ -797,6 +910,37 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			if err := models.UpdateService(svc); err != nil {
 				fail("failed to update service " + serviceName)
 				return
+			}
+			if stripeSvc != nil {
+				oldPlanEffective := strings.ToLower(strings.TrimSpace(before.Plan))
+				if p, ok := services.NormalizePlan(before.Plan); ok {
+					oldPlanEffective = p
+				}
+				if svc.Plan != oldPlanEffective {
+					if svc.Plan == services.PlanFree {
+						if err := stripeSvc.RemoveSubscriptionItem("service", svc.ID); err != nil {
+							fail("billing error: " + err.Error())
+							return
+						}
+					} else {
+						bc, err := getBillingCustomer()
+						if err != nil || bc == nil {
+							if err == nil {
+								err = fmt.Errorf("billing customer not found")
+							}
+							fail("billing error: " + err.Error())
+							return
+						}
+						if err := stripeSvc.AddSubscriptionItem(bc, "service", svc.ID, svc.Name, svc.Plan); err != nil {
+							if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
+								fail("payment method required. Please add a default payment method in billing settings.")
+								return
+							}
+							fail("billing error: " + err.Error())
+							return
+						}
+					}
+				}
 			}
 			st.updatedServices = append(st.updatedServices, before)
 		}

@@ -169,7 +169,13 @@ func (h *ServiceHandler) CreateService(w http.ResponseWriter, r *http.Request) {
 		svc.Port = 10000
 	}
 	if svc.Plan == "" {
-		svc.Plan = "starter"
+		svc.Plan = services.PlanStarter
+	}
+	if p, ok := services.NormalizePlan(svc.Plan); ok {
+		svc.Plan = p
+	} else {
+		utils.RespondError(w, http.StatusBadRequest, "invalid plan")
+		return
 	}
 	if svc.Instances == 0 {
 		svc.Instances = 1
@@ -292,7 +298,13 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	oldInstances := svc.Instances
-	oldPlan := svc.Plan
+	oldPlanRaw := svc.Plan
+	oldPlanEffective := strings.ToLower(strings.TrimSpace(oldPlanRaw))
+	if p, ok := services.NormalizePlan(oldPlanRaw); ok {
+		oldPlanEffective = p
+	}
+	planProvided := false
+	desiredPlan := oldPlanEffective
 	var updates map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
@@ -322,7 +334,13 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		svc.AutoDeploy = v
 	}
 	if v, ok := updates["plan"].(string); ok {
-		svc.Plan = v
+		planProvided = true
+		if p, ok := services.NormalizePlan(v); ok {
+			desiredPlan = p
+		} else {
+			utils.RespondError(w, http.StatusBadRequest, "invalid plan")
+			return
+		}
 	}
 	if v, ok := updates["instances"].(float64); ok {
 		svc.Instances = int(v)
@@ -398,35 +416,50 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	if svc.Instances < 1 {
 		svc.Instances = 1
 	}
+
+	newPlanEffective := oldPlanEffective
+	if planProvided {
+		newPlanEffective = desiredPlan
+	}
+
+	// Gate plan changes on Stripe success so users cannot upgrade resources without billing.
+	if planProvided && newPlanEffective != oldPlanEffective && h.Stripe.Enabled() {
+		if newPlanEffective == services.PlanFree {
+			if err := h.Stripe.RemoveSubscriptionItem("service", svc.ID); err != nil {
+				utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
+				return
+			}
+		} else {
+			user, err := models.GetUserByID(userID)
+			if err != nil || user == nil {
+				utils.RespondError(w, http.StatusInternalServerError, "failed to get user")
+				return
+			}
+			bc, err := h.Stripe.EnsureCustomer(userID, user.Email)
+			if err != nil || bc == nil {
+				if err == nil {
+					err = fmt.Errorf("billing customer not found")
+				}
+				utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
+				return
+			}
+			if err := h.Stripe.AddSubscriptionItem(bc, "service", svc.ID, svc.Name, newPlanEffective); err != nil {
+				if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
+					utils.RespondError(w, http.StatusPaymentRequired, "payment method required. Please add a default payment method in billing settings.")
+					return
+				}
+				utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
+				return
+			}
+		}
+	}
+
+	if planProvided {
+		svc.Plan = newPlanEffective
+	}
 	if err := models.UpdateService(svc); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to update service")
 		return
-	}
-
-	// Handle plan changes in Stripe
-	if svc.Plan != oldPlan && h.Stripe.Enabled() {
-		if oldPlan == "free" && svc.Plan != "free" {
-			// Switching from free to paid: add subscription item
-			user, _ := models.GetUserByID(userID)
-			if user != nil {
-				bc, _ := h.Stripe.EnsureCustomer(userID, user.Email)
-				if bc != nil {
-					if err := h.Stripe.AddSubscriptionItem(bc, "service", svc.ID, svc.Name, svc.Plan); err != nil {
-						log.Printf("Warning: failed to add billing for plan change on service %s: %v", svc.ID, err)
-					}
-				}
-			}
-		} else if oldPlan != "free" && svc.Plan == "free" {
-			// Switching from paid to free: remove subscription item
-			if err := h.Stripe.RemoveSubscriptionItem("service", svc.ID); err != nil {
-				log.Printf("Warning: failed to remove billing for plan change on service %s: %v", svc.ID, err)
-			}
-		} else if oldPlan != "free" && svc.Plan != "free" {
-			// Switching between paid plans: update subscription item
-			if err := h.Stripe.UpdateSubscriptionItemPlan("service", svc.ID, svc.Plan); err != nil {
-				log.Printf("Warning: failed to update billing plan for service %s: %v", svc.ID, err)
-			}
-		}
 	}
 
 	// Best-effort: apply scaling/resource changes immediately for Kubernetes runtimes.
@@ -436,7 +469,7 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		isKubeDeployed := strings.HasPrefix(strings.TrimSpace(svc.ContainerID), "k8s:")
 		if isKubeDeployed && svcType != "cron" && svcType != "cron_job" {
 			if kd, err := h.Worker.GetKubeDeployer(); err == nil && kd != nil {
-				if oldPlan != svc.Plan {
+				if planProvided && newPlanEffective != oldPlanEffective {
 					if err := kd.UpdateServiceDeploymentResources(svc); err != nil {
 						log.Printf("WARNING: k8s update resources failed service=%s: %v", svc.ID, err)
 					}
