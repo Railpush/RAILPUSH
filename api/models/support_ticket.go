@@ -33,7 +33,7 @@ type SupportTicketMessage struct {
 func CreateSupportTicket(t *SupportTicket) error {
 	return database.DB.QueryRow(
 		`INSERT INTO support_tickets (workspace_id, created_by, subject, status, priority, assigned_to)
-		 VALUES (NULLIF($1,''), $2, $3, COALESCE(NULLIF($4,''), 'open'), COALESCE(NULLIF($5,''), 'normal'), NULLIF($6,''))
+		 VALUES (NULLIF($1,'')::uuid, $2, $3, COALESCE(NULLIF($4,''), 'open'), COALESCE(NULLIF($5,''), 'normal'), NULLIF($6,'')::uuid)
 		 RETURNING id, created_at, updated_at`,
 		t.WorkspaceID, t.CreatedBy, t.Subject, t.Status, t.Priority, t.AssignedTo,
 	).Scan(&t.ID, &t.CreatedAt, &t.UpdatedAt)
@@ -109,7 +109,7 @@ func ListSupportTicketsForUser(userID string, limit, offset int) ([]SupportTicke
 func CreateSupportTicketMessage(m *SupportTicketMessage) error {
 	return database.DB.QueryRow(
 		`INSERT INTO support_ticket_messages (ticket_id, author_id, body, is_internal)
-		 VALUES ($1, NULLIF($2,''), $3, $4)
+		 VALUES ($1, NULLIF($2,'')::uuid, $3, $4)
 		 RETURNING id, created_at`,
 		m.TicketID, m.AuthorID, m.Body, m.IsInternal,
 	).Scan(&m.ID, &m.CreatedAt)
@@ -148,7 +148,7 @@ func UpdateSupportTicketOpsFields(ticketID, status, priority, assignedTo string)
 		`UPDATE support_tickets
 		    SET status = COALESCE(NULLIF($2,''), status),
 		        priority = COALESCE(NULLIF($3,''), priority),
-		        assigned_to = NULLIF($4,''),
+		        assigned_to = NULLIF($4,'')::uuid,
 		        updated_at = NOW()
 		  WHERE id=$1`,
 		ticketID, status, priority, assignedTo,
@@ -177,4 +177,3 @@ func TouchSupportTicketOpsReply(ticketID string) error {
 	)
 	return err
 }
-

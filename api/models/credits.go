@@ -18,7 +18,7 @@ type WorkspaceCreditLedgerEntry struct {
 func CreateWorkspaceCreditEntry(e *WorkspaceCreditLedgerEntry) error {
 	return database.DB.QueryRow(
 		`INSERT INTO workspace_credit_ledger (workspace_id, amount_cents, reason, created_by)
-		 VALUES ($1, $2, COALESCE(NULLIF($3,''), ''), NULLIF($4,''))
+		 VALUES ($1, $2, COALESCE(NULLIF($3,''), ''), NULLIF($4,'')::uuid)
 		 RETURNING id, created_at`,
 		e.WorkspaceID, e.AmountCents, e.Reason, e.CreatedBy,
 	).Scan(&e.ID, &e.CreatedAt)
@@ -50,4 +50,3 @@ func ListWorkspaceCreditLedger(workspaceID string, limit int) ([]WorkspaceCredit
 	}
 	return out, nil
 }
-

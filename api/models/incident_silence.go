@@ -43,7 +43,7 @@ func CreateIncidentSilence(s *IncidentSilence) error {
 		`INSERT INTO incident_silences
 			(group_key, silence_id, scope, created_by, comment, matchers, starts_at, ends_at)
 		 VALUES
-			($1, $2, $3, NULLIF($4,''), NULLIF($5,''), $6::jsonb, $7, $8)
+			($1, $2, $3, NULLIF($4,'')::uuid, NULLIF($5,''), $6::jsonb, $7, $8)
 		 RETURNING id, created_at`,
 		s.GroupKey,
 		s.SilenceID,
@@ -108,4 +108,3 @@ func GetLatestActiveIncidentSilence(groupKey string) (*IncidentSilence, error) {
 	s.Matchers = json.RawMessage(matchersText)
 	return &s, nil
 }
-
