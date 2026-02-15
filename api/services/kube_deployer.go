@@ -281,6 +281,9 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 		},
 	}
 
+	// Compatibility-first hardening for customer pods.
+	applyCompatSecurityContext(&dep.Spec.Template.Spec, &dep.Spec.Template.Spec.Containers[0])
+
 	// Probes for HTTP-ish service types only.
 	switch serviceType {
 	case "web", "static", "pserv":
