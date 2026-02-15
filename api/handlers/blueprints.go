@@ -653,6 +653,8 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			fail("failed to create database " + ddef.Name)
 			return
 		}
+		// Track for rollback before any external side-effects (e.g. billing).
+		st.createdDBIDs = append(st.createdDBIDs, db.ID)
 		if stripeSvc != nil && db.Plan != services.PlanFree {
 			bc, err := getBillingCustomer()
 			if err != nil || bc == nil {
@@ -671,7 +673,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				return
 			}
 		}
-		st.createdDBIDs = append(st.createdDBIDs, db.ID)
+
 		dbProvision = append(dbProvision, pendingDBProvision{db: db, password: pw})
 		linkBRs = append(linkBRs, models.BlueprintResource{
 			BlueprintID: bp.ID, ResourceType: "database",
@@ -723,6 +725,8 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			fail("failed to create key-value store " + kvdef.Name)
 			return
 		}
+		// Track for rollback before any external side-effects (e.g. billing).
+		st.createdKVIDs = append(st.createdKVIDs, kv.ID)
 		if stripeSvc != nil && kv.Plan != services.PlanFree {
 			bc, err := getBillingCustomer()
 			if err != nil || bc == nil {
@@ -741,7 +745,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				return
 			}
 		}
-		st.createdKVIDs = append(st.createdKVIDs, kv.ID)
+
 		kvProvision = append(kvProvision, pendingKVProvision{kv: kv, password: pw})
 		linkBRs = append(linkBRs, models.BlueprintResource{
 			BlueprintID: bp.ID, ResourceType: "keyvalue",
@@ -844,6 +848,9 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				fail("failed to create service " + serviceName)
 				return
 			}
+			created = true
+			// Track for rollback before any external side-effects (e.g. billing).
+			st.createdServices = append(st.createdServices, svc)
 			if stripeSvc != nil && svc.Plan != services.PlanFree {
 				bc, err := getBillingCustomer()
 				if err != nil || bc == nil {
@@ -862,11 +869,12 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 					return
 				}
 			}
-			created = true
-			st.createdServices = append(st.createdServices, svc)
 		} else {
 			// Keep adopted services in sync with the blueprint (only fields supported by UpdateService).
 			before := *svc
+			// Track for rollback before any external side-effects (e.g. billing) or writes.
+			st.updatedServices = append(st.updatedServices, before)
+
 			svc.Branch = sdef.Branch
 			if svc.Branch == "" {
 				svc.Branch = bp.Branch
@@ -891,12 +899,13 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			svc.PreDeployCommand = sdef.PreDeployCmd
 			svc.StaticPublishPath = sdef.StaticPublishPath
 			svc.Schedule = sdef.Schedule
-			svc.Plan = sdef.Plan
-			if svc.Plan == "" {
-				svc.Plan = services.PlanStarter
+
+			desiredPlan := sdef.Plan
+			if desiredPlan == "" {
+				desiredPlan = services.PlanStarter
 			}
-			if p, ok := services.NormalizePlan(svc.Plan); ok {
-				svc.Plan = p
+			if p, ok := services.NormalizePlan(desiredPlan); ok {
+				desiredPlan = p
 			} else {
 				fail("invalid plan for service " + serviceName)
 				return
@@ -907,42 +916,42 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				svc.Instances = 1
 			}
 
+			// Gate plan changes on Stripe success so users cannot upgrade resources without billing.
+			oldPlanEffective := strings.ToLower(strings.TrimSpace(before.Plan))
+			if p, ok := services.NormalizePlan(before.Plan); ok {
+				oldPlanEffective = p
+			}
+			if stripeSvc != nil && desiredPlan != oldPlanEffective {
+				if desiredPlan == services.PlanFree {
+					if err := stripeSvc.RemoveSubscriptionItem("service", svc.ID); err != nil {
+						fail("billing error: " + err.Error())
+						return
+					}
+				} else {
+					bc, err := getBillingCustomer()
+					if err != nil || bc == nil {
+						if err == nil {
+							err = fmt.Errorf("billing customer not found")
+						}
+						fail("billing error: " + err.Error())
+						return
+					}
+					if err := stripeSvc.AddSubscriptionItem(bc, "service", svc.ID, svc.Name, desiredPlan); err != nil {
+						if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
+							fail("payment method required. Please add a default payment method in billing settings.")
+							return
+						}
+						fail("billing error: " + err.Error())
+						return
+					}
+				}
+			}
+			svc.Plan = desiredPlan
+
 			if err := models.UpdateService(svc); err != nil {
 				fail("failed to update service " + serviceName)
 				return
 			}
-			if stripeSvc != nil {
-				oldPlanEffective := strings.ToLower(strings.TrimSpace(before.Plan))
-				if p, ok := services.NormalizePlan(before.Plan); ok {
-					oldPlanEffective = p
-				}
-				if svc.Plan != oldPlanEffective {
-					if svc.Plan == services.PlanFree {
-						if err := stripeSvc.RemoveSubscriptionItem("service", svc.ID); err != nil {
-							fail("billing error: " + err.Error())
-							return
-						}
-					} else {
-						bc, err := getBillingCustomer()
-						if err != nil || bc == nil {
-							if err == nil {
-								err = fmt.Errorf("billing customer not found")
-							}
-							fail("billing error: " + err.Error())
-							return
-						}
-						if err := stripeSvc.AddSubscriptionItem(bc, "service", svc.ID, svc.Name, svc.Plan); err != nil {
-							if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
-								fail("payment method required. Please add a default payment method in billing settings.")
-								return
-							}
-							fail("billing error: " + err.Error())
-							return
-						}
-					}
-				}
-			}
-			st.updatedServices = append(st.updatedServices, before)
 		}
 
 		linkBRs = append(linkBRs, models.BlueprintResource{
