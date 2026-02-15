@@ -3,7 +3,9 @@ package models
 import (
 	"database/sql"
 	"time"
+	"strings"
 
+	"github.com/lib/pq"
 	"github.com/railpush/api/database"
 )
 
@@ -23,8 +25,17 @@ type Deploy struct {
 }
 
 func CreateDeploy(d *Deploy) error {
-	return database.DB.QueryRow("INSERT INTO deploys (service_id, trigger, commit_sha, commit_message, branch, image_tag, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, status",
-		d.ServiceID, d.Trigger, d.CommitSHA, d.CommitMessage, d.Branch, d.ImageTag, d.CreatedBy).Scan(&d.ID, &d.Status)
+	status := strings.TrimSpace(d.Status)
+	if status == "" {
+		return database.DB.QueryRow(
+			"INSERT INTO deploys (service_id, trigger, commit_sha, commit_message, branch, image_tag, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, status",
+			d.ServiceID, d.Trigger, d.CommitSHA, d.CommitMessage, d.Branch, d.ImageTag, d.CreatedBy,
+		).Scan(&d.ID, &d.Status)
+	}
+	return database.DB.QueryRow(
+		"INSERT INTO deploys (service_id, trigger, status, commit_sha, commit_message, branch, image_tag, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, status",
+		d.ServiceID, d.Trigger, status, d.CommitSHA, d.CommitMessage, d.Branch, d.ImageTag, d.CreatedBy,
+	).Scan(&d.ID, &d.Status)
 }
 
 func GetDeploy(id string) (*Deploy, error) {
@@ -63,6 +74,14 @@ func UpdateDeployStatus(id, status string) error {
 		_, err := database.DB.Exec("UPDATE deploys SET status=$1 WHERE id=$2", status, id)
 		return err
 	}
+}
+
+func UpdateDeployStatuses(ids []string, status string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := database.DB.Exec("UPDATE deploys SET status=$1 WHERE id = ANY($2)", status, pq.Array(ids))
+	return err
 }
 
 func UpdateDeployBuildLog(id, logLine string) error {

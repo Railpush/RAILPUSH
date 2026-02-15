@@ -31,6 +31,7 @@ type SMTPEmailer struct {
 	user    string
 	pass    string
 	from    string
+	envelopeFrom string
 	replyTo string
 }
 
@@ -46,6 +47,10 @@ func NewSMTPEmailer(cfg *config.EmailConfig) (*SMTPEmailer, error) {
 	if from == "" {
 		return nil, fmt.Errorf("missing SMTP_FROM")
 	}
+	envelopeFrom := strings.TrimSpace(cfg.SMTPEnvelopeFrom)
+	if envelopeFrom == "" {
+		envelopeFrom = from
+	}
 	port := cfg.SMTPPort
 	if port <= 0 {
 		port = 587
@@ -56,6 +61,7 @@ func NewSMTPEmailer(cfg *config.EmailConfig) (*SMTPEmailer, error) {
 		user:    strings.TrimSpace(cfg.SMTPUser),
 		pass:    cfg.SMTPPassword,
 		from:    from,
+		envelopeFrom: envelopeFrom,
 		replyTo: strings.TrimSpace(cfg.SMTPReplyTo),
 	}, nil
 }
@@ -194,7 +200,7 @@ func (s *SMTPEmailer) Send(ctx context.Context, msg EmailMessage) error {
 		}
 	}
 
-	if err := c.Mail(s.from); err != nil {
+	if err := c.Mail(s.envelopeFrom); err != nil {
 		return err
 	}
 	if err := c.Rcpt(to); err != nil {
@@ -243,4 +249,3 @@ func htmlEscape(in string) string {
 	in = strings.ReplaceAll(in, "'", "&#39;")
 	return in
 }
-

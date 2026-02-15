@@ -52,3 +52,8 @@ func BulkUpsertEnvVars(ownerType, ownerID string, vars []EnvVar) error {
 	}
 	return tx.Commit()
 }
+
+func DeleteEnvVars(ownerType, ownerID string) error {
+	_, err := database.DB.Exec("DELETE FROM env_vars WHERE owner_type=$1 AND owner_id=$2", ownerType, ownerID)
+	return err
+}

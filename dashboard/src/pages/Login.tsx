@@ -27,6 +27,8 @@ export function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [resending, setResending] = useState(false);
 
   const inputClass =
     'w-full h-10 px-3 rounded-md bg-surface-secondary border border-border-default text-content-primary placeholder:text-content-tertiary text-sm focus:outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand transition-all';
@@ -34,11 +36,17 @@ export function Login() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setNotice('');
     setLoading(true);
 
     try {
       if (mode === 'register') {
         await auth.register({ email, password, name });
+        setNotice('Check your email for a verification link, then sign in.');
+        setMode('login');
+        setPassword('');
+        setShowPassword(false);
+        return;
       } else {
         await auth.login({ email, password });
       }
@@ -48,6 +56,22 @@ export function Login() {
       setError(message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const resend = async () => {
+    const e = email.trim();
+    if (!e) return;
+    setResending(true);
+    setError('');
+    setNotice('');
+    try {
+      await auth.resendVerification(e);
+      setNotice('If that account needs verification, a new link has been sent.');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to resend verification email');
+    } finally {
+      setResending(false);
     }
   };
 
@@ -91,6 +115,11 @@ export function Login() {
           </div>
         </div>
 
+        {notice && (
+          <div className="mb-4 p-3 rounded-md bg-status-success-bg border border-status-success/20 text-status-success text-sm">
+            {notice}
+          </div>
+        )}
         {error && (
           <div className="mb-4 p-3 rounded-md bg-status-error-bg border border-status-error/20 text-status-error text-sm">
             {error}
@@ -150,6 +179,14 @@ export function Login() {
           </Button>
         </form>
 
+        {mode === 'login' && error.toLowerCase().includes('not verified') && (
+          <div className="mt-3">
+            <Button variant="secondary" className="w-full h-10" onClick={resend} loading={resending} disabled={!email.trim()}>
+              Resend verification email
+            </Button>
+          </div>
+        )}
+
         <div className="mt-5 text-sm text-content-secondary">
           {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
           <button
@@ -157,6 +194,7 @@ export function Login() {
             onClick={() => {
               setMode(mode === 'login' ? 'register' : 'login');
               setError('');
+              setNotice('');
             }}
             className="text-brand hover:text-brand-hover font-medium"
           >
@@ -177,4 +215,3 @@ export function Login() {
     </div>
   );
 }
-

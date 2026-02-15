@@ -17,6 +17,22 @@ var migrationSQL = []string{
 	`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`,
 	`CREATE TABLE IF NOT EXISTS users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), github_id BIGINT UNIQUE, username VARCHAR(255), email VARCHAR(255) UNIQUE, password_hash VARCHAR(255), avatar_url TEXT, role VARCHAR(50) DEFAULT 'member', created_at TIMESTAMPTZ DEFAULT NOW())`,
 	`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)`,
+	`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ`,
+	// Backfill existing accounts once (guarded by a cutoff so new signups remain unverified).
+	`UPDATE users
+	    SET email_verified_at = COALESCE(email_verified_at, created_at)
+	  WHERE email_verified_at IS NULL
+	    AND created_at < '2026-02-15T05:00:00Z'::timestamptz`,
+	`CREATE TABLE IF NOT EXISTS email_verification_tokens (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		token_hash TEXT NOT NULL,
+		expires_at TIMESTAMPTZ NOT NULL,
+		used_at TIMESTAMPTZ,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_email_verification_tokens_hash_unique ON email_verification_tokens(token_hash)`,
+	`CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_user_created_at ON email_verification_tokens(user_id, created_at DESC)`,
 	`CREATE TABLE IF NOT EXISTS api_keys (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID REFERENCES users(id) ON DELETE CASCADE, name VARCHAR(255), key_hash VARCHAR(255), scopes TEXT[], expires_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT NOW())`,
 	`CREATE TABLE IF NOT EXISTS workspaces (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name VARCHAR(255), owner_id UUID REFERENCES users(id) ON DELETE CASCADE, deploy_policy VARCHAR(50) DEFAULT 'cancel', created_at TIMESTAMPTZ DEFAULT NOW())`,
 	`CREATE TABLE IF NOT EXISTS workspace_members (workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE, user_id UUID REFERENCES users(id) ON DELETE CASCADE, role VARCHAR(50), PRIMARY KEY (workspace_id, user_id))`,

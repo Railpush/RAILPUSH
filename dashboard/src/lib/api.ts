@@ -36,9 +36,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 // Auth
 export const auth = {
   register: (data: { email: string; password: string; name: string }) =>
-    request<{ user: User; workspace?: { id: string; name: string } }>('/auth/register', { method: 'POST', body: JSON.stringify(data) }),
+    request<{ status: string }>('/auth/register', { method: 'POST', body: JSON.stringify(data) }),
   login: (data: { email: string; password: string }) =>
     request<{ user: User }>('/auth/login', { method: 'POST', body: JSON.stringify(data) }),
+  verifyEmail: (token: string) =>
+    request<{ status: string }>('/auth/verify', { method: 'POST', body: JSON.stringify({ token }) }),
+  resendVerification: (email: string) =>
+    request<{ status: string }>('/auth/verify/resend', { method: 'POST', body: JSON.stringify({ email }) }),
   getUser: () => request<{ user: User; workspace?: { id: string; name: string } }>('/auth/user'),
   loginGithub: () => { window.location.href = `${BASE}/auth/github`; },
   logout: async () => {

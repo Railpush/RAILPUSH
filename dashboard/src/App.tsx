@@ -55,6 +55,7 @@ import { SessionProvider } from './lib/session';
 import type { User } from './types';
 import { SupportPage } from './pages/Support';
 import { SupportTicketDetailPage } from './pages/SupportTicketDetail';
+import { VerifyEmail } from './pages/VerifyEmail';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -132,6 +133,7 @@ function App() {
             <Routes>
               <Route path="/" element={<Landing />} />
               <Route path="/login" element={<Login />} />
+              <Route path="/verify" element={<VerifyEmail />} />
               <Route path="/docs" element={<Docs />} />
               <Route path="/privacy" element={<Privacy />} />
               <Route path="*" element={<Navigate to="/" />} />

@@ -76,6 +76,17 @@ func CreateBlueprintResource(br *BlueprintResource) error {
 	return err
 }
 
+func DeleteBlueprintResource(br *BlueprintResource) error {
+	if br == nil {
+		return nil
+	}
+	_, err := database.DB.Exec(
+		"DELETE FROM blueprint_resources WHERE blueprint_id=$1 AND resource_type=$2 AND resource_id=$3 AND resource_name=$4",
+		br.BlueprintID, br.ResourceType, br.ResourceID, br.ResourceName,
+	)
+	return err
+}
+
 func ListBlueprintResources(blueprintID string) ([]BlueprintResource, error) {
 	rows, err := database.DB.Query("SELECT blueprint_id, resource_type, resource_id, resource_name FROM blueprint_resources WHERE blueprint_id=$1", blueprintID)
 	if err != nil {

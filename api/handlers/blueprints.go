@@ -255,15 +255,147 @@ type dbConnInfo struct {
 }
 
 func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
-	fail := func(msg string) {
-		log.Printf("Blueprint sync failed for %s: %s", bp.Name, msg)
-		models.UpdateBlueprintSync(bp.ID, "failed: "+msg)
+	type pendingDeploy struct {
+		svc  *models.Service
+		sdef RenderService
+	}
+	type pendingDBProvision struct {
+		db       *models.ManagedDatabase
+		password string
+	}
+	type pendingKVProvision struct {
+		kv       *models.ManagedKeyValue
+		password string
+	}
+	type createdDomain struct {
+		serviceID string
+		domain    string
 	}
 
+	type syncState struct {
+		createdServices []*models.Service
+		createdDBIDs    []string
+		createdKVIDs    []string
+		createdEnvGroupIDs []string
+		createdDiskIDs  []string
+		createdDomains  []createdDomain
+		updatedServices []models.Service // snapshots for adopted service rollback
+		insertedBRs     []models.BlueprintResource
+	}
+
+	if bp == nil {
+		return
+	}
+
+	st := syncState{}
+	var (
+		success bool
+		failMsg string
+	)
+	fail := func(msg string) {
+		if failMsg != "" {
+			return
+		}
+		failMsg = msg
+	}
+
+	rollback := func() {
+		// Delete blueprint resource links we inserted during this sync attempt.
+		for _, br := range st.insertedBRs {
+			_ = models.DeleteBlueprintResource(&br)
+		}
+
+		// Revert adopted service updates (best-effort).
+		for _, before := range st.updatedServices {
+			_ = models.UpdateService(&before)
+		}
+
+		// Delete domains/disks we created during this sync attempt (safe even if service is deleted via cascade).
+		for _, d := range st.createdDomains {
+			_ = models.DeleteCustomDomain(d.serviceID, d.domain)
+		}
+		for _, diskID := range st.createdDiskIDs {
+			_ = models.DeleteDisk(diskID)
+		}
+
+		// Initialize kube deployer if available (k8s mode best-effort cleanup).
+		var kd *services.KubeDeployer
+		if h != nil && h.Config != nil && h.Config.Kubernetes.Enabled {
+			if h.Worker != nil {
+				if k, err := h.Worker.GetKubeDeployer(); err == nil {
+					kd = k
+				}
+			}
+			if kd == nil {
+				if k, err := services.NewKubeDeployer(h.Config); err == nil {
+					kd = k
+				}
+			}
+		}
+
+		// Delete services created by this sync attempt.
+		for _, svc := range st.createdServices {
+			if kd != nil {
+				_ = kd.DeleteServiceResources(svc)
+			}
+			_ = models.DeleteService(svc.ID)
+		}
+
+		// Delete env groups created by this sync attempt.
+		for _, id := range st.createdEnvGroupIDs {
+			_ = models.DeleteEnvGroup(id)
+		}
+
+		// Delete managed key-value stores created by this sync attempt.
+		for _, id := range st.createdKVIDs {
+			if kd != nil {
+				_ = kd.DeleteManagedKeyValueResources(id)
+			}
+			_ = models.DeleteManagedKeyValue(id)
+		}
+
+		// Delete managed databases created by this sync attempt.
+		for _, id := range st.createdDBIDs {
+			if kd != nil {
+				_ = kd.DeleteManagedDatabaseResources(id)
+			}
+			_ = models.DeleteManagedDatabase(id)
+		}
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Blueprint sync panicked for %s (%s): %v", bp.Name, bp.ID, r)
+			if failMsg == "" {
+				failMsg = "internal error"
+			}
+		}
+		if success {
+			return
+		}
+		if failMsg == "" {
+			failMsg = "internal error"
+		}
+		log.Printf("Blueprint sync failed for %s (%s): %s", bp.Name, bp.ID, failMsg)
+		rollback()
+		_ = models.UpdateBlueprintSync(bp.ID, "failed: "+failMsg)
+	}()
+
 	// Clone repo to temp dir
-	tmpDir := filepath.Join(os.TempDir(), "sr-bp-"+bp.ID[:8])
+	idPrefix := strings.TrimSpace(bp.ID)
+	if len(idPrefix) >= 8 {
+		idPrefix = idPrefix[:8]
+	}
+	if idPrefix == "" {
+		idPrefix = "unknown"
+	}
+	tmpDir := filepath.Join(os.TempDir(), "sr-bp-"+idPrefix)
 	defer os.RemoveAll(tmpDir)
 
+	if h == nil || h.Worker == nil || h.Worker.Builder == nil {
+		fail("worker not initialized")
+		return
+	}
 	if err := h.Worker.Builder.CloneRepo(bp.RepoURL, bp.Branch, tmpDir, ghToken); err != nil {
 		fail("clone failed — check repository URL and branch")
 		return
@@ -288,11 +420,157 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		return
 	}
 
+	// --- Preflight validation (avoid partial creates on obvious conflicts) ---
+	dbSeen := map[string]struct{}{}
+	for _, ddef := range spec.Databases {
+		name := strings.TrimSpace(ddef.Name)
+		if name == "" {
+			fail("database name is required in " + bp.FilePath)
+			return
+		}
+		k := strings.ToLower(name)
+		if _, ok := dbSeen[k]; ok {
+			fail("duplicate database name in blueprint: " + name)
+			return
+		}
+		dbSeen[k] = struct{}{}
+	}
+	kvSeen := map[string]struct{}{}
+	for _, kvdef := range spec.KeyValues {
+		name := strings.TrimSpace(kvdef.Name)
+		if name == "" {
+			fail("key-value name is required in " + bp.FilePath)
+			return
+		}
+		k := strings.ToLower(name)
+		if _, ok := kvSeen[k]; ok {
+			fail("duplicate key-value name in blueprint: " + name)
+			return
+		}
+		kvSeen[k] = struct{}{}
+	}
+	egSeen := map[string]struct{}{}
+	for _, gdef := range spec.EnvVarGroups {
+		name := strings.TrimSpace(gdef.Name)
+		if name == "" {
+			fail("env var group name is required in " + bp.FilePath)
+			return
+		}
+		k := strings.ToLower(name)
+		if _, ok := egSeen[k]; ok {
+			fail("duplicate env var group name in blueprint: " + name)
+			return
+		}
+		egSeen[k] = struct{}{}
+	}
+
+	svcSeen := map[string]struct{}{}
+	svcExistingByName := map[string]*models.Service{} // lower(name) -> existing service (if any)
+	svcAlreadyLinked := map[string]struct{}{}         // services already linked to this blueprint (will be skipped)
+	for _, sdef := range spec.Services {
+		name := strings.TrimSpace(sdef.Name)
+		if name == "" {
+			fail("service name is required in " + bp.FilePath)
+			return
+		}
+		k := strings.ToLower(name)
+		if _, ok := svcSeen[k]; ok {
+			fail("duplicate service name in blueprint: " + name)
+			return
+		}
+		svcSeen[k] = struct{}{}
+
+		// Mirror existing behavior: if the service is already linked to this blueprint, we skip it.
+		if existing, err := models.GetBlueprintResourceByName(bp.ID, "service", name); err != nil {
+			fail("database error")
+			return
+		} else if existing != nil {
+			svcAlreadyLinked[k] = struct{}{}
+			continue
+		}
+
+		desiredType := strings.TrimSpace(sdef.Type)
+		if desiredType == "" {
+			desiredType = "web"
+		}
+		svc, err := models.GetServiceByWorkspaceAndName(bp.WorkspaceID, name)
+		if err != nil {
+			fail("database error")
+			return
+		}
+		if svc != nil {
+			if strings.TrimSpace(svc.RepoURL) != "" && strings.TrimSpace(sdef.Repo) != "" && strings.TrimSpace(svc.RepoURL) != strings.TrimSpace(sdef.Repo) {
+				fail("service name already exists with a different repo: " + name)
+				return
+			}
+			if strings.TrimSpace(svc.Type) != "" && strings.TrimSpace(desiredType) != "" && strings.TrimSpace(svc.Type) != strings.TrimSpace(desiredType) {
+				fail("service name already exists with a different type: " + name)
+				return
+			}
+			// Disk conflicts for adopted services (no updates supported yet; fail early).
+			if sdef.Disk != nil && strings.TrimSpace(sdef.Disk.Name) != "" {
+				if existingDisk, derr := models.GetDiskByService(svc.ID); derr != nil {
+					fail("database error")
+					return
+				} else if existingDisk != nil {
+					if strings.TrimSpace(existingDisk.Name) != strings.TrimSpace(sdef.Disk.Name) ||
+						strings.TrimSpace(existingDisk.MountPath) != strings.TrimSpace(sdef.Disk.MountPath) {
+						fail("service already has a different disk configured: " + name)
+						return
+					}
+				}
+			}
+		}
+		svcExistingByName[k] = svc
+	}
+
+	// Global custom domain conflicts.
+	domainSeen := map[string]struct{}{}
+	for _, sdef := range spec.Services {
+		nameKey := strings.ToLower(strings.TrimSpace(sdef.Name))
+		if nameKey == "" {
+			continue
+		}
+		if _, skip := svcAlreadyLinked[nameKey]; skip {
+			continue
+		}
+		for _, domain := range sdef.Domains {
+			d := strings.ToLower(strings.TrimSpace(domain))
+			if d == "" {
+				continue
+			}
+			if _, ok := domainSeen[d]; ok {
+				fail("duplicate custom domain in blueprint: " + d)
+				return
+			}
+			domainSeen[d] = struct{}{}
+
+			existing, derr := models.GetCustomDomainByDomain(d)
+			if derr != nil {
+				fail("database error")
+				return
+			}
+			if existing != nil {
+				svc := svcExistingByName[nameKey]
+				if svc == nil || existing.ServiceID != svc.ID {
+					fail("custom domain already in use: " + d)
+					return
+				}
+			}
+		}
+	}
+
 	// --- Phase 1: Create all databases ---
 	dbInfoMap := map[string]*dbConnInfo{}
+	var dbProvision []pendingDBProvision
+	var linkBRs []models.BlueprintResource
 
 	for _, ddef := range spec.Databases {
-		existing, _ := models.GetBlueprintResourceByName(bp.ID, "database", ddef.Name)
+		existing, err := models.GetBlueprintResourceByName(bp.ID, "database", ddef.Name)
+		if err != nil {
+			fail("database error")
+			return
+		}
 		if existing != nil {
 			dbModel, _ := models.GetManagedDatabase(existing.ResourceID)
 			if dbModel != nil {
@@ -334,11 +612,13 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			fail("failed to create database " + ddef.Name)
 			return
 		}
-		h.Worker.ProvisionDatabase(db, pw)
-		models.CreateBlueprintResource(&models.BlueprintResource{
+		st.createdDBIDs = append(st.createdDBIDs, db.ID)
+		dbProvision = append(dbProvision, pendingDBProvision{db: db, password: pw})
+		linkBRs = append(linkBRs, models.BlueprintResource{
 			BlueprintID: bp.ID, ResourceType: "database",
 			ResourceID: db.ID, ResourceName: ddef.Name,
 		})
+
 		internalHost := fmt.Sprintf("sr-db-%s", db.ID[:8])
 		dbInfoMap[ddef.Name] = &dbConnInfo{
 			Host: internalHost, Port: 5432,
@@ -348,8 +628,13 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	}
 
 	// --- Phase 2: Create all key-value stores ---
+	var kvProvision []pendingKVProvision
 	for _, kvdef := range spec.KeyValues {
-		existing, _ := models.GetBlueprintResourceByName(bp.ID, "keyvalue", kvdef.Name)
+		existing, err := models.GetBlueprintResourceByName(bp.ID, "keyvalue", kvdef.Name)
+		if err != nil {
+			fail("database error")
+			return
+		}
 		if existing != nil {
 			continue
 		}
@@ -373,8 +658,9 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			fail("failed to create key-value store " + kvdef.Name)
 			return
 		}
-		h.Worker.ProvisionKeyValue(kv, pw)
-		models.CreateBlueprintResource(&models.BlueprintResource{
+		st.createdKVIDs = append(st.createdKVIDs, kv.ID)
+		kvProvision = append(kvProvision, pendingKVProvision{kv: kv, password: pw})
+		linkBRs = append(linkBRs, models.BlueprintResource{
 			BlueprintID: bp.ID, ResourceType: "keyvalue",
 			ResourceID: kv.ID, ResourceName: kvdef.Name,
 		})
@@ -382,10 +668,6 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	}
 
 	// --- Phase 3: Create all services (no deploys yet) ---
-	type pendingDeploy struct {
-		svc  *models.Service
-		sdef RenderService
-	}
 	var pending []pendingDeploy
 	svcMap := map[string]*models.Service{} // name -> service (for fromService refs)
 
@@ -396,7 +678,11 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			return
 		}
 
-		existing, _ := models.GetBlueprintResourceByName(bp.ID, "service", serviceName)
+		existing, err := models.GetBlueprintResourceByName(bp.ID, "service", serviceName)
+		if err != nil {
+			fail("database error")
+			return
+		}
 		if existing != nil {
 			// Populate svcMap so fromService refs can resolve to pre-existing blueprint services.
 			if svc, _ := models.GetService(existing.ResourceID); svc != nil {
@@ -416,23 +702,14 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			imageURL = sdef.Image.URL
 		}
 
-		desiredType := sdef.Type
+		desiredType := strings.TrimSpace(sdef.Type)
 		if desiredType == "" {
 			desiredType = "web"
 		}
 
 		// If a service already exists with this name, adopt it instead of creating a duplicate.
 		svc, _ := models.GetServiceByWorkspaceAndName(bp.WorkspaceID, serviceName)
-		if svc != nil {
-			if strings.TrimSpace(svc.RepoURL) != "" && strings.TrimSpace(sdef.Repo) != "" && strings.TrimSpace(svc.RepoURL) != strings.TrimSpace(sdef.Repo) {
-				fail("service name already exists with a different repo: " + serviceName)
-				return
-			}
-			if strings.TrimSpace(svc.Type) != "" && strings.TrimSpace(desiredType) != "" && strings.TrimSpace(svc.Type) != strings.TrimSpace(desiredType) {
-				fail("service name already exists with a different type: " + serviceName)
-				return
-			}
-		} else {
+		if svc == nil {
 			autoDeploy := true
 			if sdef.AutoDeploy != nil {
 				autoDeploy = *sdef.AutoDeploy
@@ -479,8 +756,10 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				return
 			}
 			created = true
+			st.createdServices = append(st.createdServices, svc)
 		} else {
 			// Keep adopted services in sync with the blueprint (only fields supported by UpdateService).
+			before := *svc
 			svc.Branch = sdef.Branch
 			if svc.Branch == "" {
 				svc.Branch = bp.Branch
@@ -519,11 +798,14 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				fail("failed to update service " + serviceName)
 				return
 			}
+			st.updatedServices = append(st.updatedServices, before)
 		}
-		models.CreateBlueprintResource(&models.BlueprintResource{
+
+		linkBRs = append(linkBRs, models.BlueprintResource{
 			BlueprintID: bp.ID, ResourceType: "service",
 			ResourceID: svc.ID, ResourceName: serviceName,
 		})
+
 		svcMap[serviceName] = svc
 		if created {
 			log.Printf("Blueprint sync: created service %s", serviceName)
@@ -537,23 +819,51 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			if domain == "" {
 				continue
 			}
-			models.CreateCustomDomain(&models.CustomDomain{
-				ServiceID: svc.ID, Domain: domain,
-			})
+			// Avoid duplicates for the same service.
+			existingCD, err := models.GetCustomDomain(svc.ID, domain)
+			if err != nil {
+				fail("database error")
+				return
+			}
+			if existingCD != nil {
+				continue
+			}
+			if err := models.CreateCustomDomain(&models.CustomDomain{ServiceID: svc.ID, Domain: domain}); err != nil {
+				// Provide a more actionable error for global uniqueness violations.
+				if taken, _ := models.GetCustomDomainByDomain(domain); taken != nil && taken.ServiceID != svc.ID {
+					fail("custom domain already in use: " + domain)
+					return
+				}
+				fail("failed to add domain " + domain + " to service " + serviceName)
+				return
+			}
+			st.createdDomains = append(st.createdDomains, createdDomain{serviceID: svc.ID, domain: domain})
 			log.Printf("Blueprint sync: added domain %s to service %s", domain, serviceName)
 		}
 
 		// Create disk if specified
-		if sdef.Disk != nil && sdef.Disk.Name != "" {
-			sizeGB := sdef.Disk.SizeGB
-			if sizeGB == 0 {
-				sizeGB = 10
+		if sdef.Disk != nil && strings.TrimSpace(sdef.Disk.Name) != "" {
+			existingDisk, err := models.GetDiskByService(svc.ID)
+			if err != nil {
+				fail("database error")
+				return
 			}
-			models.CreateDisk(&models.Disk{
-				ServiceID: svc.ID, Name: sdef.Disk.Name,
-				MountPath: sdef.Disk.MountPath, SizeGB: sizeGB,
-			})
-			log.Printf("Blueprint sync: created disk %s for service %s", sdef.Disk.Name, serviceName)
+			if existingDisk == nil {
+				sizeGB := sdef.Disk.SizeGB
+				if sizeGB == 0 {
+					sizeGB = 10
+				}
+				d := &models.Disk{
+					ServiceID: svc.ID, Name: sdef.Disk.Name,
+					MountPath: sdef.Disk.MountPath, SizeGB: sizeGB,
+				}
+				if err := models.CreateDisk(d); err != nil {
+					fail("failed to create disk " + sdef.Disk.Name + " for service " + serviceName)
+					return
+				}
+				st.createdDiskIDs = append(st.createdDiskIDs, d.ID)
+				log.Printf("Blueprint sync: created disk %s for service %s", sdef.Disk.Name, serviceName)
+			}
 		}
 
 		if created {
@@ -564,7 +874,11 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	// --- Phase 3c: Create env var groups ---
 	envGroupMap := map[string]*models.EnvGroup{} // group name -> group
 	for _, gdef := range spec.EnvVarGroups {
-		existing, _ := models.GetEnvGroupByName(bp.WorkspaceID, gdef.Name)
+		existing, err := models.GetEnvGroupByName(bp.WorkspaceID, gdef.Name)
+		if err != nil {
+			fail("database error")
+			return
+		}
 		if existing != nil {
 			envGroupMap[gdef.Name] = existing
 			continue
@@ -574,6 +888,8 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			fail("failed to create env var group " + gdef.Name)
 			return
 		}
+		st.createdEnvGroupIDs = append(st.createdEnvGroupIDs, g.ID)
+
 		// Store group's env vars
 		if len(gdef.EnvVars) > 0 {
 			var groupVars []models.EnvVar
@@ -588,7 +904,10 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 					Key: ev.Key, EncryptedValue: encrypted,
 				})
 			}
-			models.BulkUpsertEnvVars("env_group", g.ID, groupVars)
+			if err := models.BulkUpsertEnvVars("env_group", g.ID, groupVars); err != nil {
+				fail("failed to set env vars for group " + gdef.Name)
+				return
+			}
 		}
 		envGroupMap[gdef.Name] = g
 		log.Printf("Blueprint sync: created env var group %s", gdef.Name)
@@ -604,8 +923,15 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			// fromGroup: link the service to the env group and inject all group vars
 			if ev.FromGroup != "" {
 				if g, ok := envGroupMap[ev.FromGroup]; ok {
-					models.LinkServiceToEnvGroup(p.svc.ID, g.ID)
-					groupVars, _ := models.ListEnvVars("env_group", g.ID)
+					if err := models.LinkServiceToEnvGroup(p.svc.ID, g.ID); err != nil {
+						fail("failed to link env group " + ev.FromGroup + " to service " + p.svc.Name)
+						return
+					}
+					groupVars, err := models.ListEnvVars("env_group", g.ID)
+					if err != nil {
+						fail("failed to load env vars for group " + ev.FromGroup)
+						return
+					}
 					for _, gv := range groupVars {
 						envVars = append(envVars, models.EnvVar{
 							OwnerType: "service", OwnerID: p.svc.ID,
@@ -656,12 +982,14 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 						}
 					}
 					if ev.FromService.EnvVarKey != "" {
-						refEnvVars, _ := models.ListEnvVars("service", refSvc.ID)
-						for _, rev := range refEnvVars {
-							if rev.Key == ev.FromService.EnvVarKey {
-								decrypted, _ := utils.Decrypt(rev.EncryptedValue, h.Config.Crypto.EncryptionKey)
-								val = decrypted
-								break
+						refEnvVars, err := models.ListEnvVars("service", refSvc.ID)
+						if err == nil {
+							for _, rev := range refEnvVars {
+								if rev.Key == ev.FromService.EnvVarKey {
+									decrypted, _ := utils.Decrypt(rev.EncryptedValue, h.Config.Crypto.EncryptionKey)
+									val = decrypted
+									break
+								}
 							}
 						}
 					}
@@ -673,19 +1001,57 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				Key: ev.Key, EncryptedValue: encrypted,
 			})
 		}
-		models.BulkUpsertEnvVars("service", p.svc.ID, envVars)
+		if err := models.BulkUpsertEnvVars("service", p.svc.ID, envVars); err != nil {
+			fail("failed to set env vars for service " + p.svc.Name)
+			return
+		}
 	}
 
-	// --- Phase 4: All resources created — now trigger all deploys ---
+	// Link all new/adopted resources to the blueprint at the end so a failed sync doesn't leave partial links.
+	for _, br := range linkBRs {
+		if err := models.CreateBlueprintResource(&br); err != nil {
+			fail("failed to link blueprint resources")
+			return
+		}
+		st.insertedBRs = append(st.insertedBRs, br)
+	}
+
+	// --- Phase 4: Create queued deploys (so workers don't pick them up until we flip to pending) ---
+	var deployIDs []string
+	var jobs []services.DeployJob
 	for _, p := range pending {
 		deploy := &models.Deploy{
 			ServiceID: p.svc.ID, Trigger: "blueprint", Branch: p.svc.Branch,
+			Status: "queued",
 		}
-		if err := models.CreateDeploy(deploy); err == nil {
-			h.Worker.Enqueue(services.DeployJob{Deploy: deploy, Service: p.svc, GitHubToken: ghToken})
+		if err := models.CreateDeploy(deploy); err != nil {
+			fail("failed to create deploy for service " + p.svc.Name)
+			return
 		}
+		deployIDs = append(deployIDs, deploy.ID)
+		jobs = append(jobs, services.DeployJob{Deploy: deploy, Service: p.svc, GitHubToken: ghToken})
 	}
 
-	models.UpdateBlueprintSync(bp.ID, "synced")
+	// Start provisioning managed DB/KV only after we know we're going to complete the sync.
+	for _, p := range dbProvision {
+		h.Worker.ProvisionDatabase(p.db, p.password)
+	}
+	for _, p := range kvProvision {
+		h.Worker.ProvisionKeyValue(p.kv, p.password)
+	}
+
+	// Flip deploys to pending in one shot; workers poll only pending/building/deploying.
+	if err := models.UpdateDeployStatuses(deployIDs, "pending"); err != nil {
+		fail("failed to enqueue deploys")
+		return
+	}
+
+	// Best-effort immediate enqueue for pods with WORKER_ENABLED=true; otherwise worker Deployment picks them up.
+	for _, job := range jobs {
+		h.Worker.Enqueue(job)
+	}
+
+	success = true
+	_ = models.UpdateBlueprintSync(bp.ID, "synced")
 	log.Printf("Blueprint sync completed for %s", bp.Name)
 }

@@ -12,6 +12,7 @@ type User struct {
 	GitHubID          int64     `json:"github_id"`
 	Username          string    `json:"username"`
 	Email             string    `json:"email"`
+	EmailVerifiedAt   *time.Time `json:"email_verified_at,omitempty"`
 	PasswordHash      string    `json:"-"`
 	AvatarURL         string    `json:"avatar_url"`
 	Role              string    `json:"role"`
@@ -31,22 +32,32 @@ type APIKey struct {
 
 func GetUserByGitHubID(ghID int64) (*User, error) {
 	u := &User{}
+	var verifiedAt sql.NullTime
 	err := database.DB.QueryRow(
-		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), COALESCE(email, ''), COALESCE(avatar_url, ''), COALESCE(role, 'member'), created_at FROM users WHERE github_id = $1", ghID,
-	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &u.AvatarURL, &u.Role, &u.CreatedAt)
+		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), COALESCE(email, ''), email_verified_at, COALESCE(avatar_url, ''), COALESCE(role, 'member'), created_at FROM users WHERE github_id = $1", ghID,
+	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &verifiedAt, &u.AvatarURL, &u.Role, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
+	}
+	if verifiedAt.Valid {
+		v := verifiedAt.Time
+		u.EmailVerifiedAt = &v
 	}
 	return u, err
 }
 
 func GetUserByID(id string) (*User, error) {
 	u := &User{}
+	var verifiedAt sql.NullTime
 	err := database.DB.QueryRow(
-		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), COALESCE(email, ''), COALESCE(avatar_url, ''), COALESCE(role, 'member'), created_at FROM users WHERE id = $1", id,
-	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &u.AvatarURL, &u.Role, &u.CreatedAt)
+		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), COALESCE(email, ''), email_verified_at, COALESCE(avatar_url, ''), COALESCE(role, 'member'), created_at FROM users WHERE id = $1", id,
+	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &verifiedAt, &u.AvatarURL, &u.Role, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
+	}
+	if verifiedAt.Valid {
+		v := verifiedAt.Time
+		u.EmailVerifiedAt = &v
 	}
 	return u, err
 }
@@ -54,18 +65,23 @@ func GetUserByID(id string) (*User, error) {
 func CreateUser(u *User) error {
 	return database.DB.QueryRow(
 		// Bootstrap: first user becomes a platform admin (useful for self-hosted installs).
-		"INSERT INTO users (github_id, username, email, avatar_url, role) VALUES ($1, $2, NULLIF($3,''), $4, (CASE WHEN (SELECT COUNT(*) FROM users)=0 THEN 'admin' ELSE 'member' END)) RETURNING id, role, created_at",
+		"INSERT INTO users (github_id, username, email, email_verified_at, avatar_url, role) VALUES ($1, $2, NULLIF($3,''), NOW(), $4, (CASE WHEN (SELECT COUNT(*) FROM users)=0 THEN 'admin' ELSE 'member' END)) RETURNING id, role, created_at",
 		u.GitHubID, u.Username, u.Email, u.AvatarURL,
 	).Scan(&u.ID, &u.Role, &u.CreatedAt)
 }
 
 func GetUserByEmail(email string) (*User, error) {
 	u := &User{}
+	var verifiedAt sql.NullTime
 	err := database.DB.QueryRow(
-		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), email, COALESCE(password_hash, ''), COALESCE(avatar_url, ''), COALESCE(role, 'member'), created_at FROM users WHERE email = $1", email,
-	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &u.PasswordHash, &u.AvatarURL, &u.Role, &u.CreatedAt)
+		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), email, email_verified_at, COALESCE(password_hash, ''), COALESCE(avatar_url, ''), COALESCE(role, 'member'), created_at FROM users WHERE email = $1", email,
+	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &verifiedAt, &u.PasswordHash, &u.AvatarURL, &u.Role, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
+	}
+	if verifiedAt.Valid {
+		v := verifiedAt.Time
+		u.EmailVerifiedAt = &v
 	}
 	return u, err
 }
@@ -73,7 +89,7 @@ func GetUserByEmail(email string) (*User, error) {
 func CreateUserWithPassword(u *User) error {
 	return database.DB.QueryRow(
 		// Bootstrap: first user becomes a platform admin (useful for self-hosted installs).
-		"INSERT INTO users (username, email, password_hash, role) VALUES ($1, $2, $3, (CASE WHEN (SELECT COUNT(*) FROM users)=0 THEN 'admin' ELSE 'member' END)) RETURNING id, role, created_at",
+		"INSERT INTO users (username, email, password_hash, role, email_verified_at) VALUES ($1, $2, $3, (CASE WHEN (SELECT COUNT(*) FROM users)=0 THEN 'admin' ELSE 'member' END), NULL) RETURNING id, role, created_at",
 		u.Username, u.Email, u.PasswordHash,
 	).Scan(&u.ID, &u.Role, &u.CreatedAt)
 }
@@ -90,7 +106,7 @@ func UpdateUser(u *User) error {
 // This avoids duplicate accounts when a user signs up with email/password then connects GitHub.
 func LinkGitHubToUser(userID string, githubID int64, username string, email string, avatarURL string) error {
 	_, err := database.DB.Exec(
-		"UPDATE users SET github_id=$1, username=$2, email=NULLIF($3,''), avatar_url=$4 WHERE id=$5 AND (github_id IS NULL OR github_id=0)",
+		"UPDATE users SET github_id=$1, username=$2, email=NULLIF($3,''), avatar_url=$4, email_verified_at=COALESCE(email_verified_at, NOW()) WHERE id=$5 AND (github_id IS NULL OR github_id=0)",
 		githubID, username, email, avatarURL, userID,
 	)
 	return err

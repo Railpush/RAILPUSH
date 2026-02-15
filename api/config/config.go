@@ -134,6 +134,7 @@ type EmailConfig struct {
 	SMTPUser     string
 	SMTPPassword string
 	SMTPFrom     string
+	SMTPEnvelopeFrom string
 	SMTPReplyTo  string
 
 	Outbox EmailOutboxConfig
@@ -245,6 +246,7 @@ func Load() *Config {
 			SMTPUser:     getEnv("SMTP_USER", ""),
 			SMTPPassword: getEnv("SMTP_PASSWORD", ""),
 			SMTPFrom:     getEnv("SMTP_FROM", ""),
+			SMTPEnvelopeFrom: getEnv("SMTP_ENVELOPE_FROM", ""),
 			SMTPReplyTo:  getEnv("SMTP_REPLY_TO", ""),
 
 			Outbox: EmailOutboxConfig{

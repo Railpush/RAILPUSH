@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"crypto/subtle"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,6 +29,54 @@ func NewAuthHandler(cfg *config.Config) *AuthHandler {
 	return &AuthHandler{Config: cfg}
 }
 
+func controlPlaneBaseURL(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(cfg.ControlPlane.Domain)
+	if raw == "" {
+		return ""
+	}
+	if strings.Contains(raw, "://") {
+		return strings.TrimSuffix(raw, "/")
+	}
+	scheme := "https"
+	if raw == "localhost" || strings.HasPrefix(raw, "localhost:") || strings.HasPrefix(raw, "127.0.0.1") {
+		scheme = "http"
+	}
+	return scheme + "://" + raw
+}
+
+func (h *AuthHandler) enqueueVerificationEmail(user *models.User) {
+	if h == nil || h.Config == nil || user == nil {
+		return
+	}
+	if user.EmailVerifiedAt != nil {
+		return
+	}
+	to := strings.TrimSpace(user.Email)
+	if to == "" || !h.Config.Email.Enabled() {
+		return
+	}
+
+	token, err := models.IssueEmailVerificationToken(user.ID, 24*time.Hour)
+	if err != nil {
+		log.Printf("verify email token issue failed: user=%s err=%v", user.ID, err)
+		return
+	}
+	cp := controlPlaneBaseURL(h.Config)
+	verifyURL := ""
+	if cp != "" {
+		verifyURL = cp + "/verify?token=" + url.QueryEscape(token)
+	} else {
+		verifyURL = "/verify?token=" + url.QueryEscape(token)
+	}
+	subj, text, html := services.BuildVerifyEmail(h.Config, user, verifyURL)
+	if _, err := models.EnqueueEmail("", "verify_email", to, subj, text, html); err != nil {
+		log.Printf("verify email enqueue failed: user=%s err=%v", user.ID, err)
+	}
+}
+
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email    string `json:"email"`
@@ -46,13 +95,20 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusBadRequest, "password must be at least 8 characters")
 		return
 	}
-	existing, err := models.GetUserByEmail(req.Email)
+
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	existing, err := models.GetUserByEmail(email)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	// Never reveal whether an email already exists (avoid user enumeration).
 	if existing != nil {
-		utils.RespondError(w, http.StatusConflict, "email already registered")
+		// If the account isn't verified yet, resend a verification link (best-effort).
+		if existing.EmailVerifiedAt == nil {
+			h.enqueueVerificationEmail(existing)
+		}
+		utils.RespondJSON(w, http.StatusCreated, map[string]string{"status": "verification_sent"})
 		return
 	}
 	hash, err := utils.HashPassword(req.Password)
@@ -64,30 +120,26 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	if username == "" {
 		username = req.Email
 	}
-	user := &models.User{Username: username, Email: req.Email, PasswordHash: hash}
+	user := &models.User{Username: username, Email: email, PasswordHash: hash}
 	if err := models.CreateUserWithPassword(user); err != nil {
-		utils.RespondError(w, http.StatusInternalServerError, "failed to create user: "+err.Error())
+		// Handle races/uniqueness without revealing whether the email exists.
+		if existing, e2 := models.GetUserByEmail(email); e2 == nil && existing != nil {
+			if existing.EmailVerifiedAt == nil {
+				h.enqueueVerificationEmail(existing)
+			}
+			utils.RespondJSON(w, http.StatusCreated, map[string]string{"status": "verification_sent"})
+			return
+		}
+		utils.RespondError(w, http.StatusInternalServerError, "failed to create user")
 		return
 	}
 	// Auto-create a default workspace
 	ws := &models.Workspace{Name: username + "'s workspace", OwnerID: user.ID, DeployPolicy: "cancel"}
 	models.CreateWorkspace(ws)
 
-	// Best-effort welcome email (async via outbox).
-	if h != nil && h.Config != nil && h.Config.Email.Enabled() && strings.TrimSpace(user.Email) != "" {
-		subj, text, html := services.BuildWelcomeEmail(h.Config, user, ws.Name)
-		if _, err := models.EnqueueEmail("welcome:"+user.ID, "welcome", user.Email, subj, text, html); err != nil {
-			log.Printf("email enqueue failed: type=welcome user=%s err=%v", user.ID, err)
-		}
-	}
-
-	tokenStr, err := h.generateJWT(user)
-	if err != nil {
-		utils.RespondError(w, http.StatusInternalServerError, "failed to generate token")
-		return
-	}
-	setSessionCookie(w, r, tokenStr, time.Duration(h.Config.JWT.Expiration)*time.Hour)
-	utils.RespondJSON(w, http.StatusCreated, map[string]interface{}{"user": user, "workspace": ws})
+	// Email verification required for email/password signups.
+	h.enqueueVerificationEmail(user)
+	utils.RespondJSON(w, http.StatusCreated, map[string]string{"status": "verification_sent"})
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
@@ -116,6 +168,10 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
+	if user.EmailVerifiedAt == nil {
+		utils.RespondError(w, http.StatusForbidden, "email not verified")
+		return
+	}
 	tokenStr, err := h.generateJWT(user)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to generate token")
@@ -123,6 +179,46 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	setSessionCookie(w, r, tokenStr, time.Duration(h.Config.JWT.Expiration)*time.Hour)
 	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{"user": user})
+}
+
+func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32*1024)).Decode(&req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if _, err := models.ConsumeEmailVerificationToken(req.Token); err != nil {
+		if errors.Is(err, models.ErrInvalidEmailVerificationToken) {
+			utils.RespondError(w, http.StatusBadRequest, "invalid or expired token")
+			return
+		}
+		utils.RespondError(w, http.StatusInternalServerError, "verification failed")
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "verified"})
+}
+
+func (h *AuthHandler) ResendVerification(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32*1024)).Decode(&req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	if email == "" {
+		utils.RespondError(w, http.StatusBadRequest, "email is required")
+		return
+	}
+
+	// Never reveal whether the account exists.
+	if u, err := models.GetUserByEmail(email); err == nil && u != nil && u.EmailVerifiedAt == nil {
+		h.enqueueVerificationEmail(u)
+	}
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *AuthHandler) GitHubRedirect(w http.ResponseWriter, r *http.Request) {

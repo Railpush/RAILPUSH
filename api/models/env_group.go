@@ -65,6 +65,8 @@ func LinkServiceToEnvGroup(serviceID, envGroupID string) error {
 }
 
 func DeleteEnvGroup(id string) error {
+	// env_vars.owner_id does not have a FK to env_groups; delete to avoid orphans.
+	_ = DeleteEnvVars("env_group", id)
 	_, err := database.DB.Exec("DELETE FROM env_groups WHERE id=$1", id)
 	return err
 }

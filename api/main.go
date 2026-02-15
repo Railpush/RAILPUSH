@@ -172,6 +172,8 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 
 	api.HandleFunc("/auth/register", auth.Register).Methods("POST")
 	api.HandleFunc("/auth/login", auth.Login).Methods("POST")
+	api.HandleFunc("/auth/verify", auth.VerifyEmail).Methods("POST")
+	api.HandleFunc("/auth/verify/resend", auth.ResendVerification).Methods("POST")
 	api.HandleFunc("/auth/logout", auth.Logout).Methods("POST")
 	api.HandleFunc("/auth/github", auth.GitHubRedirect).Methods("GET")
 	api.HandleFunc("/auth/github/callback", auth.GitHubCallback).Methods("GET")

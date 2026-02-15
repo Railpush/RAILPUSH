@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -140,6 +141,7 @@ func (h *OpsCreditsHandler) Grant(w http.ResponseWriter, r *http.Request) {
 		CreatedBy:   userID,
 	}
 	if err := models.CreateWorkspaceCreditEntry(entry); err != nil {
+		log.Printf("ops credits: grant failed user=%s workspace=%s amount_cents=%d err=%v", userID, workspaceID, req.AmountCents, err)
 		utils.RespondError(w, http.StatusInternalServerError, "failed to grant credit")
 		return
 	}
@@ -151,4 +153,3 @@ func (h *OpsCreditsHandler) Grant(w http.ResponseWriter, r *http.Request) {
 		"balance_cents": balance,
 	})
 }
-

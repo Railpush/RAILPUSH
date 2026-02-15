@@ -293,6 +293,8 @@ func SetServiceSuspended(id string, suspended bool) error {
 }
 
 func DeleteService(id string) error {
+	// env_vars.owner_id does not have a FK to services; delete to avoid orphans.
+	_ = DeleteEnvVars("service", id)
 	_, err := database.DB.Exec("DELETE FROM services WHERE id=$1", id)
 	return err
 }

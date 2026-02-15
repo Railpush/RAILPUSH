@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 
@@ -77,6 +78,7 @@ func (h *SupportHandler) CreateTicket(w http.ResponseWriter, r *http.Request) {
 		Priority:    strings.ToLower(strings.TrimSpace(req.Priority)),
 	}
 	if err := models.CreateSupportTicket(t); err != nil {
+		log.Printf("support: create ticket failed user=%s workspace=%s err=%v", userID, workspaceID, err)
 		utils.RespondError(w, http.StatusInternalServerError, "failed to create ticket")
 		return
 	}
@@ -88,6 +90,7 @@ func (h *SupportHandler) CreateTicket(w http.ResponseWriter, r *http.Request) {
 		IsInternal: false,
 	}
 	if err := models.CreateSupportTicketMessage(m); err != nil {
+		log.Printf("support: create ticket message failed user=%s ticket=%s err=%v", userID, t.ID, err)
 		utils.RespondError(w, http.StatusInternalServerError, "failed to create ticket message")
 		return
 	}
@@ -171,10 +174,10 @@ func (h *SupportHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 		IsInternal: false,
 	}
 	if err := models.CreateSupportTicketMessage(m); err != nil {
+		log.Printf("support: create message failed user=%s ticket=%s err=%v", userID, t.ID, err)
 		utils.RespondError(w, http.StatusInternalServerError, "failed to add message")
 		return
 	}
 	_ = models.TouchSupportTicketCustomerReply(t.ID)
 	utils.RespondJSON(w, http.StatusCreated, m)
 }
-
