@@ -276,8 +276,11 @@ func (h *OpsIncidentsHandler) SilenceIncident(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	startsAt := time.Now().UTC().Add(-1 * time.Minute)
-	endsAt := startsAt.Add(time.Duration(durMin) * time.Minute)
+	// Start slightly in the past so the silence matches currently firing alerts,
+	// but ensure the end is *in the future* relative to Alertmanager's clock.
+	now := time.Now().UTC()
+	startsAt := now.Add(-1 * time.Minute)
+	endsAt := now.Add(time.Duration(durMin) * time.Minute)
 	userID := middleware.GetUserID(r)
 
 	am := services.NewAlertmanagerClient(h.Config)
