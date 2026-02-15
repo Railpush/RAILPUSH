@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ExternalLink, RotateCw, GitBranch, ChevronDown, ShieldCheck, Clock, Activity, Box, Terminal, Settings } from 'lucide-react';
+import { ExternalLink, RotateCw, GitBranch, ChevronDown, ShieldCheck, Clock, Activity, Box, Settings } from 'lucide-react';
 import { StatusBadge } from '../components/ui/StatusBadge';
+import { LiveTerminal } from '../components/ui/LiveTerminal';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Dropdown } from '../components/ui/Dropdown';
@@ -180,15 +181,24 @@ export function ServiceDetail() {
               <h2 className="text-xs font-bold uppercase tracking-wider text-content-tertiary">Console Output</h2>
               <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => navigate(`/services/${service.id}/logs`)}>View Logs</Button>
             </div>
-            <div onClick={() => navigate(`/services/${service.id}/logs`)} className="bg-surface-tertiary/30 border border-border-default rounded-lg p-4 font-mono text-xs text-content-secondary cursor-pointer hover:bg-surface-tertiary/50 transition-colors h-32 overflow-hidden relative">
-              <div className="absolute top-2 right-2 opacity-50"><Terminal className="w-4 h-4" /></div>
-              <div className="space-y-1">
-                <p><span className="text-blue-400">[info]</span> Starting service on port 10000...</p>
-                <p><span className="text-blue-400">[info]</span> Connection established to database.</p>
-                <p><span className="text-emerald-400">[success]</span> Server listening on 0.0.0.0:10000</p>
-                <p className="opacity-50">Watching for file changes...</p>
-              </div>
-            </div>
+            <LiveTerminal
+              lines={[
+                { type: 'info', content: 'Starting build for commit 8f3a2c1...', delay: 800 },
+                { type: 'command', content: 'git clone https://github.com/railpush/demo-app.git', delay: 1200 },
+                { type: 'info', content: 'Cloning into \'demo-app\'...', delay: 600 },
+                { type: 'info', content: 'Detected Node.js runtime', delay: 400 },
+                { type: 'command', content: 'npm install', delay: 1500 },
+                { type: 'normal', content: 'added 142 packages in 3.2s', delay: 500 },
+                { type: 'command', content: 'npm run build', delay: 2000 },
+                { type: 'normal', content: '> demo-app@1.0.0 build', delay: 300 },
+                { type: 'normal', content: '> tsc && vite build', delay: 1800 },
+                { type: 'success', content: 'Build completed successfully', delay: 800 },
+                { type: 'info', content: 'Starting container...', delay: 1000 },
+                { type: 'success', content: 'Health check passed (200 OK)', delay: 600 },
+                { type: 'success', content: 'Service is live at https://railpush.com', delay: 2000 },
+              ]}
+              className="h-[320px]"
+            />
           </div>
         </div>
 
