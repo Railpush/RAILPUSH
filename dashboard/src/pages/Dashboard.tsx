@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Search, Server, Database, Key, Activity, ArrowUpRight, Zap } from 'lucide-react';
 import { ServiceIcon } from '../components/ui/ServiceIcon';
@@ -7,7 +7,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { serviceTypeLabel, timeAgo } from '../lib/utils';
-import type { Service, ManagedDatabase, ManagedKeyValue } from '../types';
+import type { Service, ManagedDatabase, ManagedKeyValue, ServiceStatus, DeployStatus } from '../types';
 import { services as servicesApi, databases as dbApi, keyvalue as kvApi } from '../lib/api';
 
 export type DashboardScope =
@@ -373,7 +373,18 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
 
 // Subcomponents
 
-function StatsCard({ label, value, icon, trend, trendColor, subtext, onClick, actionIcon }: any) {
+type StatsCardProps = {
+  label: string;
+  value: string | number;
+  icon: ReactNode;
+  trend?: string;
+  trendColor?: string;
+  subtext?: string;
+  onClick?: () => void;
+  actionIcon?: ReactNode;
+};
+
+function StatsCard({ label, value, icon, trend, trendColor, subtext, onClick, actionIcon }: StatsCardProps) {
   return (
     <div
       onClick={onClick}
@@ -409,7 +420,16 @@ function StatsCard({ label, value, icon, trend, trendColor, subtext, onClick, ac
   )
 }
 
-function ResourceCard({ title, subtitle, icon, status, meta, onClick }: any) {
+type ResourceCardProps = {
+  title: string;
+  subtitle?: string;
+  icon: ReactNode;
+  status: ServiceStatus | DeployStatus;
+  meta: string[];
+  onClick?: () => void;
+};
+
+function ResourceCard({ title, subtitle, icon, status, meta, onClick }: ResourceCardProps) {
   return (
     <Card hover onClick={onClick} className="relative group">
       <div className="flex items-start justify-between">

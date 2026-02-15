@@ -8,12 +8,13 @@ import {
   ExternalLink,
   FileDown,
   Globe,
-  Info,
   Key,
   PencilLine,
   ReceiptText,
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
+import { Card } from '../components/ui/Card';
+import { StatusBadge } from '../components/ui/StatusBadge';
 import { auth, billing } from '../lib/api';
 import { PLAN_BY_ID, type PlanID } from '../lib/plans';
 import { cn } from '../lib/utils';
@@ -107,7 +108,7 @@ function CardBrandMark({
   if (key === 'visa') {
     return (
       <div
-        className={cn('inline-flex items-center justify-center rounded-md overflow-hidden', className)}
+        className={cn('inline-flex items-center justify-center rounded-md overflow-hidden bg-white', className)}
         aria-label="Visa"
       >
         <VisaLogo className="h-6 w-auto" />
@@ -118,7 +119,7 @@ function CardBrandMark({
   if (key === 'mastercard') {
     return (
       <div
-        className={cn('inline-flex items-center justify-center rounded-md overflow-hidden', className)}
+        className={cn('inline-flex items-center justify-center rounded-md overflow-hidden bg-white', className)}
         aria-label="Mastercard"
       >
         <MastercardLogo className="h-6 w-auto" />
@@ -129,12 +130,12 @@ function CardBrandMark({
   return (
     <div
       className={cn(
-        'inline-flex items-center justify-center rounded-md border border-border-default bg-surface-primary text-content-primary',
+        'inline-flex items-center justify-center rounded-md border border-border-default bg-surface-secondary text-content-primary',
         className
       )}
       aria-label="Card"
     >
-      <CreditCard className="w-4 h-4" />
+      <CreditCard className="w-5 h-5 opacity-70" />
     </div>
   );
 }
@@ -161,101 +162,47 @@ function formatCurrency(cents: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 }
 
-function formatMonthLabel(date: Date) {
-  return date.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-}
+
 
 function usagePercent(used: number, included: number) {
   if (included <= 0) return 0;
   return Math.min(100, Math.round((used / included) * 100));
 }
 
-type StatusTone = 'success' | 'warning' | 'danger' | 'neutral';
-
 function StatCard({
   title,
   value,
   helper,
   icon,
-  emphasis = false,
 }: {
   title: string;
   value: string;
   helper?: string | React.ReactNode;
   icon?: React.ReactNode;
-  emphasis?: boolean;
 }) {
   return (
-    <div
-      className={cn(
-        'border border-border-default bg-surface-secondary rounded-lg p-5 flex items-start gap-3',
-        emphasis && 'bg-surface-tertiary border-border-hover'
-      )}
-    >
-      {icon && <div className="w-10 h-10 rounded-full bg-surface-primary border border-border-default flex items-center justify-center text-content-primary">{icon}</div>}
-      <div className="flex-1">
-        <p className="text-xs uppercase tracking-wide text-content-tertiary">{title}</p>
-        <p className="text-xl font-semibold text-content-primary mt-1">{value}</p>
-        {helper && <p className="text-sm text-content-secondary mt-1 leading-relaxed">{helper}</p>}
+    <div className="glass-panel p-5 rounded-xl relative overflow-hidden group hover:border-border-hover transition-colors">
+      <div className="flex items-start gap-3">
+        {icon && <div className="w-10 h-10 rounded-lg bg-surface-tertiary border border-border-default flex items-center justify-center text-brand/80">{icon}</div>}
+        <div className="flex-1">
+          <p className="text-xs uppercase tracking-wider text-content-tertiary font-semibold">{title}</p>
+          <p className="text-2xl font-bold text-content-primary mt-1 tracking-tight">{value}</p>
+          {helper && <div className="text-sm text-content-secondary mt-1">{helper}</div>}
+        </div>
       </div>
+      <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-brand/5 to-transparent rounded-bl-full pointer-events-none" />
     </div>
   );
 }
 
-function subscriptionStatusDisplay(status?: string): { label: string; tone: StatusTone } {
-  const normalized = (status || 'active').trim().toLowerCase();
-  const label = normalized
-    .replace(/_/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-
-  switch (normalized) {
-    case 'active':
-    case 'trialing':
-      return { label: label || 'Active', tone: 'success' };
-    case 'past_due':
-    case 'incomplete':
-      return { label: label || 'Past due', tone: 'warning' };
-    case 'unpaid':
-    case 'incomplete_expired':
-      return { label: label || 'Unpaid', tone: 'danger' };
-    case 'canceled':
-    case 'cancelled':
-    case 'ended':
-      return { label: label || 'Canceled', tone: 'neutral' };
-    default:
-      return { label: label || 'Unknown', tone: 'neutral' };
-  }
-}
-
 function StatusPill({ status }: { status?: string }) {
-  const { label, tone } = subscriptionStatusDisplay(status);
+  const normalized = (status || 'active').trim().toLowerCase();
+  let displayStatus: 'live' | 'suspended' | 'created' = 'created';
 
-  const toneClass =
-    tone === 'success'
-      ? 'bg-status-success-bg text-status-success border border-status-success/20'
-      : tone === 'warning'
-        ? 'bg-status-warning-bg text-status-warning border border-status-warning/20'
-        : tone === 'danger'
-          ? 'bg-status-error-bg text-status-error border border-status-error/20'
-          : 'bg-surface-tertiary text-content-secondary border border-border-default';
+  if (normalized === 'active' || normalized === 'trialing') displayStatus = 'live';
+  else if (normalized === 'unpaid' || normalized === 'canceled') displayStatus = 'suspended';
 
-  const dotClass =
-    tone === 'success'
-      ? 'bg-status-success'
-      : tone === 'warning'
-        ? 'bg-status-warning'
-        : tone === 'danger'
-          ? 'bg-status-error'
-          : 'bg-content-tertiary';
-
-  return (
-    <span className={cn('inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium', toneClass)}>
-      <span className={cn('w-1.5 h-1.5 rounded-full', dotClass)} />
-      {label}
-    </span>
-  );
+  return <StatusBadge status={displayStatus} size="sm" />;
 }
 
 function SectionFrame({
@@ -268,11 +215,14 @@ function SectionFrame({
   children: React.ReactNode;
 }) {
   return (
-    <section id={id} className="border border-border-default bg-surface-primary rounded-lg overflow-hidden">
-      <div className="px-6 py-5 border-b border-border-subtle">
-        <h2 className="text-xl font-semibold text-content-primary tracking-tight">{title}</h2>
+    <section id={id} className="scroll-mt-24">
+      <div className="mb-4 flex items-center gap-2">
+        <div className="h-4 w-1 bg-brand rounded-full" />
+        <h2 className="text-lg font-semibold text-content-primary">{title}</h2>
       </div>
-      <div className="px-6 py-6">{children}</div>
+      <Card className="glass-panel p-6 overflow-hidden">
+        {children}
+      </Card>
     </section>
   );
 }
@@ -397,19 +347,6 @@ export function Billing() {
     });
   }, [allGroupKeys]);
 
-  const invoiceRows = useMemo(() => {
-    if (monthToDateCents <= 0) return [];
-    return [
-      {
-        id: 'current',
-        date: formatMonthLabel(new Date()),
-        status: 'Open',
-        totalCents: monthToDateCents,
-        appliedCreditsCents: 0,
-      },
-    ];
-  }, [monthToDateCents]);
-
   const handleAddPaymentMethod = async () => {
     try {
       const { url } = await billing.createCheckoutSession(`${window.location.origin}/billing`);
@@ -466,43 +403,40 @@ export function Billing() {
     toast.info('Promo code redemption is coming soon');
   };
 
-  const scrollToSection = (id: string) => {
-    const section = document.getElementById(id);
-    if (!section) return;
-    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-
   const activeServiceCount = paidItems.filter((item) => item.resource_type === 'service').length;
   const activeDatabaseCount = paidItems.filter((item) => item.resource_type === 'database').length;
   const activeKeyValueCount = paidItems.filter((item) => item.resource_type === 'keyvalue').length;
 
   if (loading) {
     return (
-      <div className="space-y-4">
-        <div className="h-10 w-72 bg-surface-secondary border border-border-default rounded animate-pulse" />
-        <div className="h-48 bg-surface-secondary border border-border-default rounded animate-pulse" />
-        <div className="h-48 bg-surface-secondary border border-border-default rounded animate-pulse" />
+      <div className="space-y-8 animate-pulse">
+        <div className="h-10 w-72 bg-surface-tertiary rounded" />
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="h-32 bg-surface-tertiary rounded-xl" />
+          <div className="h-32 bg-surface-tertiary rounded-xl" />
+          <div className="h-32 bg-surface-tertiary rounded-xl" />
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8 animate-enter pb-12">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="space-y-1">
-          <p className="text-xs uppercase tracking-wide text-content-tertiary">Billing</p>
-          <h1 className="text-2xl font-semibold tracking-tight text-content-primary">Workspace billing & invoices</h1>
-          <p className="text-sm text-content-secondary">Keep plans, payment, and invoice history in sync with Stripe.</p>
+          <p className="text-xs uppercase tracking-wide text-brand font-semibold">Workspace</p>
+          <h1 className="text-3xl font-bold tracking-tight text-white">Billing & Invoices</h1>
+          <p className="text-sm text-content-secondary">Manage your subscription, payment methods, and billing history.</p>
         </div>
         <div className="flex items-center gap-2">
           {overview?.has_payment_method && (
             <Button variant="secondary" onClick={handleOpenBillingPortal}>
-              <ExternalLink className="w-4 h-4" />
+              <ExternalLink className="w-4 h-4 mr-2" />
               Manage Billing
             </Button>
           )}
           <Button variant={overview?.has_payment_method ? 'secondary' : 'primary'} onClick={handleAddPaymentMethod}>
-            <CreditCard className="w-4 h-4" />
+            <CreditCard className="w-4 h-4 mr-2" />
             {overview?.has_payment_method ? 'Update Payment Method' : 'Add Payment Method'}
           </Button>
         </div>
@@ -510,209 +444,126 @@ export function Billing() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard
-          title="Plan"
-          value={`${currentPlan.name} • ${PLAN_BY_ID[currentPlanId].priceLabel}`}
-          helper={<div className="flex items-center gap-2 text-sm"><StatusPill status={overview?.subscription_status} /><span className="text-content-secondary">Includes {PLAN_BY_ID[currentPlanId].cpu} / {PLAN_BY_ID[currentPlanId].mem}</span></div>}
-          icon={<CircleDollarSign className="w-4 h-4" />}
-          emphasis
+          title="Current Plan"
+          value={currentPlan.name}
+          helper={
+            <div className="flex items-center gap-2 mt-1">
+              <StatusPill status={overview?.subscription_status} />
+              <span className="text-xs text-content-tertiary">{PLAN_BY_ID[currentPlanId].priceLabel}</span>
+            </div>
+          }
+          icon={<CircleDollarSign className="w-5 h-5" />}
         />
         <StatCard
-          title="Unbilled this month"
+          title="Unbilled Charges"
           value={formatCurrency(monthToDateCents)}
-          helper={`Projected ${formatMonthLabel(new Date())}: ${formatCurrency(projectedCents)}`}
-          icon={<ReceiptText className="w-4 h-4" />}
+          helper={<span className="text-brand">Projected: {formatCurrency(projectedCents)}</span>}
+          icon={<ReceiptText className="w-5 h-5" />}
         />
         <StatCard
-          title="Payment method"
+          title="Payment Method"
           value={
             overview?.has_payment_method
-              ? `${brandDisplay(overview.payment_method_brand)} •••• ${overview.payment_method_last4}`
-              : 'No card on file'
+              ? `•••• ${overview.payment_method_last4}`
+              : 'None'
           }
-          helper={overview?.has_payment_method ? 'Stripe keeps this card current.' : 'Add a card to enable paid plans.'}
-          icon={
-            overview?.has_payment_method ? (
-              <CardBrandMark brand={overview.payment_method_brand} className="px-2.5 py-1.5 text-[10px]" />
-            ) : (
-              <CreditCard className="w-4 h-4" />
-            )
+          helper={
+            overview?.has_payment_method ?
+              <div className="flex items-center gap-2 mt-1">
+                <CardBrandMark brand={overview.payment_method_brand} className="w-8 h-5" />
+                <span className="text-xs text-content-tertiary">{brandDisplay(overview.payment_method_brand)}</span>
+              </div> :
+              <span className="text-xs text-amber-500">Action required</span>
           }
+          icon={<CreditCard className="w-5 h-5" />}
         />
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_240px] gap-6">
-        <div className="space-y-6">
-          <SectionFrame id="plan" title="Plan & Controls">
-            <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-4">
-              <div className="border border-border-default bg-surface-secondary rounded-lg p-5 space-y-3">
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_240px] gap-8">
+        <div className="space-y-8">
+          <SectionFrame id="plan" title="Plan Overview">
+            <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-6">
+              <div className="space-y-4">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-1">
-                    <p className="text-xs uppercase tracking-wider text-content-tertiary">Current Plan</p>
-                    <h3 className="text-xl font-semibold text-content-primary">{currentPlan.name}</h3>
-                    <p className="text-sm text-content-secondary leading-relaxed">{currentPlan.description}</p>
-                  </div>
-                  <StatusPill status={overview?.subscription_status} />
-                </div>
-                <div className="flex items-center flex-wrap gap-2 pt-1">
-                  <span className="inline-flex items-center border border-border-default bg-surface-primary px-2.5 py-1 text-xs text-content-secondary">
-                    {currentPlan.cpu}
-                  </span>
-                  <span className="inline-flex items-center border border-border-default bg-surface-primary px-2.5 py-1 text-xs text-content-secondary">
-                    {currentPlan.mem}
-                  </span>
-                  <span className="inline-flex items-center border border-border-default bg-surface-primary px-2.5 py-1 text-xs text-content-secondary">
-                    {currentPlan.priceLabel}
-                  </span>
-                </div>
-              </div>
-
-              <div className="border border-border-default bg-surface-secondary rounded-lg p-5 space-y-3">
-                <p className="text-sm text-content-secondary">Manage your subscription and invoices in Stripe.</p>
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="secondary" onClick={handleOpenBillingPortal}>
-                    <PencilLine className="w-4 h-4" />
-                    Update Plan
-                  </Button>
-                  <Button variant="ghost" onClick={handleOpenBillingPortal}>
-                    <ExternalLink className="w-4 h-4" />
-                    Open Stripe Portal
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </SectionFrame>
-
-          <SectionFrame id="payment-method" title="Payment Method">
-            <div className="border border-border-default bg-surface-secondary p-6">
-              {overview?.has_payment_method ? (
-                <div className="space-y-4">
-                    <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                      <CardBrandMark brand={overview.payment_method_brand} className="w-12 h-9 rounded-lg text-[10px]" />
-                      <p className="text-lg text-content-primary">
-                        {brandDisplay(overview.payment_method_brand)} ending in {overview.payment_method_last4}
-                      </p>
-                    </div>
-                    <StatusPill status={overview.subscription_status} />
-                  </div>
-                  <Button variant="secondary" onClick={handleOpenBillingPortal}>
-                    Edit payment details
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <p className="text-lg text-content-primary">No payment method on file</p>
-                    <p className="text-sm text-content-secondary mt-1">
-                      Add a card to enable paid plans and uninterrupted service billing.
-                    </p>
+                    <h3 className="text-xl font-bold text-white">{currentPlan.name}</h3>
+                    <p className="text-sm text-content-secondary mt-1">{currentPlan.description}</p>
                   </div>
-                  <Button variant="primary" onClick={handleAddPaymentMethod}>
-                    Add Payment Method
-                  </Button>
                 </div>
-              )}
+                <div className="flex items-center gap-3 pt-2">
+                  <div className="px-3 py-1.5 bg-surface-tertiary/50 border border-border-default rounded flex items-center gap-2">
+                    <span className="text-xs text-content-tertiary uppercase tracking-wider">CPU</span>
+                    <span className="text-sm font-mono text-content-primary">{currentPlan.cpu}</span>
+                  </div>
+                  <div className="px-3 py-1.5 bg-surface-tertiary/50 border border-border-default rounded flex items-center gap-2">
+                    <span className="text-xs text-content-tertiary uppercase tracking-wider">RAM</span>
+                    <span className="text-sm font-mono text-content-primary">{currentPlan.mem}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-l border-border-default/50 pl-6 space-y-3 flex flex-col justify-center">
+                <Button variant="secondary" onClick={handleOpenBillingPortal} className="w-full justify-start">
+                  <PencilLine className="w-4 h-4 mr-2" />
+                  Change Plan
+                </Button>
+                <Button variant="ghost" onClick={handleOpenBillingPortal} className="w-full justify-start">
+                  <ExternalLink className="w-4 h-4 mr-2" />
+                  Stripe Customer Portal
+                </Button>
+              </div>
             </div>
           </SectionFrame>
 
-          <SectionFrame id="billing-information" title="Billing Information">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="border border-border-default bg-surface-secondary rounded-lg p-5 space-y-2">
-                <p className="text-xs uppercase tracking-wider text-content-tertiary">Billing email</p>
-                <p className="text-base text-content-primary">{billingEmail || 'Not provided'}</p>
-                <p className="text-sm text-content-secondary">Used for invoices and billing notifications.</p>
-                <Button variant="ghost" onClick={handleOpenBillingPortal} className="mt-2 w-fit">
-                  <PencilLine className="w-4 h-4" />
-                  Edit in portal
-                </Button>
-              </div>
-              <div className="border border-border-default bg-surface-secondary rounded-lg p-5 space-y-2">
-                <p className="text-xs uppercase tracking-wider text-content-tertiary">Company & Tax Details</p>
-                <p className="text-base text-content-secondary">Manage company name, address, and VAT in your Stripe portal.</p>
-                <Button variant="ghost" onClick={handleOpenBillingPortal} className="mt-2 w-fit">
-                  <ExternalLink className="w-4 h-4" />
-                  Open portal
-                </Button>
-              </div>
-            </div>
-          </SectionFrame>
-
-          <SectionFrame id="included-usage" title="Monthly Included Usage">
-            <div className="space-y-4">
-              <p className="text-base text-content-secondary">
-                Included quotas are based on your <span className="text-content-primary">{currentPlan.name}</span> plan.
+          <SectionFrame id="included-usage" title="Resource Usage">
+            <div className="space-y-6">
+              <p className="text-sm text-content-secondary">
+                Usage metrics for your current billing cycle. Quotas recharge monthly.
               </p>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="border border-border-default bg-surface-secondary rounded-lg p-4 space-y-2">
-                  <div className="flex items-center justify-between text-sm text-content-secondary">
-                    <span>Instance Hours</span>
-                    <span className="text-content-primary font-semibold">0 / {includedUsage.instanceHours}</span>
-                  </div>
-                  <div className="h-2 bg-surface-primary rounded-full overflow-hidden border border-border-subtle">
-                    <div className="h-full bg-brand" style={{ width: `${usagePercent(0, includedUsage.instanceHours)}%` }} />
-                  </div>
-                </div>
-                <div className="border border-border-default bg-surface-secondary rounded-lg p-4 space-y-2">
-                  <div className="flex items-center justify-between text-sm text-content-secondary">
-                    <span>Bandwidth (GB)</span>
-                    <span className="text-content-primary font-semibold">0 / {includedUsage.bandwidthGb.toLocaleString()}</span>
-                  </div>
-                  <div className="h-2 bg-surface-primary rounded-full overflow-hidden border border-border-subtle">
-                    <div className="h-full bg-brand-purple" style={{ width: `${usagePercent(0, includedUsage.bandwidthGb)}%` }} />
-                  </div>
-                  <div className="flex justify-between text-xs text-content-tertiary pt-1">
-                    <span>Services ({activeServiceCount})</span>
-                    <span>DB ({activeDatabaseCount})</span>
-                    <span>KV ({activeKeyValueCount})</span>
-                  </div>
-                </div>
-                <div className="border border-border-default bg-surface-secondary rounded-lg p-4 space-y-2">
-                  <div className="flex items-center justify-between text-sm text-content-secondary">
-                    <span>Pipeline Minutes</span>
-                    <span className="text-content-primary font-semibold">0 / {includedUsage.pipelineMinutes.toLocaleString()}</span>
-                  </div>
-                  <div className="h-2 bg-surface-primary rounded-full overflow-hidden border border-border-subtle">
-                    <div className="h-full bg-status-info" style={{ width: `${usagePercent(0, includedUsage.pipelineMinutes)}%` }} />
-                  </div>
-                </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <UsageBar
+                  label="Instance Hours"
+                  used={0}
+                  total={includedUsage.instanceHours}
+                  color="bg-brand"
+                />
+                <UsageBar
+                  label="Bandwidth (GB)"
+                  used={0}
+                  total={includedUsage.bandwidthGb}
+                  color="bg-purple-500"
+                  subtext={`Across ${activeServiceCount + activeDatabaseCount + activeKeyValueCount} resources`}
+                />
+                <UsageBar
+                  label="Pipeline Minutes"
+                  used={0}
+                  total={includedUsage.pipelineMinutes}
+                  color="bg-emerald-500"
+                />
               </div>
-              <p className="text-sm text-content-tertiary">
-                Usage metering is rolling out soon; until then, totals remain accurate while live usage reads as 0.
-              </p>
             </div>
           </SectionFrame>
 
-          <SectionFrame id="unbilled-charges" title="Unbilled Charges">
+          <SectionFrame id="unbilled-charges" title="Unbilled Line Items">
             <div className="space-y-4">
-              <p className="text-base text-content-secondary">Amounts displayed have been accrued within the month to date.</p>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  variant="secondary"
-                  onClick={() => setCollapsedGroups(new Set())}
-                  disabled={groupedCharges.length === 0}
-                >
-                  Expand All
-                </Button>
-                <Button
-                  variant="secondary"
-                  onClick={() => setCollapsedGroups(new Set(allGroupKeys))}
-                  disabled={groupedCharges.length === 0}
-                >
-                  Collapse All
-                </Button>
+              <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border-default/50 pb-4">
+                <p className="text-sm text-content-secondary">Charges accrued this month, to be invoiced next cycle.</p>
+                <div className="flex gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => setCollapsedGroups(new Set())} disabled={groupedCharges.length === 0}>Expand All</Button>
+                  <Button variant="ghost" size="sm" onClick={() => setCollapsedGroups(new Set(allGroupKeys))} disabled={groupedCharges.length === 0}>Collapse</Button>
+                </div>
               </div>
 
               {groupedCharges.length === 0 ? (
-                <div className="border border-border-default bg-surface-secondary p-6 text-content-secondary">
-                  No unbilled charges yet.
+                <div className="py-8 text-center text-content-tertiary italic">
+                  No unbilled charges for this period.
                 </div>
               ) : (
-                <div className="border border-border-default bg-surface-secondary divide-y divide-border-subtle">
+                <div className="space-y-2">
                   {groupedCharges.map((group) => {
                     const isOpen = !collapsedGroups.has(group.key);
                     return (
-                      <div key={group.key}>
+                      <div key={group.key} className="border border-border-default/50 rounded-lg overflow-hidden bg-surface-tertiary/10">
                         <button
                           type="button"
                           onClick={() => {
@@ -723,29 +574,29 @@ export function Billing() {
                               return next;
                             });
                           }}
-                          className="w-full px-5 py-4 flex items-center justify-between hover:bg-surface-primary/50 transition-colors"
+                          className="w-full px-4 py-3 flex items-center justify-between hover:bg-surface-tertiary/30 transition-colors"
                         >
-                          <div className="flex items-center gap-2 text-base text-content-primary">
-                            {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                            {resourceIcon(group.key)}
-                            <span>{group.label}</span>
+                          <div className="flex items-center gap-3">
+                            {isOpen ? <ChevronDown className="w-4 h-4 text-content-tertiary" /> : <ChevronRight className="w-4 h-4 text-content-tertiary" />}
+                            <div className="flex items-center gap-2 text-sm font-medium text-content-primary">
+                              {resourceIcon(group.key)}
+                              {group.label}
+                            </div>
                           </div>
-                          <span className="text-xl font-semibold text-content-primary">{formatCurrency(group.total)}</span>
+                          <span className="font-mono text-content-primary">{formatCurrency(group.total)}</span>
                         </button>
 
                         {isOpen && (
-                          <div className="px-5 pb-4">
-                            <div className="border border-border-default bg-surface-primary divide-y divide-border-subtle">
-                              {group.items.map((item) => (
-                                <div key={`${item.resource_type}-${item.resource_id}`} className="px-4 py-3 flex flex-wrap items-center justify-between gap-2">
-                                  <div>
-                                    <p className="text-base text-content-primary">{item.resource_name}</p>
-                                    <p className="text-xs uppercase tracking-wider text-content-tertiary">{item.plan} plan</p>
-                                  </div>
-                                  <p className="text-base text-content-primary">{formatCurrency(item.monthly_cost)}</p>
+                          <div className="bg-surface-tertiary/5 border-t border-border-default/30">
+                            {group.items.map((item) => (
+                              <div key={`${item.resource_type}-${item.resource_id}`} className="px-4 py-2 pl-12 flex justify-between text-xs border-b border-border-default/10 last:border-0">
+                                <div>
+                                  <span className="text-content-primary">{item.resource_name}</span>
+                                  <span className="ml-2 text-content-tertiary uppercase text-[10px]">{item.plan}</span>
                                 </div>
-                              ))}
-                            </div>
+                                <span className="font-mono text-content-secondary">{formatCurrency(item.monthly_cost)}</span>
+                              </div>
+                            ))}
                           </div>
                         )}
                       </div>
@@ -754,142 +605,80 @@ export function Billing() {
                 </div>
               )}
 
-              <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
-                <Button variant="secondary" onClick={handleDownloadCsv}>
-                  <FileDown className="w-4 h-4" />
-                  Download as CSV
-                </Button>
-                <div className="space-y-1 text-right">
-                  <p className="text-sm text-content-secondary">
-                    Total month to date <span className="text-2xl font-semibold text-content-primary ml-3">{formatCurrency(monthToDateCents)}</span>
-                  </p>
-                  <p className="text-sm text-content-secondary">
-                    Projected total for {new Date().toLocaleString('en-US', { month: 'long' })} <span className="text-2xl font-semibold text-content-primary ml-3">{formatCurrency(projectedCents)}</span>
-                  </p>
+              {paidItems.length > 0 && (
+                <div className="flex justify-end pt-2">
+                  <Button variant="ghost" size="sm" onClick={handleDownloadCsv}>
+                    <FileDown className="w-4 h-4 mr-2" />
+                    Export CSV
+                  </Button>
                 </div>
-              </div>
+              )}
             </div>
           </SectionFrame>
 
-          <SectionFrame id="credit-balance" title="Credit Balance">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-center">
-              <div>
-                <p className="text-base text-content-secondary mb-5">The balance will be applied to the amount due on your next invoice.</p>
-                <p className="text-xs uppercase tracking-wider text-content-tertiary">Total Balance</p>
-                <p className="text-4xl font-semibold text-content-primary mt-2">$0.00</p>
+          <SectionFrame id="billing-info" title="Billing Details">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <p className="text-xs uppercase tracking-wider text-content-tertiary">Billing Email</p>
+                <div className="flex items-center justify-between p-3 rounded bg-surface-tertiary/20 border border-border-default/50">
+                  <span className="text-sm font-medium">{billingEmail || 'Not configured'}</span>
+                  <Button variant="ghost" size="sm" onClick={handleOpenBillingPortal}><PencilLine className="w-3 h-3" /></Button>
+                </div>
               </div>
-              <div className="flex items-stretch">
+              <div className="space-y-2">
+                <p className="text-xs uppercase tracking-wider text-content-tertiary">Credit Balance</p>
+                <div className="flex items-center justify-between p-3 rounded bg-surface-tertiary/20 border border-border-default/50">
+                  <span className="text-lg font-bold text-white">$0.00</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 pt-4 border-t border-border-default/50">
+              <p className="text-xs text-content-tertiary mb-2">Have a promo code?</p>
+              <div className="flex gap-2">
                 <input
                   value={promoCode}
                   onChange={(e) => setPromoCode(e.target.value)}
-                  placeholder="Enter promo code"
-                  className="flex-1 h-12 bg-surface-primary border border-border-default px-3 text-base text-content-primary outline-none focus:border-border-hover"
+                  placeholder="Enter code..."
+                  className="bg-surface-tertiary/30 border border-border-default rounded px-3 py-1.5 text-sm text-content-primary outline-none focus:border-brand w-full max-w-xs"
                 />
-                <button
-                  type="button"
-                  onClick={handlePromoApply}
-                  className="h-12 px-5 border border-l-0 border-border-default bg-surface-tertiary text-content-secondary hover:text-content-primary disabled:opacity-60 transition-colors"
-                  disabled={!promoCode.trim()}
-                >
-                  Apply
-                </button>
+                <Button variant="secondary" onClick={handlePromoApply} disabled={!promoCode.trim()}>Apply</Button>
               </div>
             </div>
           </SectionFrame>
-
-          <SectionFrame id="invoice-history" title="Invoice History">
-            <div className="space-y-4">
-              <p className="text-base text-content-secondary">View or download your past invoices.</p>
-
-              {invoiceRows.length === 0 ? (
-                <div className="border border-border-default bg-surface-secondary p-6 flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-content-secondary">No invoices have been generated for this workspace yet.</p>
-                  <Button variant="secondary" onClick={handleOpenBillingPortal}>
-                    <ReceiptText className="w-4 h-4" />
-                    Open Stripe Portal
-                  </Button>
-                </div>
-              ) : (
-                <div className="border border-border-default bg-surface-secondary overflow-auto">
-                  <table className="w-full min-w-[720px]">
-                    <thead className="text-xs uppercase tracking-wider text-content-tertiary border-b border-border-subtle">
-                      <tr>
-                        <th className="text-left py-3 px-4 font-medium">Date</th>
-                        <th className="text-left py-3 px-4 font-medium">Status</th>
-                        <th className="text-right py-3 px-4 font-medium">Total</th>
-                        <th className="text-right py-3 px-4 font-medium">Applied Credits</th>
-                        <th className="text-right py-3 px-4 font-medium">Billed Total</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {invoiceRows.map((row) => (
-                        <tr key={row.id} className="border-b border-border-subtle last:border-0">
-                          <td className="py-3 px-4 text-base text-content-primary">{row.date}</td>
-                          <td className="py-3 px-4">
-                            <span className="inline-flex items-center border border-border-default bg-surface-primary px-2 py-0.5 text-xs text-content-secondary">
-                              {row.status}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 text-right text-content-primary">{formatCurrency(row.totalCents)}</td>
-                          <td className="py-3 px-4 text-right text-content-secondary">{formatCurrency(row.appliedCreditsCents)}</td>
-                          <td className="py-3 px-4 text-right text-content-primary">{formatCurrency(row.totalCents - row.appliedCreditsCents)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </SectionFrame>
         </div>
 
-        <aside className="hidden xl:block">
-          <div className="sticky top-24 border-l border-border-default pl-4 space-y-2">
-            {sections.map((section) => (
-              <button
-                key={section.id}
-                type="button"
-                onClick={() => scrollToSection(section.id)}
-                className={cn(
-                  'block w-full text-left text-base font-medium leading-6 py-1 transition-colors',
-                  activeSection === section.id
-                    ? 'text-content-primary'
-                    : 'text-content-secondary hover:text-content-primary'
-                )}
+        {/* Floating Outline/Nav (Desktop) */}
+        <div className="hidden xl:block">
+          <div className="sticky top-24 space-y-1">
+            <p className="px-3 text-xs uppercase tracking-wider text-content-tertiary font-semibold mb-2">On this page</p>
+            {sections.map(s => (
+              <a
+                key={s.id}
+                href={`#${s.id}`}
+                className={`block px-3 py-1.5 text-sm rounded transition-colors ${activeSection === s.id ? 'bg-brand/10 text-brand font-medium' : 'text-content-secondary hover:text-content-primary'}`}
               >
-                {section.label}
-              </button>
+                {s.label}
+              </a>
             ))}
           </div>
-        </aside>
-      </div>
-
-      <div className="xl:hidden overflow-x-auto pb-1">
-        <div className="inline-flex items-center gap-2 border border-border-default bg-surface-secondary p-1 min-w-max">
-          {sections.map((section) => (
-            <button
-              key={section.id}
-              type="button"
-              onClick={() => scrollToSection(section.id)}
-              className={cn(
-                'px-3 py-1.5 text-sm whitespace-nowrap transition-colors',
-                activeSection === section.id
-                  ? 'bg-surface-tertiary text-content-primary'
-                  : 'text-content-secondary hover:text-content-primary'
-              )}
-            >
-              {section.label}
-            </button>
-          ))}
         </div>
-      </div>
-
-      <div className="border border-border-default bg-surface-secondary p-4 flex flex-wrap items-start gap-2 text-sm text-content-secondary">
-        <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
-        <p>
-          Billing data is synchronized from Stripe and your workspace resources. If totals look stale, open the Stripe portal to refresh payment activity.
-        </p>
       </div>
     </div>
   );
+}
+
+function UsageBar({ label, used, total, color, subtext }: { label: string, used: number, total: number, color: string, subtext?: string }) {
+  return (
+    <div className="p-4 rounded-lg bg-surface-tertiary/20 border border-border-default/50">
+      <div className="flex justify-between text-sm mb-2">
+        <span className="text-content-secondary">{label}</span>
+        <span className="font-mono text-content-primary">{used} <span className="text-content-tertiary">/ {total.toLocaleString()}</span></span>
+      </div>
+      <div className="h-1.5 bg-surface-tertiary rounded-full overflow-hidden">
+        <div className={`h-full ${color} shadow-[0_0_10px_currentColor]`} style={{ width: `${usagePercent(used, total)}%` }} />
+      </div>
+      {subtext && <p className="text-[10px] text-content-tertiary mt-2">{subtext}</p>}
+    </div>
+  )
 }
