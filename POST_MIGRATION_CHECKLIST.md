@@ -12,14 +12,17 @@ Goal: users receive email for account/workspace lifecycle and deploy outcomes, a
   - Outbox table + retrying worker loop
   - SMTP sender (`EMAIL_PROVIDER=smtp`)
   - Templates: welcome + deploy success/failure
-- [ ] (Prod) Decide email provider + set up deliverability:
+- [x] (Prod) Decide email provider:
+  - Resend (SMTP)
+- [ ] (Prod) Set up deliverability DNS for `railpush.com` in Resend:
   - SPF
   - DKIM
   - DMARC (start `p=none`, tighten later)
-- [ ] (Prod) Set secrets in K8s `railpush/railpush-secrets`:
+- [x] (Prod) Set secrets in K8s `railpush/railpush-secrets`:
   - `EMAIL_PROVIDER=smtp`
   - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` (optional `SMTP_REPLY_TO`)
-- [ ] (Later) Notification preferences + “Test email” button + incident emails (optional)
+- [ ] (Later) Notification preferences + incident emails (optional)
+- [x] (Later) Ops-only “Send test email” action
 
 ## 2) GitHub Push Automation (Auto-Deploy)
 
