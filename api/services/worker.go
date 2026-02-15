@@ -38,7 +38,8 @@ type Worker struct {
 	Logger     *Logger
 	Emailer    Emailer
 	Kube       *KubeDeployer
-	kubeMu     sync.Mutex
+	kubeOnce   sync.Once
+	kubeErr    error
 	emailMu    sync.Mutex
 	Owner      string
 	stopCh     chan struct{}
@@ -71,20 +72,22 @@ func (w *Worker) GetKubeDeployer() (*KubeDeployer, error) {
 	if w == nil || w.Config == nil {
 		return nil, fmt.Errorf("missing config")
 	}
+
+	w.kubeOnce.Do(func() {
+		kd, err := NewKubeDeployer(w.Config)
+		if err != nil {
+			w.kubeErr = err
+			return
+		}
+		w.Kube = kd
+	})
 	if w.Kube != nil {
 		return w.Kube, nil
 	}
-	w.kubeMu.Lock()
-	defer w.kubeMu.Unlock()
-	if w.Kube != nil {
-		return w.Kube, nil
+	if w.kubeErr != nil {
+		return nil, w.kubeErr
 	}
-	kd, err := NewKubeDeployer(w.Config)
-	if err != nil {
-		return nil, err
-	}
-	w.Kube = kd
-	return kd, nil
+	return nil, fmt.Errorf("kube deployer not initialized")
 }
 
 func (w *Worker) GetEmailer() (Emailer, error) {
