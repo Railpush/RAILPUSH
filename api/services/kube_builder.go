@@ -140,33 +140,6 @@ func (k *KubeDeployer) BuildImageWithKaniko(deployID string, svc *models.Service
 	secretName := ""
 	if githubToken != "" {
 		secretName = jobName + "-git"
-		sec := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      secretName,
-				Namespace: ns,
-				Labels:    labels,
-			},
-			Type:       corev1.SecretTypeOpaque,
-			StringData: map[string]string{"token": githubToken},
-		}
-		if existing, err := k.Client.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{}); err == nil && existing != nil {
-			sec.ResourceVersion = existing.ResourceVersion
-			if _, err := k.Client.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
-				return fmt.Errorf("update git token secret: %w", err)
-			}
-		} else if apierrors.IsNotFound(err) {
-			if _, err := k.Client.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
-				return fmt.Errorf("create git token secret: %w", err)
-			}
-		} else if err != nil {
-			return fmt.Errorf("get git token secret: %w", err)
-		}
-		defer func() {
-			// Best-effort cleanup.
-			cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer ccancel()
-			_ = k.Client.CoreV1().Secrets(ns).Delete(cctx, secretName, metav1.DeleteOptions{})
-		}()
 	}
 
 	// Create the job if it doesn't exist. If it exists, we attach to it.
@@ -362,6 +335,53 @@ fi
 		}
 	} else if err != nil {
 		return fmt.Errorf("get build job: %w", err)
+	}
+
+	// Attach the git token Secret (if any) to the build Job as an OwnerReference so GC cleans it up
+	// even if the API crashes mid-build. Best-effort delete at the end is still kept.
+	if secretName != "" {
+		buildJob, err := k.Client.BatchV1().Jobs(ns).Get(ctx, jobName, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("get build job for git token secret: %w", err)
+		}
+
+		sec := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      secretName,
+				Namespace: ns,
+				Labels:    labels,
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion: batchv1.SchemeGroupVersion.String(),
+						Kind:       "Job",
+						Name:       buildJob.Name,
+						UID:        buildJob.UID,
+					},
+				},
+			},
+			Type:       corev1.SecretTypeOpaque,
+			StringData: map[string]string{"token": githubToken},
+		}
+
+		if existing, err := k.Client.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{}); err == nil && existing != nil {
+			sec.ResourceVersion = existing.ResourceVersion
+			if _, err := k.Client.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
+				return fmt.Errorf("update git token secret: %w", err)
+			}
+		} else if apierrors.IsNotFound(err) {
+			if _, err := k.Client.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
+				return fmt.Errorf("create git token secret: %w", err)
+			}
+		} else if err != nil {
+			return fmt.Errorf("get git token secret: %w", err)
+		}
+
+		defer func() {
+			// Best-effort cleanup (OwnerReference is the crash-safety net).
+			cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer ccancel()
+			_ = k.Client.CoreV1().Secrets(ns).Delete(cctx, secretName, metav1.DeleteOptions{})
+		}()
 	}
 
 	// Wait for job to complete.
