@@ -129,6 +129,11 @@ func (k *KubeDeployer) BuildImageWithKaniko(deployID string, svc *models.Service
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
 
+	// Enforce multi-tenant network isolation (default-deny ingress between workspaces).
+	if err := k.EnsureTenantNetworkPolicies(ctx, svc.WorkspaceID); err != nil {
+		return fmt.Errorf("ensure tenant networkpolicies: %w", err)
+	}
+
 	// Store GitHub token in a short-lived Secret (avoid embedding sensitive values in Job specs).
 	githubToken = strings.TrimSpace(githubToken)
 	secretName := ""

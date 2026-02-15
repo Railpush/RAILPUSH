@@ -165,6 +165,11 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// Enforce multi-tenant network isolation (best-effort upsert; fails deploy if it can't be applied).
+	if err := k.EnsureTenantNetworkPolicies(ctx, svc.WorkspaceID); err != nil {
+		return "", fmt.Errorf("ensure tenant networkpolicies: %w", err)
+	}
+
 	// 1) Secret (env)
 	sec := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{

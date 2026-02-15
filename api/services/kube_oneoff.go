@@ -55,6 +55,11 @@ func (k *KubeDeployer) RunOneOffJob(oneOffJobID string, svc *models.Service, com
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
+	// Enforce multi-tenant network isolation (default-deny ingress between workspaces).
+	if err := k.EnsureTenantNetworkPolicies(ctx, svc.WorkspaceID); err != nil {
+		return "ensure tenant networkpolicies failed", 1, err
+	}
+
 	// Resolve the image from the current Deployment (web/worker/etc) or CronJob (cron services).
 	image := ""
 	if dep, err := k.Client.AppsV1().Deployments(ns).Get(ctx, svcName, metav1.GetOptions{}); err == nil && dep != nil {

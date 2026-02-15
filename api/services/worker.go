@@ -128,6 +128,11 @@ func (w *Worker) Start(numWorkers int) {
 	}
 	w.wg.Add(1)
 	go w.pollLoop(numWorkers)
+	// Backfill/ensure per-workspace NetworkPolicies in Kubernetes mode (multi-tenant isolation).
+	if w.Config != nil && w.Config.Kubernetes.Enabled {
+		w.wg.Add(1)
+		go w.tenantNetpolLoop()
+	}
 	// Transactional email outbox sender (runs only in worker pods).
 	if w.Config != nil && w.Config.Email.Enabled() {
 		w.wg.Add(1)
@@ -716,6 +721,44 @@ func (w *Worker) reconcileManagedResources() {
 	// restarts or transient failures.
 	w.reconcileManagedDatabases()
 	w.reconcileManagedKeyValues()
+}
+
+func (w *Worker) tenantNetpolLoop() {
+	defer w.wg.Done()
+	if w == nil || w.Config == nil || !w.Config.Kubernetes.Enabled {
+		return
+	}
+
+	// Run once shortly after startup to backfill existing workspaces.
+	time.Sleep(2 * time.Second)
+	w.reconcileTenantNetworkPoliciesOnce()
+
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			w.reconcileTenantNetworkPoliciesOnce()
+		case <-w.stopCh:
+			return
+		}
+	}
+}
+
+func (w *Worker) reconcileTenantNetworkPoliciesOnce() {
+	if w == nil || w.Config == nil || !w.Config.Kubernetes.Enabled {
+		return
+	}
+	kd, err := w.GetKubeDeployer()
+	if err != nil {
+		log.Printf("worker: reconcile tenant networkpolicies: kube deployer init failed: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	if err := kd.ReconcileTenantNetworkPolicies(ctx); err != nil {
+		log.Printf("worker: reconcile tenant networkpolicies failed: %v", err)
+	}
 }
 
 func (w *Worker) reconcileManagedDatabases() {

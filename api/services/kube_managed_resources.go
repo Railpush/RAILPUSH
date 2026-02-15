@@ -133,6 +133,11 @@ func (k *KubeDeployer) EnsureManagedDatabase(db *models.ManagedDatabase, passwor
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
+	// Enforce multi-tenant network isolation (default-deny ingress between workspaces).
+	if err := k.EnsureTenantNetworkPolicies(ctx, db.WorkspaceID); err != nil {
+		return "", fmt.Errorf("ensure tenant networkpolicies: %w", err)
+	}
+
 	// 1) Secret (auth)
 	secName := name + "-auth"
 	sec := &corev1.Secret{
@@ -353,6 +358,11 @@ func (k *KubeDeployer) EnsureManagedKeyValue(kv *models.ManagedKeyValue, passwor
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+
+	// Enforce multi-tenant network isolation (default-deny ingress between workspaces).
+	if err := k.EnsureTenantNetworkPolicies(ctx, kv.WorkspaceID); err != nil {
+		return "", fmt.Errorf("ensure tenant networkpolicies: %w", err)
+	}
 
 	secName := name + "-auth"
 	sec := &corev1.Secret{

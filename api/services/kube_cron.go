@@ -51,6 +51,11 @@ func (k *KubeDeployer) DeployCronJob(deployID string, svc *models.Service, image
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// Enforce multi-tenant network isolation (default-deny ingress between workspaces).
+	if err := k.EnsureTenantNetworkPolicies(ctx, svc.WorkspaceID); err != nil {
+		return "", fmt.Errorf("ensure tenant networkpolicies: %w", err)
+	}
+
 	// 1) Secret (env)
 	sec := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -145,4 +150,3 @@ func (k *KubeDeployer) DeployCronJob(deployID string, svc *models.Service, image
 
 	return name, nil
 }
-
