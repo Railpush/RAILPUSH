@@ -1,30 +1,49 @@
 import { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
-import { GitCommit, Rocket, RotateCw } from 'lucide-react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { GitCommit, Rocket, RotateCw, GitBranch, Clock, ArrowLeft } from 'lucide-react';
 import { StatusBadge } from '../components/ui/StatusBadge';
-import { Skeleton } from '../components/ui/Skeleton';
 import { Card } from '../components/ui/Card';
-import { formatDate, formatTime, formatDuration, truncate } from '../lib/utils';
-import { deploys as deploysApi } from '../lib/api';
+import { Button } from '../components/ui/Button';
+import { formatDate, formatTime, formatDuration } from '../lib/utils';
+import { deploys as deploysApi, services as servicesApi } from '../lib/api';
 import type { Deploy } from '../types';
 
 export function ServiceEvents() {
   const { serviceId } = useParams<{ serviceId: string }>();
+  const navigate = useNavigate();
   const [deployList, setDeployList] = useState<Deploy[]>([]);
   const [loading, setLoading] = useState(true);
+  const [serviceName, setServiceName] = useState('');
 
   useEffect(() => {
     if (!serviceId) return;
-    deploysApi.list(serviceId).then(setDeployList).catch(() => []).finally(() => setLoading(false));
+
+    // Fetch service name for context if needed, or just list deploys
+    Promise.all([
+      deploysApi.list(serviceId).catch(() => []),
+      servicesApi.get(serviceId).then(s => s.name).catch(() => '')
+    ]).then(([deploys, name]) => {
+      setDeployList(deploys)
+      setServiceName(name)
+      setLoading(false)
+    });
   }, [serviceId]);
 
   if (loading) {
     return (
-      <div className="space-y-4">
-        <Skeleton className="w-32 h-7" />
-        {Array.from({ length: 5 }).map((_, i) => (
-          <Skeleton key={i} className="w-full h-20" />
-        ))}
+      <div className="max-w-3xl mx-auto space-y-8 animate-pulse">
+        <div className="h-8 w-48 bg-surface-tertiary rounded" />
+        <div className="space-y-4">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="flex gap-4">
+              <div className="w-12 flex flex-col items-center">
+                <div className="w-3 h-3 rounded-full bg-surface-tertiary" />
+                <div className="w-0.5 h-full bg-surface-tertiary/20 mt-2" />
+              </div>
+              <div className="flex-1 h-24 bg-surface-tertiary rounded-xl" />
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -39,83 +58,113 @@ export function ServiceEvents() {
 
   const triggerIcon = (trigger: string) => {
     switch (trigger) {
-      case 'git_push': return <GitCommit className="w-4 h-4" />;
-      case 'manual': return <Rocket className="w-4 h-4" />;
-      case 'rollback': return <RotateCw className="w-4 h-4" />;
-      default: return <Rocket className="w-4 h-4" />;
+      case 'git_push': return <GitBranch className="w-3.5 h-3.5" />;
+      case 'manual': return <Rocket className="w-3.5 h-3.5" />;
+      case 'rollback': return <RotateCw className="w-3.5 h-3.5" />;
+      default: return <Rocket className="w-3.5 h-3.5" />;
     }
   };
 
   const triggerLabel = (trigger: string) => {
     switch (trigger) {
-      case 'git_push': return 'Git push';
-      case 'manual': return 'Manual deploy';
+      case 'git_push': return 'Git Push';
+      case 'manual': return 'Manual Deploy';
       case 'rollback': return 'Rollback';
-      case 'blueprint': return 'Blueprint sync';
+      case 'blueprint': return 'Blueprint Sync';
       default: return trigger;
     }
   };
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <p className="text-[11px] uppercase tracking-[0.22em] text-content-tertiary font-semibold">Service timeline</p>
-          <h1 className="text-2xl font-semibold text-content-primary">Events</h1>
+    <div className="max-w-4xl mx-auto animate-enter pb-12">
+      <div className="mb-8">
+        <Button variant="ghost" className="mb-4 pl-0 hover:pl-2 transition-all" onClick={() => navigate(`/services/${serviceId}`)}>
+          <ArrowLeft className="w-4 h-4 mr-2" /> Back to Service
+        </Button>
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 rounded-lg bg-surface-tertiary/50 border border-border-default">
+            <Rocket className="w-5 h-5 text-brand" />
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-wider text-content-tertiary font-semibold">Deployment History</p>
+            <h1 className="text-2xl font-bold text-content-primary">{serviceName} Events</h1>
+          </div>
         </div>
       </div>
 
       {deployList.length === 0 ? (
-        <Card className="p-8 text-center text-sm text-content-secondary">
-          No deploy events yet. Trigger a deploy to see events here.
+        <Card className="glass-panel p-12 text-center">
+          <div className="w-16 h-16 rounded-full bg-surface-tertiary/50 flex items-center justify-center mx-auto mb-4">
+            <Rocket className="w-8 h-8 text-content-tertiary" />
+          </div>
+          <h3 className="text-lg font-medium text-content-primary">No deploys yet</h3>
+          <p className="text-content-secondary mt-1 max-w-sm mx-auto">
+            Trigger a deploy or push to your connected repository to see events appear here.
+          </p>
         </Card>
       ) : (
-        <div className="space-y-6">
-          {Object.entries(grouped).map(([date, deploys]) => (
-            <div key={date}>
-              <h3 className="text-xs font-semibold uppercase tracking-[0.2em] text-content-tertiary mb-3">
-                {date}
-              </h3>
-              <div className="grid gap-3 md:grid-cols-2">
-                {deploys.map((deploy) => (
-                  <Card key={deploy.id} hover className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2.5">
-                        <StatusBadge status={deploy.status} size="sm" />
-                        <span className="text-sm font-medium text-content-primary">
-                          Deploy #{deployList.length - deployList.indexOf(deploy)}
-                        </span>
-                      </div>
-                      <span className="text-xs text-content-tertiary">
-                        {deploy.started_at ? formatTime(deploy.started_at) : ''}
-                      </span>
-                    </div>
+        <div className="relative">
+          {/* Vertical line connecting groups */}
+          <div className="absolute left-[19px] top-4 bottom-0 w-px bg-border-default/30" />
 
-                    {deploy.commit_sha && (
-                      <div className="flex items-center gap-2">
-                        <code className="text-xs font-mono px-1.5 py-0.5 bg-surface-tertiary rounded text-content-primary">
-                          {deploy.commit_sha.slice(0, 7)}
-                        </code>
-                        {deploy.commit_message && (
-                          <span className="text-xs text-content-secondary">
-                            "{truncate(deploy.commit_message, 80)}"
+          {Object.entries(grouped).map(([date, deploys]) => (
+            <div key={date} className="mb-10 relative">
+              <div className="flex items-center gap-4 mb-6">
+                <div className="w-10 flex justify-center z-10">
+                  <div className="w-2.5 h-2.5 rounded-full bg-brand ring-4 ring-background" />
+                </div>
+                <h3 className="text-sm font-bold uppercase tracking-wider text-content-tertiary bg-background/50 backdrop-blur px-2 rounded">
+                  {date}
+                </h3>
+              </div>
+
+              <div className="space-y-4 pl-14">
+                {deploys.map((deploy) => (
+                  <Card key={deploy.id} className="glass-panel p-5 group hover:border-brand/30 transition-colors">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div className="flex items-start gap-4">
+                        <div className="pt-1">
+                          <StatusBadge status={deploy.status} />
+                        </div>
+
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-content-primary">Deploy #{deployList.length - deployList.indexOf(deploy)}</span>
+                            <span className="text-xs text-content-tertiary px-1.5 py-0.5 rounded border border-border-default/50 flex items-center gap-1">
+                              {triggerIcon(deploy.trigger)}
+                              {triggerLabel(deploy.trigger)}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-3 text-sm text-content-secondary">
+                            {deploy.commit_sha ? (
+                              <>
+                                <div className="flex items-center gap-1.5 font-mono text-xs bg-surface-tertiary/30 px-1.5 py-0.5 rounded text-content-primary">
+                                  <GitCommit className="w-3 h-3 opacity-70" />
+                                  {deploy.commit_sha.slice(0, 7)}
+                                </div>
+                                {deploy.commit_message && (
+                                  <span className="line-clamp-1 max-w-md">"{deploy.commit_message}"</span>
+                                )}
+                              </>
+                            ) : (
+                              <span className="text-content-tertiary italic">No commit info</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-4 text-xs text-content-tertiary md:text-right md:flex-col md:gap-1 md:items-end min-w-[120px]">
+                        <div className="flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5" />
+                          {deploy.started_at ? formatTime(deploy.started_at) : 'Pending'}
+                        </div>
+                        {deploy.started_at && deploy.finished_at && (
+                          <span>
+                            Took {formatDuration(new Date(deploy.finished_at).getTime() - new Date(deploy.started_at).getTime())}
                           </span>
                         )}
                       </div>
-                    )}
-
-                    <div className="flex items-center gap-3 text-xs text-content-tertiary flex-wrap">
-                      <div className="flex items-center gap-1">
-                        {triggerIcon(deploy.trigger)}
-                        <span>{triggerLabel(deploy.trigger)}</span>
-                      </div>
-                      {deploy.started_at && deploy.finished_at && (
-                        <span>
-                          Duration: {formatDuration(
-                            new Date(deploy.finished_at).getTime() - new Date(deploy.started_at).getTime()
-                          )}
-                        </span>
-                      )}
                     </div>
                   </Card>
                 ))}
@@ -127,3 +176,4 @@ export function ServiceEvents() {
     </div>
   );
 }
+
