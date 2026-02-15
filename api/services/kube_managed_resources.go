@@ -483,10 +483,15 @@ func (k *KubeDeployer) EnsureManagedKeyValue(kv *models.ManagedKeyValue, passwor
 							EnvFrom: []corev1.EnvFromSource{
 								{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: secName}}},
 							},
-							Command: []string{"sh", "-lc"},
 							Args: []string{
-								// `policy` is validated/normalized (avoid shell injection via user input).
-								fmt.Sprintf("exec redis-server --appendonly yes --requirepass \"$REDIS_PASSWORD\" --maxmemory-policy %s", policy),
+								// Avoid `sh -c` here: use args so user-controlled inputs can't become shell syntax.
+								"redis-server",
+								"--appendonly",
+								"yes",
+								"--requirepass",
+								"$(REDIS_PASSWORD)",
+								"--maxmemory-policy",
+								policy,
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "data", MountPath: "/data"},
