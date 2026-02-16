@@ -76,7 +76,7 @@ backup_postgres() {
   # Format: podName \t dbID \t workspaceID
   "${KUBECTL}" -n "${NS}" get pods \
     -l "app.kubernetes.io/managed-by=railpush,app.kubernetes.io/component=managed-database" \
-    -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels["railpush.com/database-id"]}{"\t"}{.metadata.labels["railpush.com/workspace-id"]}{"\n"}{end}' \
+    -o jsonpath="{range .items[*]}{.metadata.name}{\"\\t\"}{.metadata.labels['railpush.com/database-id']}{\"\\t\"}{.metadata.labels['railpush.com/workspace-id']}{\"\\n\"}{end}" \
     ;
 }
 
@@ -84,7 +84,7 @@ backup_redis() {
   # Format: podName \t kvID \t workspaceID
   "${KUBECTL}" -n "${NS}" get pods \
     -l "app.kubernetes.io/managed-by=railpush,app.kubernetes.io/component=managed-keyvalue" \
-    -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels["railpush.com/keyvalue-id"]}{"\t"}{.metadata.labels["railpush.com/workspace-id"]}{"\n"}{end}' \
+    -o jsonpath="{range .items[*]}{.metadata.name}{\"\\t\"}{.metadata.labels['railpush.com/keyvalue-id']}{\"\\t\"}{.metadata.labels['railpush.com/workspace-id']}{\"\\n\"}{end}" \
     ;
 }
 
