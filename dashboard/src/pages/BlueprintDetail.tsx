@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, RefreshCw, GitBranch, FileText, Database, Globe, Key, Trash2 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
@@ -109,6 +109,27 @@ export function BlueprintDetail() {
     ? bp.last_sync_status.substring(bp.last_sync_status.indexOf(': ') + 2)
     : null;
 
+  const syncErrorDisplay = useMemo(() => {
+    if (!syncError) return null;
+    const lower = syncError.toLowerCase();
+
+    // Hide raw Stripe/internal errors from end-users. Keep it actionable.
+    if (lower.includes('payment method required')) {
+      return 'Payment method required. Add a payment method in Billing, then try syncing again.';
+    }
+    if (lower.startsWith('billing error')) {
+      return 'Billing error. Open Billing > Plans and try syncing again.';
+    }
+
+    // Legacy format: sometimes we stored a JSON-encoded Stripe error blob.
+    if (syncError.includes('{"status"') && syncError.includes('"message"')) {
+      const m = syncError.match(/"message"\s*:\s*"([^"]+)"/);
+      if (m && m[1]) return m[1];
+    }
+
+    return syncError;
+  }, [syncError]);
+
   const syncBadgeStatus = bp.last_sync_status === 'synced' ? 'live'
     : bp.last_sync_status === 'syncing' ? 'building'
     : 'failed';
@@ -159,7 +180,7 @@ export function BlueprintDetail() {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="flex items-start gap-2 min-w-0">
               <span className="text-status-error text-sm font-medium shrink-0">Sync failed:</span>
-              <span className="text-sm text-content-secondary break-words">{syncError}</span>
+              <span className="text-sm text-content-secondary break-words">{syncErrorDisplay}</span>
             </div>
             {(syncError.toLowerCase().includes('payment method') ||
               syncError.toLowerCase().includes('billing error') ||
