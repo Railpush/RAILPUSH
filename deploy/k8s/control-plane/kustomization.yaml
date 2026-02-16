@@ -9,6 +9,7 @@ resources:
   - control-plane.yaml
   - worker.yaml
   - certificates.yaml
+  - tenant-backups.yaml
   - limitrange.yaml
   - resourcequota.yaml
   - ingress.yaml
