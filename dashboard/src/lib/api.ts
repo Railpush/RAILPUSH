@@ -118,8 +118,8 @@ export const deploys = {
 // Env Vars
 export const envVars = {
   list: (serviceId: string) => request<EnvVar[]>(`/services/${serviceId}/env-vars`),
-  update: (serviceId: string, vars: EnvVar[]) =>
-    request<EnvVar[]>(`/services/${serviceId}/env-vars`, { method: 'PUT', body: JSON.stringify(vars) }),
+  update: (serviceId: string, vars: Array<Pick<EnvVar, 'key' | 'value' | 'is_secret'>>) =>
+    request<{ status: string }>(`/services/${serviceId}/env-vars`, { method: 'PUT', body: JSON.stringify(vars) }),
 };
 
 // Databases

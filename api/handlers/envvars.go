@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/railpush/api/config"
@@ -68,6 +69,19 @@ func (h *EnvVarHandler) BulkUpdateEnvVars(w http.ResponseWriter, r *http.Request
 		utils.RespondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
+
+	// Preserve existing secret values when the client sends a masked placeholder ("********").
+	// The UI never sees secret plaintext, so "save" without this would overwrite secrets with the mask.
+	existing, _ := models.ListEnvVars("service", serviceID)
+	existingByKey := map[string]models.EnvVar{}
+	for _, v := range existing {
+		k := strings.TrimSpace(v.Key)
+		if k == "" {
+			continue
+		}
+		existingByKey[k] = v
+	}
+
 	var req []struct {
 		Key      string `json:"key"`
 		Value    string `json:"value"`
@@ -79,12 +93,27 @@ func (h *EnvVarHandler) BulkUpdateEnvVars(w http.ResponseWriter, r *http.Request
 	}
 	vars := make([]models.EnvVar, 0, len(req))
 	for _, item := range req {
+		key := strings.TrimSpace(item.Key)
+		if key == "" {
+			continue
+		}
+
+		// Secret placeholder: keep the existing encrypted value for this key (if present).
+		if item.IsSecret && item.Value == "********" {
+			if prev, ok := existingByKey[key]; ok && prev.IsSecret && strings.TrimSpace(prev.EncryptedValue) != "" {
+				vars = append(vars, models.EnvVar{Key: key, EncryptedValue: prev.EncryptedValue, IsSecret: true})
+				continue
+			}
+			utils.RespondError(w, http.StatusBadRequest, "secret value for "+key+" is masked; enter a new value")
+			return
+		}
+
 		encrypted, err := utils.Encrypt(item.Value, h.Config.Crypto.EncryptionKey)
 		if err != nil {
 			utils.RespondError(w, http.StatusInternalServerError, "encryption failed")
 			return
 		}
-		vars = append(vars, models.EnvVar{Key: item.Key, EncryptedValue: encrypted, IsSecret: item.IsSecret})
+		vars = append(vars, models.EnvVar{Key: key, EncryptedValue: encrypted, IsSecret: item.IsSecret})
 	}
 	if err := models.BulkUpsertEnvVars("service", serviceID, vars); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to update env vars: "+err.Error())
