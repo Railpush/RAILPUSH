@@ -415,15 +415,27 @@ export function Projects() {
       <div
         key={card.key}
         onClick={clickable ? () => openCard(card) : undefined}
-        className={cn(
-          'group relative min-h-[160px] glass-panel border-border-default/80 rounded-none transition-colors',
-          clickable ? 'cursor-pointer hover:border-border-hover' : '',
-        )}
+        className={cn('group relative min-h-[160px]', clickable ? 'cursor-pointer' : '')}
         role={clickable ? 'button' : undefined}
         tabIndex={clickable ? 0 : undefined}
       >
+        {/* Folder body */}
+        <div
+          aria-hidden="true"
+          className={cn(
+            'absolute inset-0 top-4 glass-panel border-border-default/80 rounded-none transition-colors',
+            clickable ? 'group-hover:border-border-hover' : '',
+          )}
+        />
+
         {/* Folder tab */}
-        <div className="absolute left-5 -top-px h-5 w-16 bg-surface-secondary border border-border-default/80 border-b-0 rounded-none" />
+        <div
+          aria-hidden="true"
+          className={cn(
+            'absolute left-6 top-0 z-10 h-7 w-28 bg-surface-tertiary border border-border-default/80 border-b-0 rounded-none transition-colors',
+            clickable ? 'group-hover:border-border-hover' : '',
+          )}
+        />
 
         <div className="h-full flex flex-col justify-between px-5 pb-5 pt-7">
           <div className="flex items-start justify-between gap-2">
@@ -550,10 +562,20 @@ export function Projects() {
               <button
                 type="button"
                 onClick={() => navigate('/new/blueprint')}
-                className="group relative min-h-[160px] rounded-none border border-dashed border-border-default/70 hover:border-border-hover text-content-secondary hover:text-content-primary transition-colors flex items-center justify-center text-lg"
+                className="group relative min-h-[160px] text-content-secondary hover:text-content-primary transition-colors flex items-center justify-center text-lg"
               >
+                {/* Folder body */}
+                <div
+                  aria-hidden="true"
+                  className="absolute inset-0 top-4 bg-surface-primary border border-dashed border-border-default/70 rounded-none group-hover:border-border-hover"
+                />
+
                 {/* Folder tab */}
-                <div className="absolute left-5 -top-px h-5 w-16 bg-surface-primary border border-dashed border-border-default/70 border-b-0 rounded-none group-hover:border-border-hover" />
+                <div
+                  aria-hidden="true"
+                  className="absolute left-6 top-0 z-10 h-7 w-28 bg-surface-primary border border-dashed border-border-default/70 border-b-0 rounded-none group-hover:border-border-hover"
+                />
+
                 <span className="inline-flex items-center gap-2">
                   <span className="text-content-tertiary group-hover:text-content-secondary transition-colors">+</span>
                   <span>Create new project</span>
