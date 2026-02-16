@@ -5,7 +5,7 @@ import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
 import { Select } from '../components/ui/Select';
-import { blueprints as bpApi, github as githubApi } from '../lib/api';
+import { blueprints as bpApi, github as githubApi, settings as settingsApi } from '../lib/api';
 import { toast } from 'sonner';
 import type { GitHubRepo, GitHubBranch } from '../types';
 
@@ -17,6 +17,7 @@ export function CreateBlueprint() {
     repo_url: '',
     branch: 'main',
     file_path: 'render.yaml',
+    ai_ignore_repo_yaml: false,
   });
 
   // GitHub repo picker state
@@ -29,9 +30,28 @@ export function CreateBlueprint() {
   const [branches, setBranches] = useState<GitHubBranch[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
 
+  const [blueprintAI, setBlueprintAI] = useState<{ enabled: boolean; available: boolean }>({ enabled: false, available: false });
+
   useEffect(() => {
     if (repoMode === 'github') loadRepos();
   }, [repoMode]);
+
+  useEffect(() => {
+    let mounted = true;
+    settingsApi
+      .getBlueprintAI()
+      .then((cfg) => {
+        if (!mounted) return;
+        setBlueprintAI({ enabled: Boolean(cfg.enabled), available: Boolean(cfg.available) });
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setBlueprintAI({ enabled: false, available: false });
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   async function loadRepos() {
     setReposLoading(true);
@@ -242,6 +262,51 @@ export function CreateBlueprint() {
               placeholder="render.yaml"
             />
           </div>
+
+          {blueprintAI.enabled && blueprintAI.available && (
+            <div className="space-y-2">
+              <div>
+                <div className="text-sm font-medium text-content-primary">Blueprint AI</div>
+                <div className="text-xs text-content-tertiary mt-1">
+                  If <span className="font-mono">{form.file_path || 'render.yaml'}</span> exists in your repo, should we use it or generate our own?
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="flex items-start gap-3 p-3 rounded-lg border border-border-default bg-surface-tertiary/30 cursor-pointer hover:bg-surface-tertiary/40 transition-colors">
+                  <input
+                    type="radio"
+                    name="bp-ai-yaml-mode"
+                    className="mt-1"
+                    checked={!form.ai_ignore_repo_yaml}
+                    onChange={() => setForm((f) => ({ ...f, ai_ignore_repo_yaml: false }))}
+                  />
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-content-primary">Use repo YAML</div>
+                    <div className="text-xs text-content-tertiary">
+                      Recommended if you authored the YAML and want full control. Blueprint AI will only generate YAML if the file is missing.
+                    </div>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-3 p-3 rounded-lg border border-border-default bg-surface-tertiary/30 cursor-pointer hover:bg-surface-tertiary/40 transition-colors">
+                  <input
+                    type="radio"
+                    name="bp-ai-yaml-mode"
+                    className="mt-1"
+                    checked={form.ai_ignore_repo_yaml}
+                    onChange={() => setForm((f) => ({ ...f, ai_ignore_repo_yaml: true }))}
+                  />
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-content-primary">Ignore YAML and generate</div>
+                    <div className="text-xs text-content-tertiary">
+                      OpenRouter will scan your repository and generate a new render.yaml during sync.
+                    </div>
+                  </div>
+                </label>
+              </div>
+            </div>
+          )}
 
           <Button
             size="lg"

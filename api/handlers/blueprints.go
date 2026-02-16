@@ -497,22 +497,25 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	data, err := os.ReadFile(yamlPath)
 	repoFileExists := err == nil
 	if h.blueprintAIAutogenEnabled(bp.WorkspaceID) {
-		ai := services.NewBlueprintAIGenerator(h.Config)
-		generated, genErr := ai.GenerateRenderYAMLFromRepo(tmpDir, bp.RepoURL, bp.Branch)
-		if genErr != nil {
-			log.Printf("Blueprint sync: OpenRouter generation failed blueprint=%s err=%v", bp.ID, genErr)
-		} else {
-			var candidate RenderYAML
-			if parseErr := yaml.Unmarshal([]byte(generated), &candidate); parseErr != nil {
-				log.Printf("Blueprint sync: OpenRouter returned invalid YAML blueprint=%s err=%v", bp.ID, parseErr)
-			} else if len(candidate.Services) == 0 && len(candidate.Databases) == 0 && len(candidate.KeyValues) == 0 && len(candidate.EnvVarGroups) == 0 {
-				log.Printf("Blueprint sync: OpenRouter returned empty blueprint=%s", bp.ID)
+		// Only generate when the repo doesn't have a YAML file yet OR the user explicitly asked us to ignore it.
+		if !repoFileExists || bp.AIIgnoreRepoYAML {
+			ai := services.NewBlueprintAIGenerator(h.Config)
+			generated, genErr := ai.GenerateRenderYAMLFromRepo(tmpDir, bp.RepoURL, bp.Branch)
+			if genErr != nil {
+				log.Printf("Blueprint sync: OpenRouter generation failed blueprint=%s err=%v", bp.ID, genErr)
 			} else {
-				data = []byte(generated)
-				if mkErr := os.MkdirAll(filepath.Dir(yamlPath), 0o755); mkErr == nil {
-					_ = os.WriteFile(yamlPath, data, 0o644)
+				var candidate RenderYAML
+				if parseErr := yaml.Unmarshal([]byte(generated), &candidate); parseErr != nil {
+					log.Printf("Blueprint sync: OpenRouter returned invalid YAML blueprint=%s err=%v", bp.ID, parseErr)
+				} else if len(candidate.Services) == 0 && len(candidate.Databases) == 0 && len(candidate.KeyValues) == 0 && len(candidate.EnvVarGroups) == 0 {
+					log.Printf("Blueprint sync: OpenRouter returned empty blueprint=%s", bp.ID)
+				} else {
+					data = []byte(generated)
+					if mkErr := os.MkdirAll(filepath.Dir(yamlPath), 0o755); mkErr == nil {
+						_ = os.WriteFile(yamlPath, data, 0o644)
+					}
+					log.Printf("Blueprint sync: generated %s via OpenRouter for blueprint=%s", bp.FilePath, bp.ID)
 				}
-				log.Printf("Blueprint sync: generated %s via OpenRouter for blueprint=%s", bp.FilePath, bp.ID)
 			}
 		}
 	}

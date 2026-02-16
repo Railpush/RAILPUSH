@@ -14,6 +14,7 @@ type Blueprint struct {
 	RepoURL        string     `json:"repo_url"`
 	Branch         string     `json:"branch"`
 	FilePath       string     `json:"file_path"`
+	AIIgnoreRepoYAML bool     `json:"ai_ignore_repo_yaml"`
 	LastSyncedAt   *time.Time `json:"last_synced_at"`
 	LastSyncStatus string     `json:"last_sync_status"`
 	CreatedAt      time.Time  `json:"created_at"`
@@ -27,16 +28,18 @@ type BlueprintResource struct {
 }
 
 func CreateBlueprint(b *Blueprint) error {
-	return database.DB.QueryRow("INSERT INTO blueprints (workspace_id, name, repo_url, branch, file_path) VALUES ($1,$2,$3,$4,$5) RETURNING id, created_at",
-		b.WorkspaceID, b.Name, b.RepoURL, b.Branch, b.FilePath).Scan(&b.ID, &b.CreatedAt)
+	return database.DB.QueryRow(
+		"INSERT INTO blueprints (workspace_id, name, repo_url, branch, file_path, ai_ignore_repo_yaml) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, created_at",
+		b.WorkspaceID, b.Name, b.RepoURL, b.Branch, b.FilePath, b.AIIgnoreRepoYAML,
+	).Scan(&b.ID, &b.CreatedAt)
 }
 
-const blueprintSelectCols = `id, workspace_id, name, COALESCE(repo_url,''), COALESCE(branch,'main'), COALESCE(file_path,'render.yaml'), last_synced_at, COALESCE(last_sync_status,''), created_at`
+const blueprintSelectCols = `id, workspace_id, name, COALESCE(repo_url,''), COALESCE(branch,'main'), COALESCE(file_path,'render.yaml'), COALESCE(ai_ignore_repo_yaml,false), last_synced_at, COALESCE(last_sync_status,''), created_at`
 
 func GetBlueprint(id string) (*Blueprint, error) {
 	b := &Blueprint{}
 	err := database.DB.QueryRow("SELECT "+blueprintSelectCols+" FROM blueprints WHERE id=$1", id).Scan(
-		&b.ID, &b.WorkspaceID, &b.Name, &b.RepoURL, &b.Branch, &b.FilePath, &b.LastSyncedAt, &b.LastSyncStatus, &b.CreatedAt)
+		&b.ID, &b.WorkspaceID, &b.Name, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -52,7 +55,7 @@ func ListBlueprints() ([]Blueprint, error) {
 	var bps []Blueprint
 	for rows.Next() {
 		var b Blueprint
-		if err := rows.Scan(&b.ID, &b.WorkspaceID, &b.Name, &b.RepoURL, &b.Branch, &b.FilePath, &b.LastSyncedAt, &b.LastSyncStatus, &b.CreatedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.WorkspaceID, &b.Name, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.CreatedAt); err != nil {
 			return nil, err
 		}
 		bps = append(bps, b)

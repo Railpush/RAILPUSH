@@ -178,6 +178,7 @@ export interface Blueprint {
   repo_url: string;
   branch: string;
   file_path: string;
+  ai_ignore_repo_yaml?: boolean;
   last_synced_at: string;
   last_sync_status: string;
   created_at: string;
