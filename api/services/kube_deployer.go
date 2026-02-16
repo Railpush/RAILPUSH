@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -558,16 +560,24 @@ func (k *KubeDeployer) RestartService(svc *models.Service) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	dep, err := k.Client.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
+
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	patch, err := json.Marshal(map[string]any{
+		"spec": map[string]any{
+			"template": map[string]any{
+				"metadata": map[string]any{
+					"annotations": map[string]string{
+						"railpush.com/restarted-at": ts,
+					},
+				},
+			},
+		},
+	})
 	if err != nil {
-		return fmt.Errorf("get deployment: %w", err)
+		return fmt.Errorf("marshal restart patch: %w", err)
 	}
-	if dep.Spec.Template.Annotations == nil {
-		dep.Spec.Template.Annotations = map[string]string{}
-	}
-	dep.Spec.Template.Annotations["railpush.com/restarted-at"] = time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := k.Client.AppsV1().Deployments(ns).Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("update deployment: %w", err)
+	if _, err := k.Client.AppsV1().Deployments(ns).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("patch deployment: %w", err)
 	}
 	return nil
 }
