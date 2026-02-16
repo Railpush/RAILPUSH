@@ -39,3 +39,27 @@ subjects:
   - kind: ServiceAccount
     name: railpush-control-plane
     namespace: railpush
+---
+# Cluster-scoped read-only access required for deriving per-node podCIDR base IPs
+# (flannel source IPs) used by hostNetwork ingress-nginx when proxying cross-node.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: railpush-control-plane-nodes
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: railpush-control-plane-nodes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: railpush-control-plane-nodes
+subjects:
+  - kind: ServiceAccount
+    name: railpush-control-plane
+    namespace: railpush
