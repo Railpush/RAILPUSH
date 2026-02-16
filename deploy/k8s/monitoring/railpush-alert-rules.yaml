@@ -96,3 +96,36 @@ spec:
           annotations:
             summary: "Certificate expiring within 14 days"
             description: "Certificate {{ $labels.exported_namespace }}/{{ $labels.name }} expires soon. Ensure cert-manager can renew."
+
+        # Loki PVC usage (avoid logging outage due to disk-full)
+        - alert: LokiPersistentVolumeUsageHigh
+          expr: |
+            (
+              kubelet_volume_stats_used_bytes{namespace="logging",persistentvolumeclaim=~"storage-loki-.*"}
+              /
+              kubelet_volume_stats_capacity_bytes{namespace="logging",persistentvolumeclaim=~"storage-loki-.*"}
+            ) > 0.80
+          for: 15m
+          labels:
+            severity: warning
+            product: railpush
+            component: loki
+          annotations:
+            summary: "Loki PVC usage is high (>80%)"
+            description: "Loki storage PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} is above 80% usage. Retention/compaction may be failing or log volume has spiked."
+
+        - alert: LokiPersistentVolumeUsageCritical
+          expr: |
+            (
+              kubelet_volume_stats_used_bytes{namespace="logging",persistentvolumeclaim=~"storage-loki-.*"}
+              /
+              kubelet_volume_stats_capacity_bytes{namespace="logging",persistentvolumeclaim=~"storage-loki-.*"}
+            ) > 0.90
+          for: 5m
+          labels:
+            severity: critical
+            product: railpush
+            component: loki
+          annotations:
+            summary: "Loki PVC usage is critical (>90%)"
+            description: "Loki storage PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} is above 90% usage. Logging may stop soon; increase disk or reduce retention immediately."

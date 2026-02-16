@@ -35,6 +35,16 @@ loki:
   # Retention (requires compactor retention_enabled).
   limits_config:
     retention_period: 168h # 7 days
+    # Guardrails (single-tenant right now, so these are effectively global).
+    # Prevents runaway log volume and label/cardinality explosions from taking down Loki or filling its PVC.
+    ingestion_rate_mb: 3
+    ingestion_burst_size_mb: 6
+    per_stream_rate_limit: 512KB
+    per_stream_rate_limit_burst: 2MB
+    max_global_streams_per_user: 5000
+    max_streams_per_user: 5000
+    max_line_size: 256KB
+    max_line_size_truncate: true
 
   compactor:
     retention_enabled: true
