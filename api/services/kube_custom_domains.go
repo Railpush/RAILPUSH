@@ -18,7 +18,8 @@ import (
 
 func kubeCustomDomainHash(domain string) string {
 	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(domain))))
-	return hex.EncodeToString(sum[:])[:8]
+	// 12 hex chars (48-bit) keeps names <=63 chars while materially reducing collision risk.
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 func kubeCustomDomainIngressName(serviceID string, domain string) string {

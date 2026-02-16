@@ -41,6 +41,8 @@ helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
   -f /opt/railpush/deploy/k8s/monitoring/values.yaml
 ```
 
+`values.yaml` now provisions a baseline Grafana dashboard (`RailPush Platform Overview`) as code, so new clusters get it automatically on install/upgrade.
+
 3. Apply extra ServiceMonitors (ingress-nginx, cert-manager, longhorn):
 
 ```bash

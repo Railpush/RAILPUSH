@@ -12,6 +12,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -116,6 +117,133 @@ func kubeServiceLabels(svc *models.Service) map[string]string {
 	return labels
 }
 
+func kubeServiceSelectorLabels(svc *models.Service) map[string]string {
+	// Keep selectors immutable and minimal for long-term compatibility.
+	labels := map[string]string{
+		"railpush.com/workload": "service",
+	}
+	if svc != nil && strings.TrimSpace(svc.ID) != "" {
+		labels["railpush.com/service-id"] = svc.ID
+	}
+	return labels
+}
+
+func cloneLabels(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func mergeLabels(maps ...map[string]string) map[string]string {
+	out := map[string]string{}
+	for _, m := range maps {
+		for k, v := range m {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func kubeServicePDBName(serviceID string) string {
+	name := kubeServiceName(serviceID) + "-pdb"
+	if len(name) > 63 {
+		name = strings.Trim(name[:63], "-")
+	}
+	if name == "" {
+		return "rp-svc-pdb"
+	}
+	return name
+}
+
+func (k *KubeDeployer) reconcileServicePDB(ctx context.Context, svc *models.Service, ns string, selectorLabels map[string]string, labels map[string]string, replicas int32) error {
+	if k == nil || k.Client == nil {
+		return fmt.Errorf("kube deployer not initialized")
+	}
+	if svc == nil {
+		return fmt.Errorf("missing service")
+	}
+	pdbName := kubeServicePDBName(svc.ID)
+	if replicas <= 1 {
+		if err := k.Client.PolicyV1().PodDisruptionBudgets(ns).Delete(ctx, pdbName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete pdb: %w", err)
+		}
+		return nil
+	}
+
+	maxUnavailable := intstr.FromInt(1)
+	pdb := &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pdbName,
+			Namespace: ns,
+			Labels:    labels,
+		},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			MaxUnavailable: &maxUnavailable,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: selectorLabels,
+			},
+		},
+	}
+
+	if existing, err := k.Client.PolicyV1().PodDisruptionBudgets(ns).Get(ctx, pdbName, metav1.GetOptions{}); err == nil && existing != nil {
+		pdb.ResourceVersion = existing.ResourceVersion
+		if _, err := k.Client.PolicyV1().PodDisruptionBudgets(ns).Update(ctx, pdb, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update pdb: %w", err)
+		}
+		return nil
+	} else if apierrors.IsNotFound(err) {
+		if _, err := k.Client.PolicyV1().PodDisruptionBudgets(ns).Create(ctx, pdb, metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("create pdb: %w", err)
+		}
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("get pdb: %w", err)
+	}
+
+	return nil
+}
+
+func ingressHasHost(ing *networkingv1.Ingress, host string) bool {
+	if ing == nil {
+		return false
+	}
+	want := strings.ToLower(strings.TrimSpace(host))
+	if want == "" {
+		return false
+	}
+	for _, rule := range ing.Spec.Rules {
+		if strings.ToLower(strings.TrimSpace(rule.Host)) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (k *KubeDeployer) ensureIngressHostAvailable(ctx context.Context, ns, ingressName, host string) error {
+	if k == nil || k.Client == nil {
+		return fmt.Errorf("kube deployer not initialized")
+	}
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" {
+		return nil
+	}
+	list, err := k.Client.NetworkingV1().Ingresses(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("list ingresses: %w", err)
+	}
+	for _, ing := range list.Items {
+		if ing.Name == ingressName {
+			continue
+		}
+		if ingressHasHost(&ing, host) {
+			return fmt.Errorf("ingress host %q already used by %s", host, ing.Name)
+		}
+	}
+	return nil
+}
+
 func kubeResourcesForPlan(plan string) (corev1.ResourceList, corev1.ResourceList) {
 	plan = strings.ToLower(strings.TrimSpace(plan))
 	switch plan {
@@ -178,6 +306,8 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 	ns := k.namespace()
 	name := kubeServiceName(svc.ID)
 	labels := kubeServiceLabels(svc)
+	selectorLabels := kubeServiceSelectorLabels(svc)
+	podLabels := mergeLabels(labels, selectorLabels)
 	envSecretName := name + "-env"
 
 	// Validate and normalize env var keys (required for envFrom).
@@ -297,10 +427,10 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
-			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Selector: &metav1.LabelSelector{MatchLabels: selectorLabels},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels:      labels,
+					Labels:      podLabels,
 					Annotations: podAnnotations,
 				},
 				Spec: corev1.PodSpec{
@@ -363,8 +493,20 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 		}
 	}
 
+	deploymentSelectorLabels := cloneLabels(selectorLabels)
 	if existing, err := k.Client.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{}); err == nil && existing != nil {
 		dep.ResourceVersion = existing.ResourceVersion
+		// Deployment selectors are immutable. Keep existing selectors to avoid forced delete/recreate
+		// for already-running services, while using stable selector labels for new deployments.
+		if existing.Spec.Selector != nil {
+			dep.Spec.Selector = existing.Spec.Selector.DeepCopy()
+			if len(existing.Spec.Selector.MatchLabels) > 0 {
+				deploymentSelectorLabels = cloneLabels(existing.Spec.Selector.MatchLabels)
+				for selectorKey, selectorValue := range existing.Spec.Selector.MatchLabels {
+					dep.Spec.Template.Labels[selectorKey] = selectorValue
+				}
+			}
+		}
 		if _, err := k.Client.AppsV1().Deployments(ns).Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
 			return "", fmt.Errorf("update deployment: %w", err)
 		}
@@ -376,6 +518,10 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 		return "", fmt.Errorf("get deployment: %w", err)
 	}
 
+	if err := k.reconcileServicePDB(ctx, svc, ns, deploymentSelectorLabels, labels, replicas); err != nil {
+		return "", fmt.Errorf("reconcile pdb: %w", err)
+	}
+
 	// 3) Service (only for service types with network endpoints)
 	if needsService {
 		svcObj := &corev1.Service{
@@ -385,7 +531,7 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 				Labels:    labels,
 			},
 			Spec: corev1.ServiceSpec{
-				Selector: labels,
+				Selector: deploymentSelectorLabels,
 				Ports: []corev1.ServicePort{
 					{
 						Name:       "http",
@@ -424,39 +570,47 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 	wantIngress := needsIngress && deployDomain != "" && deployDomain != "localhost"
 	if wantIngress {
 		host := utils.ServiceDefaultHost(svc.Type, svc.Name, svc.Subdomain, deployDomain)
-			ing := &networkingv1.Ingress{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      name,
-					Namespace: ns,
-					Labels:    labels,
-					Annotations: map[string]string{
-						"nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
-						"nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
-						"nginx.ingress.kubernetes.io/proxy-body-size":    "50m",
+		controlPlaneDomain := strings.ToLower(strings.TrimSpace(k.Config.ControlPlane.Domain))
+		if controlPlaneDomain != "" {
+			if host == controlPlaneDomain || host == "www."+controlPlaneDomain {
+				return "", fmt.Errorf("service host %q conflicts with reserved control-plane host", host)
+			}
+		}
+		if err := k.ensureIngressHostAvailable(ctx, ns, name, host); err != nil {
+			return "", err
+		}
+		ing := &networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: ns,
+				Labels:    labels,
+				Annotations: map[string]string{
+					"nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
+					"nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
+					"nginx.ingress.kubernetes.io/proxy-body-size":    "50m",
+				},
+			},
+			Spec: networkingv1.IngressSpec{
+				IngressClassName: &k.Config.Kubernetes.IngressClass,
+				TLS: []networkingv1.IngressTLS{
+					{
+						Hosts:      []string{host},
+						SecretName: strings.TrimSpace(k.Config.Kubernetes.TLSSecret),
 					},
 				},
-				Spec: networkingv1.IngressSpec{
-					IngressClassName: &k.Config.Kubernetes.IngressClass,
-					TLS: []networkingv1.IngressTLS{
-						{
-							Hosts:      []string{host},
-							SecretName: strings.TrimSpace(k.Config.Kubernetes.TLSSecret),
-						},
-					},
-					Rules: []networkingv1.IngressRule{
-						{
-							Host: host,
-							IngressRuleValue: networkingv1.IngressRuleValue{
-								HTTP: &networkingv1.HTTPIngressRuleValue{
-									Paths: []networkingv1.HTTPIngressPath{
-										{
-											Path:     "/",
-											PathType: func() *networkingv1.PathType { pt := networkingv1.PathTypePrefix; return &pt }(),
-											Backend: networkingv1.IngressBackend{
-												Service: &networkingv1.IngressServiceBackend{
-													Name: name,
-													Port: networkingv1.ServiceBackendPort{Number: port},
-												},
+				Rules: []networkingv1.IngressRule{
+					{
+						Host: host,
+						IngressRuleValue: networkingv1.IngressRuleValue{
+							HTTP: &networkingv1.HTTPIngressRuleValue{
+								Paths: []networkingv1.HTTPIngressPath{
+									{
+										Path:     "/",
+										PathType: func() *networkingv1.PathType { pt := networkingv1.PathTypePrefix; return &pt }(),
+										Backend: networkingv1.IngressBackend{
+											Service: &networkingv1.IngressServiceBackend{
+												Name: name,
+												Port: networkingv1.ServiceBackendPort{Number: port},
 											},
 										},
 									},
@@ -465,20 +619,21 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 						},
 					},
 				},
-			}
+			},
+		}
 
-			if existing, err := k.Client.NetworkingV1().Ingresses(ns).Get(ctx, name, metav1.GetOptions{}); err == nil && existing != nil {
-				ing.ResourceVersion = existing.ResourceVersion
-				if _, err := k.Client.NetworkingV1().Ingresses(ns).Update(ctx, ing, metav1.UpdateOptions{}); err != nil {
-					return "", fmt.Errorf("update ingress: %w", err)
-				}
-			} else if apierrors.IsNotFound(err) {
-				if _, err := k.Client.NetworkingV1().Ingresses(ns).Create(ctx, ing, metav1.CreateOptions{}); err != nil {
-					return "", fmt.Errorf("create ingress: %w", err)
-				}
-			} else if err != nil {
-				return "", fmt.Errorf("get ingress: %w", err)
+		if existing, err := k.Client.NetworkingV1().Ingresses(ns).Get(ctx, name, metav1.GetOptions{}); err == nil && existing != nil {
+			ing.ResourceVersion = existing.ResourceVersion
+			if _, err := k.Client.NetworkingV1().Ingresses(ns).Update(ctx, ing, metav1.UpdateOptions{}); err != nil {
+				return "", fmt.Errorf("update ingress: %w", err)
 			}
+		} else if apierrors.IsNotFound(err) {
+			if _, err := k.Client.NetworkingV1().Ingresses(ns).Create(ctx, ing, metav1.CreateOptions{}); err != nil {
+				return "", fmt.Errorf("create ingress: %w", err)
+			}
+		} else if err != nil {
+			return "", fmt.Errorf("get ingress: %w", err)
+		}
 	}
 	if !wantIngress {
 		// Ensure we don't leave behind stale Ingresses when switching types (or upgrading from older versions).
@@ -563,6 +718,7 @@ func (k *KubeDeployer) DeleteServiceResources(svc *models.Service) error {
 	}
 	_ = k.Client.CoreV1().Services(ns).Delete(ctx, name, metav1.DeleteOptions{})
 	_ = k.Client.AppsV1().Deployments(ns).Delete(ctx, name, metav1.DeleteOptions{})
+	_ = k.Client.PolicyV1().PodDisruptionBudgets(ns).Delete(ctx, kubeServicePDBName(svc.ID), metav1.DeleteOptions{})
 	_ = k.Client.CoreV1().Secrets(ns).Delete(ctx, envSecretName, metav1.DeleteOptions{})
 
 	// Best-effort cleanup for custom domain TLS secrets (cert-manager secrets aren't labeled reliably).

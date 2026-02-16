@@ -30,6 +30,14 @@ spec:
     size: 30Gi
     storageClass: longhorn-r2
 
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
   # Off-cluster backups + PITR (WAL archiving) via S3-compatible object storage (Cloudflare R2).
   # Create the Secret `railpush/railpush-r2-backup` (do not commit) with keys:
   # - accessKeyId
