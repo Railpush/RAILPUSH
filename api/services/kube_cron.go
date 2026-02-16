@@ -136,8 +136,7 @@ func (k *KubeDeployer) DeployCronJob(deployID string, svc *models.Service, image
 		},
 	}
 
-	// Compatibility-first hardening for customer pods.
-	applyCompatSecurityContext(&cronJob.Spec.JobTemplate.Spec.Template.Spec, &cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0])
+	applyTenantSecurityContext(&cronJob.Spec.JobTemplate.Spec.Template.Spec, &cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0], k.strictTenantPodSecurity())
 
 	if existing, err := k.Client.BatchV1().CronJobs(ns).Get(ctx, name, metav1.GetOptions{}); err == nil && existing != nil {
 		cronJob.ResourceVersion = existing.ResourceVersion

@@ -103,6 +103,10 @@ type KubernetesConfig struct {
 	// CustomDomainIssuer is the cert-manager ClusterIssuer to use for custom domains.
 	// In practice this should be an HTTP-01 issuer (customer domains are not in our Cloudflare zone).
 	CustomDomainIssuer string
+	// TenantPodSecurityProfile controls tenant workload hardening mode.
+	// "strict" (default): drop ALL caps, runAsNonRoot, readOnlyRootFilesystem + writable /tmp.
+	// "compat": keep compatibility-first behavior for legacy images.
+	TenantPodSecurityProfile string
 }
 
 type WorkerConfig struct {
@@ -228,7 +232,8 @@ func Load() *Config {
 			IngressClass: getEnv("KUBE_INGRESS_CLASS", "nginx"),
 			TLSSecret:    getEnv("KUBE_TLS_SECRET", "apps-wildcard-tls"),
 			StorageClass: getEnv("KUBE_STORAGE_CLASS", "longhorn-r2"),
-			CustomDomainIssuer: getEnv("KUBE_CUSTOM_DOMAIN_ISSUER", "letsencrypt-http01-prod"),
+			CustomDomainIssuer:      getEnv("KUBE_CUSTOM_DOMAIN_ISSUER", "letsencrypt-http01-prod"),
+			TenantPodSecurityProfile: strings.ToLower(strings.TrimSpace(getEnv("KUBE_TENANT_POD_SECURITY_PROFILE", "strict"))),
 		},
 		Worker: WorkerConfig{
 			Enabled:        getEnvBool("WORKER_ENABLED", true),

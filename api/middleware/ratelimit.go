@@ -26,9 +26,15 @@ type visitor struct {
 	lastSeen time.Time
 }
 
-var limiter = &rateLimiter{
+var generalLimiter = &rateLimiter{
 	visitors: make(map[string]*visitor),
 	rate:     100,
+	window:   time.Minute,
+}
+
+var authLimiter = &rateLimiter{
+	visitors: make(map[string]*visitor),
+	rate:     20,
 	window:   time.Minute,
 }
 
@@ -172,7 +178,8 @@ func clientIPString(r *http.Request) string {
 
 func init() {
 	reloadTrustedProxyCIDRsFromEnv()
-	go limiter.cleanup()
+	go generalLimiter.cleanup()
+	go authLimiter.cleanup()
 }
 
 func (rl *rateLimiter) cleanup() {
@@ -202,6 +209,27 @@ func (rl *rateLimiter) allow(ip string) bool {
 	return v.count <= rl.rate
 }
 
+func isPublicAuthEndpoint(path string) bool {
+	switch path {
+	case "/api/v1/auth/register",
+		"/api/v1/auth/login",
+		"/api/v1/auth/verify",
+		"/api/v1/auth/verify/resend",
+		"/api/v1/auth/github",
+		"/api/v1/auth/github/callback":
+		return true
+	default:
+		return false
+	}
+}
+
+func limiterForPath(path string) *rateLimiter {
+	if isPublicAuthEndpoint(path) {
+		return authLimiter
+	}
+	return generalLimiter
+}
+
 func RateLimitMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -221,7 +249,7 @@ func RateLimitMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			}
 		}
 		ip := clientIPString(r)
-		if !limiter.allow(ip) {
+		if !limiterForPath(r.URL.Path).allow(ip) {
 			utils.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
 			return
 		}

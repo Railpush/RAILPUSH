@@ -72,6 +72,19 @@ func (k *KubeDeployer) storageClassName() *string {
 	return &sc
 }
 
+func (k *KubeDeployer) strictTenantPodSecurity() bool {
+	if k == nil || k.Config == nil {
+		return true
+	}
+	mode := strings.ToLower(strings.TrimSpace(k.Config.Kubernetes.TenantPodSecurityProfile))
+	switch mode {
+	case "compat", "compatibility", "legacy":
+		return false
+	default:
+		return true
+	}
+}
+
 func kubeServiceName(serviceID string) string {
 	id := strings.ToLower(strings.TrimSpace(serviceID))
 	if id == "" {
@@ -298,8 +311,7 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 		},
 	}
 
-	// Compatibility-first hardening for customer pods.
-	applyCompatSecurityContext(&dep.Spec.Template.Spec, &dep.Spec.Template.Spec.Containers[0])
+	applyTenantSecurityContext(&dep.Spec.Template.Spec, &dep.Spec.Template.Spec.Containers[0], k.strictTenantPodSecurity())
 
 	// Probes for HTTP-ish service types only.
 	switch serviceType {

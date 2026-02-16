@@ -1,0 +1,165 @@
+name: Deploy K8s Control Plane
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: k8s-control-plane-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    env:
+      DEPLOY_REF: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      DEPLOY_BRANCH: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+      REGISTRY_IMAGE: 91.98.183.19:5000/railpush/control-plane
+      KUSTOMIZE_PATH: deploy/k8s/control-plane-overlays/prod-cnpg-cutover
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_REF }}
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${DEPLOY_HOST}" || { echo "Missing DEPLOY_HOST secret"; exit 1; }
+          test -n "${DEPLOY_USER}" || { echo "Missing DEPLOY_USER secret"; exit 1; }
+          test -n "${{ secrets.DEPLOY_SSH_KEY }}" || { echo "Missing DEPLOY_SSH_KEY secret"; exit 1; }
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          PORT="${DEPLOY_PORT:-22}"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          if [ -n "${{ secrets.DEPLOY_KNOWN_HOSTS }}" ]; then
+            printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "${PORT}" "${DEPLOY_HOST}" >> ~/.ssh/known_hosts
+          fi
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Sync repository to cluster node
+        shell: bash
+        run: |
+          set -euo pipefail
+          PORT="${DEPLOY_PORT:-22}"
+          RSYNC_SSH="ssh -p ${PORT}"
+          rsync -az --delete \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'node_modules' \
+            --exclude 'dashboard/node_modules' \
+            --exclude 'dashboard/dist' \
+            -e "${RSYNC_SSH}" \
+            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/railpush/"
+
+      - name: Build, push, and roll out on Kubernetes
+        shell: bash
+        run: |
+          set -euo pipefail
+          PORT="${DEPLOY_PORT:-22}"
+          ssh -p "${PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" <<SSH
+          set -euo pipefail
+
+          if [ "\$(id -u)" -eq 0 ]; then
+            SUDO=""
+          else
+            SUDO="sudo"
+          fi
+
+          kctl() {
+            if command -v k3s >/dev/null 2>&1; then
+              \${SUDO} k3s kubectl "\$@"
+            else
+              kubectl "\$@"
+            fi
+          }
+
+          cd /opt/railpush
+
+          IMAGE_SHA="${REGISTRY_IMAGE}:${DEPLOY_REF}"
+          IMAGE_DEV="${REGISTRY_IMAGE}:dev"
+
+          \${SUDO} docker build -t "\${IMAGE_SHA}" -t "\${IMAGE_DEV}" .
+          \${SUDO} docker push "\${IMAGE_SHA}"
+          \${SUDO} docker push "\${IMAGE_DEV}"
+
+          kctl apply -k "${KUSTOMIZE_PATH}"
+          kctl -n railpush set image deploy/railpush-control-plane control-plane="\${IMAGE_SHA}"
+          kctl -n railpush set image deploy/railpush-worker worker="\${IMAGE_SHA}"
+          kctl -n railpush rollout status deploy/railpush-control-plane --timeout=10m
+          kctl -n railpush rollout status deploy/railpush-worker --timeout=10m
+          kctl -n railpush get deploy railpush-control-plane railpush-worker
+
+          curl -fsS --max-time 20 https://apps.railpush.com/healthz >/dev/null
+          curl -fsS --max-time 20 https://apps.railpush.com/readyz >/dev/null
+          SSH
+
+      - name: Notify Slack
+        if: always() && secrets.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DEPLOY_STATUS: ${{ job.status }}
+          DEPLOY_SHA: ${{ env.DEPLOY_REF }}
+          DEPLOY_BRANCH: ${{ env.DEPLOY_BRANCH }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${DEPLOY_SHA:0:7}"
+          if [ "${DEPLOY_STATUS}" = "success" ]; then
+            EMOJI=":white_check_mark:"
+          else
+            EMOJI=":x:"
+          fi
+          TEXT="${EMOJI} K8s control-plane deploy ${DEPLOY_STATUS} for ${GITHUB_REPOSITORY} (${DEPLOY_BRANCH}@${SHORT_SHA}). Run: ${RUN_URL}"
+          SAFE_TEXT="$(printf '%s' "${TEXT}" | sed 's/\\/\\\\/g; s/\"/\\"/g')"
+          curl -fsS -X POST "${SLACK_WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            --data "{\"text\":\"${SAFE_TEXT}\"}"
+
+      - name: Notify Discord
+        if: always() && secrets.DISCORD_WEBHOOK_URL != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DEPLOY_STATUS: ${{ job.status }}
+          DEPLOY_SHA: ${{ env.DEPLOY_REF }}
+          DEPLOY_BRANCH: ${{ env.DEPLOY_BRANCH }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${DEPLOY_SHA:0:7}"
+          if [ "${DEPLOY_STATUS}" = "success" ]; then
+            TAG="[OK]"
+          else
+            TAG="[FAIL]"
+          fi
+          TEXT="${TAG} K8s control-plane deploy ${DEPLOY_STATUS} for ${GITHUB_REPOSITORY} (${DEPLOY_BRANCH}@${SHORT_SHA}). Run: ${RUN_URL}"
+          SAFE_TEXT="$(printf '%s' "${TEXT}" | sed 's/\\/\\\\/g; s/\"/\\"/g')"
+          curl -fsS -X POST "${DISCORD_WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            --data "{\"content\":\"${SAFE_TEXT}\"}"

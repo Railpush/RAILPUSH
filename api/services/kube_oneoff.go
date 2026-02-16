@@ -135,8 +135,7 @@ func (k *KubeDeployer) RunOneOffJob(oneOffJobID string, svc *models.Service, com
 		},
 	}
 
-	// Compatibility-first hardening for customer pods.
-	applyCompatSecurityContext(&job.Spec.Template.Spec, &job.Spec.Template.Spec.Containers[0])
+	applyTenantSecurityContext(&job.Spec.Template.Spec, &job.Spec.Template.Spec.Containers[0], k.strictTenantPodSecurity())
 
 	if _, err := k.Client.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		if apierrors.IsAlreadyExists(err) {

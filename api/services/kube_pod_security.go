@@ -6,12 +6,58 @@ import (
 
 func boolPtr(v bool) *bool { return &v }
 
-// applyCompatSecurityContext applies "compatibility-first" pod hardening:
-// - seccomp RuntimeDefault (pod-level)
-// - no privilege escalation + drop NET_RAW (container-level)
+func ensureWritableTmp(pod *corev1.PodSpec, c *corev1.Container) {
+	if pod != nil {
+		hasTmpVolume := false
+		for _, v := range pod.Volumes {
+			if v.Name == "tmp" {
+				hasTmpVolume = true
+				break
+			}
+		}
+		if !hasTmpVolume {
+			pod.Volumes = append(pod.Volumes, corev1.Volume{
+				Name: "tmp",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			})
+		}
+	}
+
+	if c == nil {
+		return
+	}
+
+	hasTmpMount := false
+	for _, vm := range c.VolumeMounts {
+		if vm.MountPath == "/tmp" {
+			hasTmpMount = true
+			break
+		}
+	}
+	if !hasTmpMount {
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
+			Name:      "tmp",
+			MountPath: "/tmp",
+		})
+	}
+}
+
+// applyTenantSecurityContext applies tenant pod hardening.
 //
-// We intentionally do NOT force runAsNonRoot/runAsUser to avoid breaking common images.
-func applyCompatSecurityContext(pod *corev1.PodSpec, c *corev1.Container) {
+// strict=true:
+// - seccomp RuntimeDefault (pod-level)
+// - runAsNonRoot=true (pod-level)
+// - allowPrivilegeEscalation=false + privileged=false (container-level)
+// - capabilities.drop=ALL (container-level)
+// - readOnlyRootFilesystem=true + writable /tmp mount (container/pod-level)
+//
+// strict=false (compat fallback):
+// - seccomp RuntimeDefault (pod-level)
+// - allowPrivilegeEscalation=false + privileged=false (container-level)
+// - capabilities.drop includes NET_RAW (container-level)
+func applyTenantSecurityContext(pod *corev1.PodSpec, c *corev1.Container, strict bool) {
 	if pod != nil {
 		if pod.SecurityContext == nil {
 			pod.SecurityContext = &corev1.PodSecurityContext{}
@@ -20,6 +66,9 @@ func applyCompatSecurityContext(pod *corev1.PodSpec, c *corev1.Container) {
 			pod.SecurityContext.SeccompProfile = &corev1.SeccompProfile{
 				Type: corev1.SeccompProfileTypeRuntimeDefault,
 			}
+		}
+		if strict && pod.SecurityContext.RunAsNonRoot == nil {
+			pod.SecurityContext.RunAsNonRoot = boolPtr(true)
 		}
 	}
 
@@ -35,13 +84,23 @@ func applyCompatSecurityContext(pod *corev1.PodSpec, c *corev1.Container) {
 	if c.SecurityContext.Privileged == nil {
 		c.SecurityContext.Privileged = boolPtr(false)
 	}
+
+	if strict {
+		if c.SecurityContext.ReadOnlyRootFilesystem == nil {
+			c.SecurityContext.ReadOnlyRootFilesystem = boolPtr(true)
+		}
+		c.SecurityContext.Capabilities = &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+		}
+		ensureWritableTmp(pod, c)
+		return
+	}
+
 	if c.SecurityContext.Capabilities == nil {
 		c.SecurityContext.Capabilities = &corev1.Capabilities{}
 	}
 
-	// Basic hardening with minimal compatibility risk.
-	// Dropping NET_RAW prevents raw socket usage (e.g., packet crafting) but keeps
-	// common app capabilities (like NET_BIND_SERVICE) intact.
+	// Compatibility fallback: keep broad compatibility but at least drop raw-socket capability.
 	drop := corev1.Capability("NET_RAW")
 	for _, existing := range c.SecurityContext.Capabilities.Drop {
 		if existing == drop {
@@ -50,4 +109,3 @@ func applyCompatSecurityContext(pod *corev1.PodSpec, c *corev1.Container) {
 	}
 	c.SecurityContext.Capabilities.Drop = append(c.SecurityContext.Capabilities.Drop, drop)
 }
-

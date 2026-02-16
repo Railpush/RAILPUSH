@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+func TestLimiterForPath_PublicAuthUsesAuthLimiter(t *testing.T) {
+	if got := limiterForPath("/api/v1/auth/login"); got != authLimiter {
+		t.Fatalf("expected auth limiter for login endpoint")
+	}
+	if got := limiterForPath("/api/v1/auth/register"); got != authLimiter {
+		t.Fatalf("expected auth limiter for register endpoint")
+	}
+	if got := limiterForPath("/api/v1/auth/verify/resend"); got != authLimiter {
+		t.Fatalf("expected auth limiter for verify resend endpoint")
+	}
+}
+
+func TestLimiterForPath_NonAuthUsesGeneralLimiter(t *testing.T) {
+	if got := limiterForPath("/api/v1/auth/user"); got != generalLimiter {
+		t.Fatalf("expected general limiter for authenticated auth/user endpoint")
+	}
+	if got := limiterForPath("/api/v1/services"); got != generalLimiter {
+		t.Fatalf("expected general limiter for non-auth endpoint")
+	}
+}
+
 func TestClientIPString_UsesRemoteAddrHost(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 	reloadTrustedProxyCIDRsFromEnv()

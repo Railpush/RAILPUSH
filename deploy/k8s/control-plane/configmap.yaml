@@ -22,6 +22,9 @@ data:
   KUBE_STORAGE_CLASS: "longhorn-r2"
   # Custom domains need HTTP-01 (customer zones are not in our Cloudflare account).
   KUBE_CUSTOM_DOMAIN_ISSUER: "letsencrypt-http01-prod"
+  # strict: runAsNonRoot + drop ALL caps + readOnlyRootFilesystem (+ writable /tmp)
+  # compat: fallback for legacy images that require root/writable rootfs.
+  KUBE_TENANT_POD_SECURITY_PROFILE: "strict"
 
   DB_HOST: "railpush-postgres"
   DB_PORT: "5432"
