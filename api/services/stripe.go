@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"regexp"
 	"strings"
 
 	"github.com/railpush/api/config"
@@ -28,6 +29,9 @@ type StripeService struct {
 
 var ErrNoDefaultPaymentMethod = errors.New("payment method required")
 var ErrStripeWebhookSignature = errors.New("stripe webhook signature verification failed")
+
+var stripeIDTokenRE = regexp.MustCompile(`\b(?:price|si)_[A-Za-z0-9]+\b`)
+var stripeURLTokenRE = regexp.MustCompile(`https?://\S+`)
 
 func NewStripeService(cfg *config.Config) *StripeService {
 	stripe.Key = cfg.Stripe.SecretKey
@@ -72,11 +76,50 @@ func (s *StripeService) PlanForPriceID(priceID string) string {
 	}
 }
 
+func sanitizeStripeMessage(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return ""
+	}
+	msg = stripeURLTokenRE.ReplaceAllString(msg, "")
+	msg = stripeIDTokenRE.ReplaceAllStringFunc(msg, func(tok string) string {
+		if strings.HasPrefix(tok, "price_") {
+			return "selected plan"
+		}
+		if strings.HasPrefix(tok, "si_") {
+			return "existing subscription item"
+		}
+		return tok
+	})
+	msg = strings.Join(strings.Fields(msg), " ")
+	return strings.TrimSpace(msg)
+}
+
+func stripeUserError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrNoDefaultPaymentMethod) {
+		return ErrNoDefaultPaymentMethod
+	}
+	var se *stripe.Error
+	if errors.As(err, &se) {
+		if msg := sanitizeStripeMessage(se.Msg); msg != "" {
+			return fmt.Errorf("%s", msg)
+		}
+	}
+	if msg := sanitizeStripeMessage(err.Error()); msg != "" {
+		return fmt.Errorf("%s", msg)
+	}
+	return fmt.Errorf("billing update failed. please try again or contact support")
+}
+
 // EnsureCustomer creates or retrieves a Stripe customer for the given user.
 func (s *StripeService) EnsureCustomer(userID, email string) (*models.BillingCustomer, error) {
 	bc, err := models.GetBillingCustomerByUserID(userID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query billing customer: %w", err)
+		log.Printf("Stripe: failed to query billing customer user=%s err=%v", userID, err)
+		return nil, fmt.Errorf("billing update failed. please try again")
 	}
 	if bc != nil {
 		return bc, nil
@@ -88,7 +131,8 @@ func (s *StripeService) EnsureCustomer(userID, email string) (*models.BillingCus
 	params.AddMetadata("user_id", userID)
 	cust, err := customer.New(params)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Stripe customer: %w", err)
+		log.Printf("Stripe: failed to create customer user=%s err=%v", userID, err)
+		return nil, stripeUserError(err)
 	}
 
 	bc = &models.BillingCustomer{
@@ -97,7 +141,8 @@ func (s *StripeService) EnsureCustomer(userID, email string) (*models.BillingCus
 		SubscriptionStatus: "incomplete",
 	}
 	if err := models.CreateBillingCustomer(bc); err != nil {
-		return nil, fmt.Errorf("failed to save billing customer: %w", err)
+		log.Printf("Stripe: failed to save billing customer user=%s stripe_customer=%s err=%v", userID, cust.ID, err)
+		return nil, fmt.Errorf("billing update failed. please try again")
 	}
 	return bc, nil
 }
@@ -231,7 +276,8 @@ func (s *StripeService) CreateCheckoutSession(stripeCustomerID, returnURL string
 	}
 	sess, err := session.New(params)
 	if err != nil {
-		return "", fmt.Errorf("failed to create checkout session: %w", err)
+		log.Printf("Stripe: failed to create checkout session customer=%s err=%v", stripeCustomerID, err)
+		return "", stripeUserError(err)
 	}
 	return sess.URL, nil
 }
@@ -244,7 +290,8 @@ func (s *StripeService) CreatePortalSession(stripeCustomerID, returnURL string) 
 	}
 	sess, err := billingportalsession.New(params)
 	if err != nil {
-		return "", fmt.Errorf("failed to create portal session: %w", err)
+		log.Printf("Stripe: failed to create portal session customer=%s err=%v", stripeCustomerID, err)
+		return "", stripeUserError(err)
 	}
 	return sess.URL, nil
 }
@@ -277,7 +324,8 @@ func (s *StripeService) getDefaultPaymentMethod(bc *models.BillingCustomer) (str
 func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, resourceType, resourceID, name, plan string) error {
 	// Idempotency: don't double-bill the same resource if a request is retried.
 	if existing, err := models.GetBillingItemByResource(resourceType, resourceID); err != nil {
-		return fmt.Errorf("failed to query existing billing item: %w", err)
+		log.Printf("Stripe: failed to query existing billing item resource=%s/%s err=%v", resourceType, resourceID, err)
+		return fmt.Errorf("billing update failed. please try again")
 	} else if existing != nil {
 		if strings.TrimSpace(existing.Plan) != strings.TrimSpace(plan) {
 			return s.UpdateSubscriptionItemPlan(resourceType, resourceID, plan)
@@ -287,12 +335,13 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, resource
 
 	priceID := s.PriceIDForPlan(plan)
 	if priceID == "" {
-		return fmt.Errorf("no Stripe price configured for plan: %s", plan)
+		return fmt.Errorf("paid plan pricing isn't configured yet. please contact support")
 	}
 
 	defaultPMID, err := s.getDefaultPaymentMethod(bc)
 	if err != nil {
-		return err
+		log.Printf("Stripe: failed to fetch default payment method customer=%s err=%v", bc.StripeCustomerID, err)
+		return stripeUserError(err)
 	}
 	if defaultPMID == "" {
 		return ErrNoDefaultPaymentMethod
@@ -303,7 +352,7 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, resource
 		subParams := &stripe.SubscriptionParams{
 			Customer: stripe.String(bc.StripeCustomerID),
 			Items: []*stripe.SubscriptionItemsParams{
-				{Price: stripe.String(priceID)},
+				{Price: stripe.String(priceID), Quantity: stripe.Int64(1)},
 			},
 			CollectionMethod:     stripe.String(string(stripe.SubscriptionCollectionMethodChargeAutomatically)),
 			DefaultPaymentMethod: stripe.String(defaultPMID),
@@ -313,13 +362,15 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, resource
 		subParams.AddExpand("items")
 		sub, err := subscription.New(subParams)
 		if err != nil {
-			return fmt.Errorf("failed to create subscription: %w", err)
+			log.Printf("Stripe: failed to create subscription customer=%s err=%v", bc.StripeCustomerID, err)
+			return stripeUserError(err)
 		}
 
 		bc.StripeSubscriptionID = sub.ID
 		bc.SubscriptionStatus = string(sub.Status)
 		if err := models.UpdateBillingCustomer(bc); err != nil {
-			return fmt.Errorf("failed to update billing customer subscription: %w", err)
+			log.Printf("Stripe: failed to persist billing customer subscription customer=%s sub=%s err=%v", bc.StripeCustomerID, sub.ID, err)
+			return fmt.Errorf("billing update failed. please try again")
 		}
 
 		// Save the first subscription item
@@ -334,22 +385,68 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, resource
 				Plan:                     plan,
 			}
 			if err := models.CreateBillingItem(bi); err != nil {
-				return fmt.Errorf("failed to save billing item: %w", err)
+				log.Printf("Stripe: failed to save billing item resource=%s/%s err=%v", resourceType, resourceID, err)
+				return fmt.Errorf("billing update failed. please try again")
 			}
 		}
 		return nil
 	}
 
-	// Subscription exists, add an item
+	// Subscription exists. Stripe allows only one item per price; use quantity for multiple resources.
+	existingSubItemID, err := models.FindBillingSubscriptionItemIDByCustomerAndPrice(bc.ID, priceID)
+	if err != nil {
+		log.Printf("Stripe: failed to lookup existing subscription item customer=%s price=%s err=%v", bc.ID, priceID, err)
+		return fmt.Errorf("billing update failed. please try again")
+	}
+
+	if existingSubItemID != "" {
+		// Record the resource first; then set Stripe quantity to match DB count.
+		bi := &models.BillingItem{
+			BillingCustomerID:        bc.ID,
+			StripeSubscriptionItemID: existingSubItemID,
+			StripePriceID:            priceID,
+			ResourceType:             resourceType,
+			ResourceID:               resourceID,
+			ResourceName:             name,
+			Plan:                     plan,
+		}
+		if err := models.CreateBillingItem(bi); err != nil {
+			log.Printf("Stripe: failed to save billing item resource=%s/%s err=%v", resourceType, resourceID, err)
+			return fmt.Errorf("billing update failed. please try again")
+		}
+		qty, qErr := models.CountBillingItemsBySubscriptionItemID(existingSubItemID)
+		if qErr != nil || qty < 1 {
+			_ = models.DeleteBillingItemByResource(resourceType, resourceID)
+			if qErr != nil {
+				log.Printf("Stripe: failed to count billing items for quantity reconcile sub_item=%s err=%v", existingSubItemID, qErr)
+			}
+			return fmt.Errorf("billing update failed. please try again")
+		}
+		siParams := &stripe.SubscriptionItemParams{
+			Quantity:          stripe.Int64(int64(qty)),
+			PaymentBehavior:   stripe.String("error_if_incomplete"),
+			ProrationBehavior: stripe.String("always_invoice"),
+		}
+		if _, err := subscriptionitem.Update(existingSubItemID, siParams); err != nil {
+			log.Printf("Stripe: update quantity failed sub_item=%s qty=%d resource=%s/%s err=%v", existingSubItemID, qty, resourceType, resourceID, err)
+			_ = models.DeleteBillingItemByResource(resourceType, resourceID)
+			return stripeUserError(err)
+		}
+		return nil
+	}
+
+	// No existing item for this price; create one (quantity=1) then record the resource.
 	siParams := &stripe.SubscriptionItemParams{
 		Subscription:      stripe.String(bc.StripeSubscriptionID),
 		Price:             stripe.String(priceID),
+		Quantity:          stripe.Int64(1),
 		PaymentBehavior:   stripe.String("error_if_incomplete"),
 		ProrationBehavior: stripe.String("always_invoice"),
 	}
 	si, err := subscriptionitem.New(siParams)
 	if err != nil {
-		return fmt.Errorf("failed to add subscription item: %w", err)
+		log.Printf("Stripe: add subscription item failed sub=%s price=%s resource=%s/%s err=%v", bc.StripeSubscriptionID, priceID, resourceType, resourceID, err)
+		return stripeUserError(err)
 	}
 
 	bi := &models.BillingItem{
@@ -362,7 +459,10 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, resource
 		Plan:                     plan,
 	}
 	if err := models.CreateBillingItem(bi); err != nil {
-		return fmt.Errorf("failed to save billing item: %w", err)
+		// Best-effort cleanup; leaving an orphan subscription item would charge incorrectly.
+		_, _ = subscriptionitem.Del(si.ID, &stripe.SubscriptionItemParams{})
+		log.Printf("Stripe: failed to save billing item after creating subscription item resource=%s/%s err=%v", resourceType, resourceID, err)
+		return fmt.Errorf("billing update failed. please try again")
 	}
 	return nil
 }
@@ -371,21 +471,64 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, resource
 func (s *StripeService) RemoveSubscriptionItem(resourceType, resourceID string) error {
 	bi, err := models.GetBillingItemByResource(resourceType, resourceID)
 	if err != nil {
-		return fmt.Errorf("failed to query billing item: %w", err)
+		log.Printf("Stripe: failed to query billing item resource=%s/%s err=%v", resourceType, resourceID, err)
+		return fmt.Errorf("billing update failed. please try again")
 	}
 	if bi == nil {
 		return nil // no billing item for this resource
 	}
 
-	// Delete the subscription item from Stripe
-	_, err = subscriptionitem.Del(bi.StripeSubscriptionItemID, &stripe.SubscriptionItemParams{})
-	if err != nil {
-		log.Printf("Warning: failed to delete Stripe subscription item %s: %v", bi.StripeSubscriptionItemID, err)
+	subItemID := strings.TrimSpace(bi.StripeSubscriptionItemID)
+	if subItemID == "" {
+		_ = models.DeleteBillingItemByResource(resourceType, resourceID)
+		return nil
 	}
 
-	// Delete from our DB
+	// Remove from our DB first; if Stripe update fails, restore the DB record so the resource stays billed.
 	if err := models.DeleteBillingItemByResource(resourceType, resourceID); err != nil {
-		return fmt.Errorf("failed to delete billing item: %w", err)
+		log.Printf("Stripe: failed to delete billing item resource=%s/%s err=%v", resourceType, resourceID, err)
+		return fmt.Errorf("billing update failed. please try again")
+	}
+
+	remaining, countErr := models.CountBillingItemsBySubscriptionItemID(subItemID)
+	if countErr != nil {
+		// Best-effort: if we can't count, do not change Stripe; restore DB row to avoid underbilling.
+		_ = models.CreateBillingItem(bi)
+		log.Printf("Stripe: failed to count remaining billing items sub_item=%s err=%v", subItemID, countErr)
+		return fmt.Errorf("billing update failed. please try again")
+	}
+
+	if remaining <= 0 {
+		// Last resource on this plan: delete the Stripe subscription item.
+		if _, err := subscriptionitem.Del(subItemID, &stripe.SubscriptionItemParams{}); err != nil {
+			var se *stripe.Error
+			if errors.As(err, &se) && se.HTTPStatusCode == 404 {
+				// Already gone; treat as success.
+			} else {
+				log.Printf("Stripe: delete subscription item failed sub_item=%s resource=%s/%s err=%v", subItemID, resourceType, resourceID, err)
+				_ = models.CreateBillingItem(bi)
+				return stripeUserError(err)
+			}
+		}
+	} else {
+		// Still have resources on this plan: set quantity to remaining.
+		siParams := &stripe.SubscriptionItemParams{
+			Quantity:          stripe.Int64(int64(remaining)),
+			PaymentBehavior:   stripe.String("error_if_incomplete"),
+			ProrationBehavior: stripe.String("always_invoice"),
+		}
+		if _, err := subscriptionitem.Update(subItemID, siParams); err != nil {
+			var se *stripe.Error
+			if errors.As(err, &se) && se.HTTPStatusCode == 404 {
+				// Missing item means no billing; restore DB so it can be re-added later.
+				log.Printf("Stripe: subscription item missing during quantity update sub_item=%s resource=%s/%s", subItemID, resourceType, resourceID)
+				_ = models.CreateBillingItem(bi)
+				return fmt.Errorf("billing update failed. please try again")
+			}
+			log.Printf("Stripe: update quantity failed sub_item=%s qty=%d resource=%s/%s err=%v", subItemID, remaining, resourceType, resourceID, err)
+			_ = models.CreateBillingItem(bi)
+			return stripeUserError(err)
+		}
 	}
 
 	// Check if subscription has remaining items; cancel if empty
@@ -418,20 +561,112 @@ func (s *StripeService) UpdateSubscriptionItemPlan(resourceType, resourceID, new
 
 	newPriceID := s.PriceIDForPlan(newPlan)
 	if newPriceID == "" {
-		return fmt.Errorf("no Stripe price configured for plan: %s", newPlan)
+		return fmt.Errorf("paid plan pricing isn't configured yet. please contact support")
 	}
 
-	siParams := &stripe.SubscriptionItemParams{
-		Price: stripe.String(newPriceID),
+	oldPriceID := strings.TrimSpace(bi.StripePriceID)
+	oldSubItemID := strings.TrimSpace(bi.StripeSubscriptionItemID)
+	if oldPriceID == strings.TrimSpace(newPriceID) {
+		bi.Plan = newPlan
+		return models.UpdateBillingItem(bi)
 	}
-	_, err = subscriptionitem.Update(bi.StripeSubscriptionItemID, siParams)
+
+	bc, err := models.GetBillingCustomerByID(bi.BillingCustomerID)
+	if err != nil || bc == nil || strings.TrimSpace(bc.StripeSubscriptionID) == "" {
+		log.Printf("Stripe: billing subscription not found customer_id=%s err=%v", bi.BillingCustomerID, err)
+		return fmt.Errorf("billing update failed. please try again")
+	}
+
+	// Stripe enforces one item per price. A plan change moves this resource between price items by adjusting quantities.
+	targetSubItemID, err := models.FindBillingSubscriptionItemIDByCustomerAndPrice(bc.ID, newPriceID)
 	if err != nil {
-		return fmt.Errorf("failed to update subscription item: %w", err)
+		log.Printf("Stripe: failed to lookup target plan item customer=%s price=%s err=%v", bc.ID, newPriceID, err)
+		return fmt.Errorf("billing update failed. please try again")
 	}
 
+	oldCount, err := models.CountBillingItemsBySubscriptionItemID(oldSubItemID)
+	if err != nil {
+		log.Printf("Stripe: failed to count old plan quantity sub_item=%s err=%v", oldSubItemID, err)
+		return fmt.Errorf("billing update failed. please try again")
+	}
+	if oldCount < 1 {
+		oldCount = 1
+	}
+	oldDesired := oldCount - 1
+
+	newCount := 0
+	if targetSubItemID != "" {
+		if n, err := models.CountBillingItemsBySubscriptionItemID(targetSubItemID); err == nil {
+			newCount = n
+		}
+	}
+	newDesired := newCount + 1
+
+	subParams := &stripe.SubscriptionParams{
+		PaymentBehavior:      stripe.String("error_if_incomplete"),
+		ProrationBehavior:    stripe.String("always_invoice"),
+		OffSession:           stripe.Bool(true),
+		CollectionMethod:     stripe.String(string(stripe.SubscriptionCollectionMethodChargeAutomatically)),
+		Items:                []*stripe.SubscriptionItemsParams{},
+	}
+	// Old item decrement/delete.
+	if oldDesired <= 0 {
+		subParams.Items = append(subParams.Items, &stripe.SubscriptionItemsParams{
+			ID:      stripe.String(oldSubItemID),
+			Deleted: stripe.Bool(true),
+		})
+	} else {
+		subParams.Items = append(subParams.Items, &stripe.SubscriptionItemsParams{
+			ID:       stripe.String(oldSubItemID),
+			Quantity: stripe.Int64(int64(oldDesired)),
+		})
+	}
+	// New item increment/add.
+	if targetSubItemID != "" {
+		subParams.Items = append(subParams.Items, &stripe.SubscriptionItemsParams{
+			ID:       stripe.String(targetSubItemID),
+			Quantity: stripe.Int64(int64(newDesired)),
+		})
+	} else {
+		subParams.Items = append(subParams.Items, &stripe.SubscriptionItemsParams{
+			Price:    stripe.String(newPriceID),
+			Quantity: stripe.Int64(int64(newDesired)),
+		})
+	}
+	subParams.AddExpand("items.data.price")
+	sub, err := subscription.Update(bc.StripeSubscriptionID, subParams)
+	if err != nil {
+		log.Printf("Stripe: plan change failed sub=%s resource=%s/%s old_price=%s new_price=%s err=%v", bc.StripeSubscriptionID, resourceType, resourceID, oldPriceID, newPriceID, err)
+		return stripeUserError(err)
+	}
+
+	// If we added a new item by price, discover its Stripe subscription item id from the updated subscription.
+	finalTargetID := targetSubItemID
+	if finalTargetID == "" && sub != nil && sub.Items != nil {
+		for _, it := range sub.Items.Data {
+			if it == nil || it.Price == nil {
+				continue
+			}
+			if strings.TrimSpace(it.Price.ID) == strings.TrimSpace(newPriceID) {
+				finalTargetID = it.ID
+				break
+			}
+		}
+	}
+	if strings.TrimSpace(finalTargetID) == "" {
+		return fmt.Errorf("billing update failed. please try again")
+	}
+
+	// Persist the resource's new plan mapping.
+	bi.StripeSubscriptionItemID = finalTargetID
 	bi.StripePriceID = newPriceID
 	bi.Plan = newPlan
-	return models.UpdateBillingItem(bi)
+	if err := models.UpdateBillingItem(bi); err != nil {
+		// DB write failure is unexpected; log and surface a generic message.
+		log.Printf("Stripe: updated subscription but failed to persist billing item resource=%s/%s err=%v", resourceType, resourceID, err)
+		return fmt.Errorf("billing update failed. please try again")
+	}
+	return nil
 }
 
 // HandleWebhookEvent verifies and dispatches a Stripe webhook event.

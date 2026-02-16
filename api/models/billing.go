@@ -63,6 +63,18 @@ func GetBillingCustomerByStripeID(stripeCustomerID string) (*BillingCustomer, er
 	return bc, err
 }
 
+func GetBillingCustomerByID(id string) (*BillingCustomer, error) {
+	bc := &BillingCustomer{}
+	err := database.DB.QueryRow(
+		"SELECT id, user_id, stripe_customer_id, COALESCE(stripe_subscription_id,''), COALESCE(payment_method_last4,''), COALESCE(payment_method_brand,''), COALESCE(subscription_status,'incomplete'), created_at, updated_at FROM billing_customers WHERE id=$1",
+		id,
+	).Scan(&bc.ID, &bc.UserID, &bc.StripeCustomerID, &bc.StripeSubscriptionID, &bc.PaymentMethodLast4, &bc.PaymentMethodBrand, &bc.SubscriptionStatus, &bc.CreatedAt, &bc.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return bc, err
+}
+
 func UpdateBillingCustomer(bc *BillingCustomer) error {
 	_, err := database.DB.Exec(
 		"UPDATE billing_customers SET stripe_subscription_id=$1, payment_method_last4=$2, payment_method_brand=$3, subscription_status=$4, updated_at=NOW() WHERE id=$5",
@@ -88,6 +100,29 @@ func GetBillingItemByResource(resourceType, resourceID string) (*BillingItem, er
 		return nil, nil
 	}
 	return bi, err
+}
+
+func FindBillingSubscriptionItemIDByCustomerAndPrice(billingCustomerID, stripePriceID string) (string, error) {
+	var id string
+	err := database.DB.QueryRow(
+		"SELECT COALESCE(stripe_subscription_item_id,'') FROM billing_items WHERE billing_customer_id=$1 AND stripe_price_id=$2 ORDER BY created_at DESC LIMIT 1",
+		billingCustomerID, stripePriceID,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return id, err
+}
+
+func CountBillingItemsBySubscriptionItemID(stripeSubscriptionItemID string) (int, error) {
+	var n int
+	if err := database.DB.QueryRow(
+		"SELECT COUNT(*) FROM billing_items WHERE stripe_subscription_item_id=$1",
+		stripeSubscriptionItemID,
+	).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func ListBillingItemsByCustomer(billingCustomerID string) ([]BillingItem, error) {

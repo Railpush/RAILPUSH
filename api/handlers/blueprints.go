@@ -355,6 +355,12 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		}
 		failMsg = msg
 	}
+	failBilling := func(err error) {
+		if err != nil {
+			log.Printf("Blueprint sync billing error blueprint=%s err=%v", bp.ID, err)
+		}
+		fail("billing error. please open Billing > Plans and try again.")
+	}
 
 	// Stripe billing: blueprint sync can create paid resources, so we must bill (or block) here too.
 	var stripeSvc *services.StripeService
@@ -394,6 +400,60 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		// Delete blueprint resource links we inserted during this sync attempt.
 		for _, br := range st.insertedBRs {
 			_ = models.DeleteBlueprintResource(&br)
+		}
+
+		// Best-effort: roll back Stripe billing side-effects so a failed sync doesn't leave charges behind.
+		if stripeSvc != nil {
+			bc, err := getBillingCustomer()
+			if err != nil || bc == nil {
+				log.Printf("Blueprint sync rollback: failed to resolve billing customer: %v", err)
+			} else {
+				// Remove billing for resources created by this sync attempt.
+				for _, svc := range st.createdServices {
+					if svc == nil || strings.TrimSpace(svc.ID) == "" {
+						continue
+					}
+					if err := stripeSvc.RemoveSubscriptionItem("service", svc.ID); err != nil {
+						log.Printf("Blueprint sync rollback: failed to remove billing for service %s: %v", svc.ID, err)
+					}
+				}
+				for _, id := range st.createdDBIDs {
+					if strings.TrimSpace(id) == "" {
+						continue
+					}
+					if err := stripeSvc.RemoveSubscriptionItem("database", id); err != nil {
+						log.Printf("Blueprint sync rollback: failed to remove billing for database %s: %v", id, err)
+					}
+				}
+				for _, id := range st.createdKVIDs {
+					if strings.TrimSpace(id) == "" {
+						continue
+					}
+					if err := stripeSvc.RemoveSubscriptionItem("keyvalue", id); err != nil {
+						log.Printf("Blueprint sync rollback: failed to remove billing for keyvalue %s: %v", id, err)
+					}
+				}
+
+				// Restore billing for adopted services to their original plan (best-effort).
+				for _, before := range st.updatedServices {
+					if strings.TrimSpace(before.ID) == "" {
+						continue
+					}
+					beforePlan := strings.ToLower(strings.TrimSpace(before.Plan))
+					if p, ok := services.NormalizePlan(before.Plan); ok {
+						beforePlan = p
+					}
+					if beforePlan == services.PlanFree {
+						if err := stripeSvc.RemoveSubscriptionItem("service", before.ID); err != nil {
+							log.Printf("Blueprint sync rollback: failed to remove billing for adopted service %s: %v", before.ID, err)
+						}
+						continue
+					}
+					if err := stripeSvc.AddSubscriptionItem(bc, "service", before.ID, before.Name, beforePlan); err != nil {
+						log.Printf("Blueprint sync rollback: failed to restore billing for adopted service %s: %v", before.ID, err)
+					}
+				}
+			}
 		}
 
 		// Revert adopted service updates (best-effort).
@@ -742,7 +802,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				if err == nil {
 					err = fmt.Errorf("billing customer not found")
 				}
-				fail("billing error: " + err.Error())
+				failBilling(err)
 				return
 			}
 			if err := stripeSvc.AddSubscriptionItem(bc, "database", db.ID, db.Name, db.Plan); err != nil {
@@ -750,7 +810,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 					fail("payment method required. Please add a default payment method in billing settings.")
 					return
 				}
-				fail("billing error: " + err.Error())
+				failBilling(err)
 				return
 			}
 		}
@@ -811,7 +871,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				if err == nil {
 					err = fmt.Errorf("billing customer not found")
 				}
-				fail("billing error: " + err.Error())
+				failBilling(err)
 				return
 			}
 			if err := stripeSvc.AddSubscriptionItem(bc, "keyvalue", kv.ID, kv.Name, kv.Plan); err != nil {
@@ -819,7 +879,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 					fail("payment method required. Please add a default payment method in billing settings.")
 					return
 				}
-				fail("billing error: " + err.Error())
+				failBilling(err)
 				return
 			}
 		}
@@ -932,7 +992,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 					if err == nil {
 						err = fmt.Errorf("billing customer not found")
 					}
-					fail("billing error: " + err.Error())
+					failBilling(err)
 					return
 				}
 				if err := stripeSvc.AddSubscriptionItem(bc, "service", svc.ID, svc.Name, svc.Plan); err != nil {
@@ -940,7 +1000,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 						fail("payment method required. Please add a default payment method in billing settings.")
 						return
 					}
-					fail("billing error: " + err.Error())
+					failBilling(err)
 					return
 				}
 			}
@@ -993,7 +1053,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			if stripeSvc != nil && desiredPlan != oldPlanEffective {
 				if desiredPlan == services.PlanFree {
 					if err := stripeSvc.RemoveSubscriptionItem("service", svc.ID); err != nil {
-						fail("billing error: " + err.Error())
+						failBilling(err)
 						return
 					}
 				} else {
@@ -1002,7 +1062,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 						if err == nil {
 							err = fmt.Errorf("billing customer not found")
 						}
-						fail("billing error: " + err.Error())
+						failBilling(err)
 						return
 					}
 					if err := stripeSvc.AddSubscriptionItem(bc, "service", svc.ID, svc.Name, desiredPlan); err != nil {
@@ -1010,7 +1070,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 							fail("payment method required. Please add a default payment method in billing settings.")
 							return
 						}
-						fail("billing error: " + err.Error())
+						failBilling(err)
 						return
 					}
 				}
