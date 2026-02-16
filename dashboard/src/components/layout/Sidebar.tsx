@@ -265,11 +265,11 @@ export function Sidebar() {
                 <NavItem icon={<BarChart3 className="w-3.5 h-3.5" />} label="Performance" path="/ops/performance" active={path.startsWith('/ops/performance')} collapsed={false} />
                 <NavItem icon={<Mail className="w-3.5 h-3.5" />} label="Email" path="/ops/email" active={path.startsWith('/ops/email')} collapsed={false} />
                 <NavItem icon={<Settings className="w-3.5 h-3.5" />} label="Settings" path="/ops/settings" active={path.startsWith('/ops/settings')} collapsed={false} />
-                <NavItem icon={<Siren className="w-3.5 h-3.5" />} label="Incidents" path="/incidents" active={path.startsWith('/incidents')} collapsed={false} />
+                <NavItem icon={<Siren className="w-3.5 h-3.5" />} label="Incidents" path="/ops/incidents" active={path.startsWith('/ops/incidents')} collapsed={false} />
               </div>
             )}
             {collapsed && (
-              <NavItem icon={<Siren className="w-4 h-4" />} label="Incidents" path="/incidents" active={path.startsWith('/incidents')} collapsed={true} />
+              <NavItem icon={<Siren className="w-4 h-4" />} label="Incidents" path="/ops/incidents" active={path.startsWith('/ops/incidents')} collapsed={true} />
             )}
           </>
         )}

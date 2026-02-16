@@ -16,6 +16,8 @@ import { OpsPerformancePage } from '../pages/OpsPerformance';
 import { OpsSettingsPage } from '../pages/OpsSettings';
 import { OpsDatastoresPage } from '../pages/OpsDatastores';
 import { OpsAuditLogsPage } from '../pages/OpsAuditLogs';
+import { Incidents } from '../pages/Incidents';
+import { IncidentDetailPage } from '../pages/IncidentDetail';
 
 export default function OpsRoutes() {
   return (
@@ -24,6 +26,8 @@ export default function OpsRoutes() {
       <Route path="customers" element={<OpsCustomersPage />} />
       <Route path="services" element={<OpsServicesPage />} />
       <Route path="services/:serviceId/logs" element={<OpsServiceLogsPage />} />
+      <Route path="incidents" element={<Incidents />} />
+      <Route path="incidents/:incidentId" element={<IncidentDetailPage />} />
       <Route path="deployments" element={<OpsDeploymentsPage />} />
       <Route path="email" element={<OpsEmailOutboxPage />} />
       <Route path="billing" element={<OpsBillingPage />} />
@@ -44,4 +48,3 @@ export default function OpsRoutes() {
     </Routes>
   );
 }
-

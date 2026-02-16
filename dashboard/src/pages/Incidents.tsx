@@ -160,7 +160,7 @@ export function Incidents() {
             {filtered.map((inc) => (
               <button
                 key={inc.id}
-                onClick={() => navigate(`/incidents/${encodeURIComponent(inc.id)}`)}
+                onClick={() => navigate(`/ops/incidents/${encodeURIComponent(inc.id)}`)}
                 className="w-full text-left grid grid-cols-12 px-4 py-3 border-b border-border-subtle hover:bg-surface-tertiary/40 transition-colors"
               >
                 <div className="col-span-3 flex items-center gap-2">

@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from './components/layout/Layout';
 import { ToastProvider } from './components/ui/Toast';
@@ -33,8 +33,6 @@ import { Projects } from './pages/Projects';
 import { ProjectDetail } from './pages/ProjectDetail';
 import { Settings } from './pages/Settings';
 import { Community } from './pages/Community';
-import { Incidents } from './pages/Incidents';
-import { IncidentDetailPage } from './pages/IncidentDetail';
 import { auth } from './lib/api';
 import { ThemeProvider } from './lib/theme';
 import { SessionProvider } from './lib/session';
@@ -53,6 +51,12 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+function IncidentsRedirect() {
+  const { incidentId } = useParams<{ incidentId?: string }>();
+  const target = incidentId ? `/ops/incidents/${encodeURIComponent(incidentId)}` : '/ops/incidents';
+  return <Navigate to={target} replace />;
+}
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
@@ -205,8 +209,8 @@ function App() {
                     </Suspense>
                   )}
                 />
-                <Route path="/incidents" element={requireOps(<Incidents />)} />
-                <Route path="/incidents/:incidentId" element={requireOps(<IncidentDetailPage />)} />
+                <Route path="/incidents" element={requireOps(<Navigate to="/ops/incidents" replace />)} />
+                <Route path="/incidents/:incidentId" element={requireOps(<IncidentsRedirect />)} />
 
                 {/* Support */}
                 <Route path="/support" element={<SupportPage />} />

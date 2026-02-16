@@ -153,7 +153,7 @@ export function IncidentDetailPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <button
-            onClick={() => navigate('/incidents')}
+            onClick={() => navigate('/ops/incidents')}
             className="mt-1 p-2 rounded-lg bg-surface-secondary border border-border-default hover:border-border-hover hover:bg-surface-tertiary/40 transition-colors"
             title="Back"
           >
@@ -307,7 +307,7 @@ export function IncidentDetailPage() {
             </div>
           )}
           <div className="mt-3 text-xs text-content-tertiary">
-            <Link to="/incidents" className="text-brand hover:text-brand-hover">Back to incidents</Link>
+            <Link to="/ops/incidents" className="text-brand hover:text-brand-hover">Back to incidents</Link>
           </div>
         </Card>
       </div>

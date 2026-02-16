@@ -186,8 +186,55 @@ func (h *OpsAdminHandler) ResumeWorkspace(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	_ = models.CreateAuditLog(wsID, actorID, "ops.workspace.resumed", "workspace", wsID, nil)
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	// Best-effort: resume all services in the workspace that are currently suspended.
+	resumed := 0
+	svcs, err := models.ListServices(wsID)
+	if err == nil && len(svcs) > 0 {
+		var kd *services.KubeDeployer
+		if h.Config != nil && h.Config.Kubernetes.Enabled && h.Worker != nil {
+			if d, err := h.Worker.GetKubeDeployer(); err == nil && d != nil {
+				kd = d
+			}
+		}
+		for i := range svcs {
+			svc := svcs[i]
+			if !svc.IsSuspended {
+				continue
+			}
+			_ = models.SetServiceSuspended(svc.ID, false)
+			_ = models.UpdateServiceStatus(svc.ID, "deploying", svc.ContainerID, svc.HostPort)
+			resumed++
+
+			go func(s models.Service) {
+				if kd != nil {
+					desired := int32(1)
+					if s.Instances > 0 {
+						desired = int32(s.Instances)
+					}
+					if err := kd.ScaleService(&s, desired); err != nil {
+						_ = models.UpdateServiceStatus(s.ID, "deploy_failed", s.ContainerID, s.HostPort)
+						return
+					}
+					_ = models.UpdateServiceStatus(s.ID, "live", s.ContainerID, s.HostPort)
+					return
+				}
+				if h.Worker != nil && s.ContainerID != "" {
+					if err := h.Worker.Deployer.StartContainer(s.ContainerID); err != nil {
+						_ = models.UpdateServiceStatus(s.ID, "deploy_failed", s.ContainerID, s.HostPort)
+						return
+					}
+					_ = models.UpdateServiceStatus(s.ID, "live", s.ContainerID, s.HostPort)
+					return
+				}
+				_ = models.UpdateServiceStatus(s.ID, "deploy_failed", s.ContainerID, s.HostPort)
+			}(svc)
+		}
+	}
+
+	_ = models.CreateAuditLog(wsID, actorID, "ops.workspace.resumed", "workspace", wsID, map[string]interface{}{
+		"resumed_services": resumed,
+	})
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "resumed_services": resumed})
 }
 
 func (h *OpsAdminHandler) RestartService(w http.ResponseWriter, r *http.Request) {
