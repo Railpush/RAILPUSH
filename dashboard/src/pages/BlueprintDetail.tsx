@@ -273,7 +273,7 @@ export function BlueprintDetail() {
             <div>
               <div className="text-sm font-medium text-content-primary">Delete Blueprint</div>
               <div className="text-xs text-content-tertiary">
-                This will remove the blueprint definition. Created resources will not be deleted.
+                This will delete the blueprint and any linked services. Databases and key-value stores will remain.
               </div>
             </div>
             <Button variant="danger" size="sm" onClick={handleDelete} loading={deleting}>
