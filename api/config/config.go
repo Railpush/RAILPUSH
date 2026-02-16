@@ -192,7 +192,7 @@ func Load() *Config {
 			Host:     getEnv("DB_HOST", "localhost"),
 			Port:     getEnvInt("DB_PORT", 5432),
 			User:     getEnv("DB_USER", "railpush"),
-			Password: getEnv("DB_PASSWORD", "railpush"),
+			Password: getEnv("DB_PASSWORD", ""),
 			DBName:   getEnv("DB_NAME", "railpush"),
 			SSLMode:  getEnv("DB_SSLMODE", "disable"),
 		},
