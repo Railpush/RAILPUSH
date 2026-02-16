@@ -16,7 +16,7 @@ export function Card({ children, hover, padding = 'md', glass = true, className,
       className={cn(
         glass ? 'glass-panel' : 'bg-surface-secondary border border-border-default',
         'rounded-xl transition-all duration-200',
-        hover && 'hover:border-border-hover hover:bg-surface-grad/5 hover:neon-border-glow cursor-pointer',
+        hover && 'hover:border-border-hover hover:bg-surface-tertiary cursor-pointer',
         paddings[padding],
         className
       )}

@@ -9,9 +9,16 @@ export interface User {
   github_id: number;
   username: string;
   email: string;
+  blueprint_ai_autogen_enabled?: boolean;
   avatar_url: string;
   role: string;
   created_at: string;
+}
+
+export interface BlueprintAISettings {
+  enabled: boolean;
+  available: boolean;
+  model: string;
 }
 
 export interface Workspace {

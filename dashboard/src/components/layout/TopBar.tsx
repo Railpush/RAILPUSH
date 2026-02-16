@@ -37,7 +37,7 @@ export function TopBar() {
   ];
 
   return (
-    <header className="app-topbar h-[60px] border-b border-border-default/50 flex items-center justify-between px-6 bg-surface-secondary/80 backdrop-blur-xl sticky top-0 z-30 transition-all duration-300">
+    <header className="app-topbar h-[60px] border-b border-border-default/50 flex items-center justify-between px-6 bg-surface-secondary sticky top-0 z-30 transition-all duration-300">
 
       {/* Search Trigger Mockup */}
       <div className="flex-1 max-w-md hidden md:block">
@@ -67,7 +67,7 @@ export function TopBar() {
         <Dropdown
           trigger={
             <button className="flex items-center gap-2.5 pl-1 pr-2 py-1 rounded-full hover:bg-surface-tertiary transition-colors border border-transparent group">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center text-xs font-bold text-white shadow-md ring-2 ring-transparent group-hover:ring-brand/50 transition-all">
+              <div className="w-8 h-8 rounded-full bg-surface-tertiary border border-border-default flex items-center justify-center text-xs font-bold text-content-primary transition-all">
                 {userInitial}
               </div>
               <ChevronDown className="w-4 h-4 text-content-tertiary group-hover:text-content-primary transition-colors" />

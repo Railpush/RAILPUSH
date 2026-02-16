@@ -155,7 +155,7 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
       {/* Header Section */}
       <div className="flex flex-wrap items-center justify-between gap-4 animate-enter">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-white mb-1">{pageTitle}</h1>
+          <h1 className="text-3xl font-bold tracking-tight text-content-primary mb-1">{pageTitle}</h1>
           <p className="text-content-secondary text-sm">Overview of your infrastructure and resources</p>
         </div>
         <div className="flex items-center gap-3">
@@ -171,7 +171,7 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
               />
             </div>
           )}
-          <Button onClick={() => navigate(createPath)} variant="primary" className="shadow-lg shadow-brand/20">
+          <Button onClick={() => navigate(createPath)} variant="primary">
             <Plus className="w-4 h-4" />
             {createLabel}
           </Button>
@@ -414,8 +414,6 @@ function StatsCard({ label, value, icon, trend, trendColor, subtext, onClick, ac
           </div>
         )}
       </div>
-      {/* Background Glow */}
-      <div className="absolute -right-6 -bottom-6 w-24 h-24 bg-gradient-to-br from-brand/10 to-transparent rounded-full blur-2xl opacity-0 group-hover:opacity-100 transition-opacity" />
     </div>
   )
 }

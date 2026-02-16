@@ -246,6 +246,24 @@ func (h *BlueprintHandler) resolveGitHubToken(workspaceID string) string {
 	return token
 }
 
+func (h *BlueprintHandler) blueprintAIAutogenEnabled(workspaceID string) bool {
+	if h == nil || h.Config == nil {
+		return false
+	}
+	if !h.Config.BlueprintAI.Enabled || strings.TrimSpace(h.Config.BlueprintAI.OpenRouterAPIKey) == "" {
+		return false
+	}
+	ws, err := models.GetWorkspace(workspaceID)
+	if err != nil || ws == nil || strings.TrimSpace(ws.OwnerID) == "" {
+		return false
+	}
+	owner, err := models.GetUserByID(ws.OwnerID)
+	if err != nil || owner == nil {
+		return false
+	}
+	return owner.BlueprintAIAutogenEnabled
+}
+
 // dbConnInfo holds connection info for a provisioned database
 type dbConnInfo struct {
 	Host     string
@@ -253,6 +271,44 @@ type dbConnInfo struct {
 	User     string
 	Password string
 	DBName   string
+}
+
+// normalizeBlueprintPlan coerces user/AI supplied plans into supported tiers.
+// Empty plans default to starter. Unknown values are repaired instead of failing sync.
+func normalizeBlueprintPlan(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return services.PlanStarter, false
+	}
+	if p, ok := services.NormalizePlan(trimmed); ok {
+		return p, false
+	}
+
+	alias := strings.ToLower(trimmed)
+	switch alias {
+	case "hobby", "basic", "small":
+		return services.PlanStarter, true
+	case "medium":
+		return services.PlanStandard, true
+	case "professional", "business", "enterprise", "team":
+		return services.PlanPro, true
+	case "trial":
+		return services.PlanFree, true
+	}
+
+	// Heuristic fallback for generated plans like "starter-1x", "pro-plus", etc.
+	switch {
+	case strings.Contains(alias, "free"), strings.Contains(alias, "trial"):
+		return services.PlanFree, true
+	case strings.Contains(alias, "start"), strings.Contains(alias, "hobby"), strings.Contains(alias, "basic"), strings.Contains(alias, "small"):
+		return services.PlanStarter, true
+	case strings.Contains(alias, "standard"), strings.Contains(alias, "medium"):
+		return services.PlanStandard, true
+	case strings.Contains(alias, "pro"), strings.Contains(alias, "business"), strings.Contains(alias, "enterprise"), strings.Contains(alias, "team"), strings.Contains(alias, "scale"):
+		return services.PlanPro, true
+	default:
+		return services.PlanStarter, true
+	}
 }
 
 func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
@@ -274,14 +330,14 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	}
 
 	type syncState struct {
-		createdServices []*models.Service
-		createdDBIDs    []string
-		createdKVIDs    []string
+		createdServices    []*models.Service
+		createdDBIDs       []string
+		createdKVIDs       []string
 		createdEnvGroupIDs []string
-		createdDiskIDs  []string
-		createdDomains  []createdDomain
-		updatedServices []models.Service // snapshots for adopted service rollback
-		insertedBRs     []models.BlueprintResource
+		createdDiskIDs     []string
+		createdDomains     []createdDomain
+		updatedServices    []models.Service // snapshots for adopted service rollback
+		insertedBRs        []models.BlueprintResource
 	}
 
 	if bp == nil {
@@ -436,10 +492,35 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		return
 	}
 
-	// Read render.yaml
+	// Read render.yaml (or generate it from repository source using OpenRouter when enabled).
 	yamlPath := filepath.Join(tmpDir, bp.FilePath)
 	data, err := os.ReadFile(yamlPath)
-	if err != nil {
+	repoFileExists := err == nil
+	if h.blueprintAIAutogenEnabled(bp.WorkspaceID) {
+		ai := services.NewBlueprintAIGenerator(h.Config)
+		generated, genErr := ai.GenerateRenderYAMLFromRepo(tmpDir, bp.RepoURL, bp.Branch)
+		if genErr != nil {
+			log.Printf("Blueprint sync: OpenRouter generation failed blueprint=%s err=%v", bp.ID, genErr)
+		} else {
+			var candidate RenderYAML
+			if parseErr := yaml.Unmarshal([]byte(generated), &candidate); parseErr != nil {
+				log.Printf("Blueprint sync: OpenRouter returned invalid YAML blueprint=%s err=%v", bp.ID, parseErr)
+			} else if len(candidate.Services) == 0 && len(candidate.Databases) == 0 && len(candidate.KeyValues) == 0 && len(candidate.EnvVarGroups) == 0 {
+				log.Printf("Blueprint sync: OpenRouter returned empty blueprint=%s", bp.ID)
+			} else {
+				data = []byte(generated)
+				if mkErr := os.MkdirAll(filepath.Dir(yamlPath), 0o755); mkErr == nil {
+					_ = os.WriteFile(yamlPath, data, 0o644)
+				}
+				log.Printf("Blueprint sync: generated %s via OpenRouter for blueprint=%s", bp.FilePath, bp.ID)
+			}
+		}
+	}
+	if len(data) == 0 {
+		if repoFileExists {
+			fail("invalid " + bp.FilePath)
+			return
+		}
 		fail(bp.FilePath + " not found in repository")
 		return
 	}
@@ -627,23 +708,20 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		if dbUser == "" {
 			dbUser = ddef.Name
 		}
-		db := &models.ManagedDatabase{
-			WorkspaceID: bp.WorkspaceID, Name: ddef.Name, Plan: ddef.Plan,
-			PGVersion: ddef.PGVersion, Host: "localhost", Port: 5432,
-			DBName: dbName, Username: dbUser,
-		}
-		if db.Plan == "" {
-			db.Plan = services.PlanStarter
-		}
-		if p, ok := services.NormalizePlan(db.Plan); ok {
-			db.Plan = p
-		} else {
-			fail("invalid plan for database " + ddef.Name)
-			return
-		}
-		if db.PGVersion == 0 {
-			db.PGVersion = 16
-		}
+			db := &models.ManagedDatabase{
+				WorkspaceID: bp.WorkspaceID, Name: ddef.Name, Plan: ddef.Plan,
+				PGVersion: ddef.PGVersion, Host: "localhost", Port: 5432,
+				DBName: dbName, Username: dbUser,
+			}
+			if p, repaired := normalizeBlueprintPlan(db.Plan); repaired {
+				log.Printf("Blueprint sync: repaired database plan for %s from %q to %q", ddef.Name, db.Plan, p)
+				db.Plan = p
+			} else {
+				db.Plan = p
+			}
+			if db.PGVersion == 0 {
+				db.PGVersion = 16
+			}
 
 		pw, _ := utils.GenerateRandomString(16)
 		encrypted, _ := utils.Encrypt(pw, h.Config.Crypto.EncryptionKey)
@@ -700,22 +778,19 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			continue
 		}
 
-		kv := &models.ManagedKeyValue{
-			WorkspaceID: bp.WorkspaceID, Name: kvdef.Name,
-			Plan: kvdef.Plan, MaxmemoryPolicy: kvdef.MaxmemoryPolicy,
-		}
-		if kv.Plan == "" {
-			kv.Plan = services.PlanStarter
-		}
-		if p, ok := services.NormalizePlan(kv.Plan); ok {
-			kv.Plan = p
-		} else {
-			fail("invalid plan for key-value store " + kvdef.Name)
-			return
-		}
-		if kv.MaxmemoryPolicy == "" {
-			kv.MaxmemoryPolicy = "allkeys-lru"
-		}
+			kv := &models.ManagedKeyValue{
+				WorkspaceID: bp.WorkspaceID, Name: kvdef.Name,
+				Plan: kvdef.Plan, MaxmemoryPolicy: kvdef.MaxmemoryPolicy,
+			}
+			if p, repaired := normalizeBlueprintPlan(kv.Plan); repaired {
+				log.Printf("Blueprint sync: repaired key-value plan for %s from %q to %q", kvdef.Name, kv.Plan, p)
+				kv.Plan = p
+			} else {
+				kv.Plan = p
+			}
+			if kv.MaxmemoryPolicy == "" {
+				kv.MaxmemoryPolicy = "allkeys-lru"
+			}
 
 		pw, _ := utils.GenerateRandomString(16)
 		encrypted, _ := utils.Encrypt(pw, h.Config.Crypto.EncryptionKey)
@@ -824,21 +899,18 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		if svc.RepoURL == "" {
 			svc.RepoURL = bp.RepoURL
 		}
-		if svc.Port == 0 {
-			svc.Port = 10000
-		}
-		if svc.Plan == "" {
-			svc.Plan = services.PlanStarter
-		}
-		if p, ok := services.NormalizePlan(svc.Plan); ok {
-			svc.Plan = p
-		} else {
-			fail("invalid plan for service " + serviceName)
-			return
-		}
-		if sdef.NumInstances > 0 {
-			svc.Instances = sdef.NumInstances
-		} else {
+			if svc.Port == 0 {
+				svc.Port = 10000
+			}
+			if p, repaired := normalizeBlueprintPlan(svc.Plan); repaired {
+				log.Printf("Blueprint sync: repaired service plan for %s from %q to %q", serviceName, svc.Plan, p)
+				svc.Plan = p
+			} else {
+				svc.Plan = p
+			}
+			if sdef.NumInstances > 0 {
+				svc.Instances = sdef.NumInstances
+			} else {
 			svc.Instances = 1
 		}
 
@@ -900,19 +972,13 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			svc.StaticPublishPath = sdef.StaticPublishPath
 			svc.Schedule = sdef.Schedule
 
-			desiredPlan := sdef.Plan
-			if desiredPlan == "" {
-				desiredPlan = services.PlanStarter
-			}
-			if p, ok := services.NormalizePlan(desiredPlan); ok {
-				desiredPlan = p
-			} else {
-				fail("invalid plan for service " + serviceName)
-				return
-			}
-			if sdef.NumInstances > 0 {
-				svc.Instances = sdef.NumInstances
-			} else {
+				desiredPlan, repairedPlan := normalizeBlueprintPlan(sdef.Plan)
+				if repairedPlan {
+					log.Printf("Blueprint sync: repaired desired plan for %s from %q to %q", serviceName, sdef.Plan, desiredPlan)
+				}
+				if sdef.NumInstances > 0 {
+					svc.Instances = sdef.NumInstances
+				} else {
 				svc.Instances = 1
 			}
 

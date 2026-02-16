@@ -191,6 +191,8 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.Use(middleware.AuthMiddleware(cfg))
 
 	authed.HandleFunc("/auth/user", auth.GetCurrentUser).Methods("GET")
+	authed.HandleFunc("/settings/blueprint-ai", auth.GetBlueprintAISettings).Methods("GET")
+	authed.HandleFunc("/settings/blueprint-ai", auth.UpdateBlueprintAISettings).Methods("PUT")
 	authed.HandleFunc("/auth/api-keys", auth.CreateAPIKey).Methods("POST")
 	authed.HandleFunc("/auth/api-keys/{id}", auth.DeleteAPIKey).Methods("DELETE")
 
@@ -201,15 +203,15 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/ops/incidents/{id}/silence", opsH.SilenceIncident).Methods("POST")
 
 	opsDashH := handlers.NewOpsDashboardHandler(cfg)
-		authed.HandleFunc("/ops/overview", opsDashH.Overview).Methods("GET")
-		authed.HandleFunc("/ops/users", opsDashH.ListUsers).Methods("GET")
-		authed.HandleFunc("/ops/workspaces", opsDashH.ListWorkspaces).Methods("GET")
-		authed.HandleFunc("/ops/services", opsDashH.ListServices).Methods("GET")
-		authed.HandleFunc("/ops/deploys", opsDashH.ListDeploys).Methods("GET")
-		authed.HandleFunc("/ops/email/outbox", opsDashH.ListEmailOutbox).Methods("GET")
-		authed.HandleFunc("/ops/settings", opsDashH.Settings).Methods("GET")
-		authed.HandleFunc("/ops/actions/auto-deploy/enable-all", opsDashH.EnableAutoDeployAll).Methods("POST")
-		authed.HandleFunc("/ops/actions/email/test", opsDashH.SendTestEmail).Methods("POST")
+	authed.HandleFunc("/ops/overview", opsDashH.Overview).Methods("GET")
+	authed.HandleFunc("/ops/users", opsDashH.ListUsers).Methods("GET")
+	authed.HandleFunc("/ops/workspaces", opsDashH.ListWorkspaces).Methods("GET")
+	authed.HandleFunc("/ops/services", opsDashH.ListServices).Methods("GET")
+	authed.HandleFunc("/ops/deploys", opsDashH.ListDeploys).Methods("GET")
+	authed.HandleFunc("/ops/email/outbox", opsDashH.ListEmailOutbox).Methods("GET")
+	authed.HandleFunc("/ops/settings", opsDashH.Settings).Methods("GET")
+	authed.HandleFunc("/ops/actions/auto-deploy/enable-all", opsDashH.EnableAutoDeployAll).Methods("POST")
+	authed.HandleFunc("/ops/actions/email/test", opsDashH.SendTestEmail).Methods("POST")
 
 	opsBillH := handlers.NewOpsBillingHandler(cfg)
 	authed.HandleFunc("/ops/billing/customers", opsBillH.ListCustomers).Methods("GET")

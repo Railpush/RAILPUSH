@@ -30,11 +30,11 @@ function NavItem({ icon, label, path, active, collapsed }: SidebarItem & { activ
         'w-full flex items-center gap-3 rounded-lg text-[13px] transition-all duration-200 cursor-pointer border relative overflow-hidden group',
         collapsed ? 'justify-center p-2' : 'px-3 py-2',
         active
-          ? 'bg-brand/10 text-brand font-medium border-brand/20 shadow-[0_0_10px_-4px_var(--color-brand-glow)]'
+          ? 'bg-brand/10 text-brand font-medium border-brand/20'
           : 'text-content-secondary hover:bg-surface-tertiary hover:text-content-primary border-transparent'
       )}
     >
-      {active && <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-brand shadow-[0_0_8px_var(--color-brand)]" />}
+      {active && <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-brand" />}
       <span className={cn("w-4 h-4 flex-shrink-0 transition-transform duration-200", active ? "scale-110" : "opacity-70 group-hover:scale-110 group-hover:opacity-100")}>{icon}</span>
       {!collapsed && <span className="truncate">{label}</span>}
     </button>
@@ -66,7 +66,7 @@ export function Sidebar() {
   const width = collapsed ? 'w-[68px]' : 'w-[260px]';
   const asideClass = cn(
     width,
-    'app-sidebar h-screen fixed left-0 top-0 bg-surface-secondary/80 backdrop-blur-xl border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)]'
+    'app-sidebar h-screen fixed left-0 top-0 bg-surface-secondary border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)]'
   );
 
   // Service detail sidebar
@@ -273,7 +273,7 @@ export function Sidebar() {
         )}
       </nav>
 
-      <div className="px-3 py-2 border-t border-border-default/50 space-y-1 bg-surface-primary/30">
+      <div className="px-3 py-2 border-t border-border-default/50 space-y-1 bg-surface-primary">
         <NavItem icon={<Settings className="w-4 h-4" />} label="Settings" path="/settings" active={path === '/settings'} collapsed={collapsed} />
         <NavItem icon={<CreditCard className="w-4 h-4" />} label="Billing" path="/billing" active={path === '/billing'} collapsed={collapsed} />
         <NavItem icon={<LifeBuoy className="w-4 h-4" />} label="Support" path="/support" active={path.startsWith('/support')} collapsed={collapsed} />
@@ -283,7 +283,7 @@ export function Sidebar() {
 
       <div className="p-3 border-t border-border-default h-[60px] flex items-center bg-surface-secondary/50">
         <div className={cn('flex items-center w-full', collapsed ? 'justify-center' : 'gap-3')}>
-          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-brand/20 to-brand/5 border border-brand/20 flex items-center justify-center text-xs font-bold text-brand shadow-sm">
+          <div className="w-8 h-8 rounded-full bg-surface-tertiary border border-border-default flex items-center justify-center text-xs font-bold text-brand">
             {userInitial}
           </div>
           {!collapsed && (

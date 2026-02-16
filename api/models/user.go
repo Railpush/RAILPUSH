@@ -8,16 +8,17 @@ import (
 )
 
 type User struct {
-	ID                string    `json:"id"`
-	GitHubID          int64     `json:"github_id"`
-	Username          string    `json:"username"`
-	Email             string    `json:"email"`
-	EmailVerifiedAt   *time.Time `json:"email_verified_at,omitempty"`
-	PasswordHash      string    `json:"-"`
-	AvatarURL         string    `json:"avatar_url"`
-	Role              string    `json:"role"`
-	GitHubAccessToken string    `json:"-"`
-	CreatedAt         time.Time `json:"created_at"`
+	ID                        string     `json:"id"`
+	GitHubID                  int64      `json:"github_id"`
+	Username                  string     `json:"username"`
+	Email                     string     `json:"email"`
+	EmailVerifiedAt           *time.Time `json:"email_verified_at,omitempty"`
+	PasswordHash              string     `json:"-"`
+	AvatarURL                 string     `json:"avatar_url"`
+	Role                      string     `json:"role"`
+	BlueprintAIAutogenEnabled bool       `json:"blueprint_ai_autogen_enabled"`
+	GitHubAccessToken         string     `json:"-"`
+	CreatedAt                 time.Time  `json:"created_at"`
 }
 
 type APIKey struct {
@@ -34,8 +35,8 @@ func GetUserByGitHubID(ghID int64) (*User, error) {
 	u := &User{}
 	var verifiedAt sql.NullTime
 	err := database.DB.QueryRow(
-		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), COALESCE(email, ''), email_verified_at, COALESCE(avatar_url, ''), COALESCE(role, 'member'), created_at FROM users WHERE github_id = $1", ghID,
-	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &verifiedAt, &u.AvatarURL, &u.Role, &u.CreatedAt)
+		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), COALESCE(email, ''), email_verified_at, COALESCE(avatar_url, ''), COALESCE(role, 'member'), COALESCE(blueprint_ai_autogen_enabled, false), created_at FROM users WHERE github_id = $1", ghID,
+	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &verifiedAt, &u.AvatarURL, &u.Role, &u.BlueprintAIAutogenEnabled, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -50,8 +51,8 @@ func GetUserByID(id string) (*User, error) {
 	u := &User{}
 	var verifiedAt sql.NullTime
 	err := database.DB.QueryRow(
-		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), COALESCE(email, ''), email_verified_at, COALESCE(avatar_url, ''), COALESCE(role, 'member'), created_at FROM users WHERE id = $1", id,
-	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &verifiedAt, &u.AvatarURL, &u.Role, &u.CreatedAt)
+		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), COALESCE(email, ''), email_verified_at, COALESCE(avatar_url, ''), COALESCE(role, 'member'), COALESCE(blueprint_ai_autogen_enabled, false), created_at FROM users WHERE id = $1", id,
+	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &verifiedAt, &u.AvatarURL, &u.Role, &u.BlueprintAIAutogenEnabled, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -74,8 +75,8 @@ func GetUserByEmail(email string) (*User, error) {
 	u := &User{}
 	var verifiedAt sql.NullTime
 	err := database.DB.QueryRow(
-		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), email, email_verified_at, COALESCE(password_hash, ''), COALESCE(avatar_url, ''), COALESCE(role, 'member'), created_at FROM users WHERE email = $1", email,
-	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &verifiedAt, &u.PasswordHash, &u.AvatarURL, &u.Role, &u.CreatedAt)
+		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), email, email_verified_at, COALESCE(password_hash, ''), COALESCE(avatar_url, ''), COALESCE(role, 'member'), COALESCE(blueprint_ai_autogen_enabled, false), created_at FROM users WHERE email = $1", email,
+	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &verifiedAt, &u.PasswordHash, &u.AvatarURL, &u.Role, &u.BlueprintAIAutogenEnabled, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -152,5 +153,10 @@ func GetUserGitHubToken(userID string) (string, error) {
 
 func UpdateUserGitHubToken(userID, encryptedToken string) error {
 	_, err := database.DB.Exec("UPDATE users SET github_access_token = $1 WHERE id = $2", encryptedToken, userID)
+	return err
+}
+
+func UpdateUserBlueprintAIAutogen(userID string, enabled bool) error {
+	_, err := database.DB.Exec("UPDATE users SET blueprint_ai_autogen_enabled = $1 WHERE id = $2", enabled, userID)
 	return err
 }

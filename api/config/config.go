@@ -11,6 +11,7 @@ type Config struct {
 	ControlPlane ControlPlaneConfig
 	Database     DatabaseConfig
 	Redis        RedisConfig
+	BlueprintAI  BlueprintAIConfig
 	GitHub       GitHubConfig
 	Docker       DockerConfig
 	Deploy       DeployConfig
@@ -76,6 +77,20 @@ type GitHubConfig struct {
 	WebhookSecret string
 }
 
+type BlueprintAIConfig struct {
+	Enabled bool
+
+	OpenRouterAPIKey string
+	OpenRouterModel  string
+	OpenRouterURL    string
+
+	RequestTimeoutSeconds int
+
+	MaxScanFiles   int
+	MaxFileBytes   int
+	MaxPromptBytes int
+}
+
 type DockerConfig struct {
 	Host      string
 	Network   string
@@ -136,13 +151,13 @@ type EmailOutboxConfig struct {
 type EmailConfig struct {
 	Provider string // "smtp" (MVP); empty disables email.
 
-	SMTPHost     string
-	SMTPPort     int
-	SMTPUser     string
-	SMTPPassword string
-	SMTPFrom     string
+	SMTPHost         string
+	SMTPPort         int
+	SMTPUser         string
+	SMTPPassword     string
+	SMTPFrom         string
 	SMTPEnvelopeFrom string
-	SMTPReplyTo  string
+	SMTPReplyTo      string
 
 	Outbox EmailOutboxConfig
 }
@@ -206,6 +221,18 @@ func Load() *Config {
 			Password: getEnv("REDIS_PASSWORD", ""),
 			DB:       getEnvInt("REDIS_DB", 0),
 		},
+		BlueprintAI: BlueprintAIConfig{
+			Enabled:          getEnvBool("BLUEPRINT_AI_ENABLED", true),
+			OpenRouterAPIKey: strings.TrimSpace(getEnv("OPENROUTER_API_KEY", "")),
+			OpenRouterModel:  strings.TrimSpace(getEnv("OPENROUTER_MODEL", "minimax/minimax-m2.5")),
+			OpenRouterURL:    strings.TrimSpace(getEnv("OPENROUTER_URL", "https://openrouter.ai/api/v1/chat/completions")),
+
+			RequestTimeoutSeconds: getEnvInt("OPENROUTER_TIMEOUT_SECONDS", 45),
+
+			MaxScanFiles:   getEnvInt("BLUEPRINT_AI_MAX_SCAN_FILES", 120),
+			MaxFileBytes:   getEnvInt("BLUEPRINT_AI_MAX_FILE_BYTES", 20000),
+			MaxPromptBytes: getEnvInt("BLUEPRINT_AI_MAX_PROMPT_BYTES", 180000),
+		},
 		GitHub: GitHubConfig{
 			ClientID:      getEnv("GITHUB_CLIENT_ID", ""),
 			ClientSecret:  getEnv("GITHUB_CLIENT_SECRET", ""),
@@ -227,12 +254,12 @@ func Load() *Config {
 			DisableRouter:  getEnvBool("DEPLOY_DISABLE_ROUTER", false),
 		},
 		Kubernetes: KubernetesConfig{
-			Enabled:      getEnvBool("KUBE_ENABLED", false),
-			Namespace:    getEnv("KUBE_NAMESPACE", "railpush"),
-			IngressClass: getEnv("KUBE_INGRESS_CLASS", "nginx"),
-			TLSSecret:    getEnv("KUBE_TLS_SECRET", "apps-wildcard-tls"),
-			StorageClass: getEnv("KUBE_STORAGE_CLASS", "longhorn-r2"),
-			CustomDomainIssuer:      getEnv("KUBE_CUSTOM_DOMAIN_ISSUER", "letsencrypt-http01-prod"),
+			Enabled:                  getEnvBool("KUBE_ENABLED", false),
+			Namespace:                getEnv("KUBE_NAMESPACE", "railpush"),
+			IngressClass:             getEnv("KUBE_INGRESS_CLASS", "nginx"),
+			TLSSecret:                getEnv("KUBE_TLS_SECRET", "apps-wildcard-tls"),
+			StorageClass:             getEnv("KUBE_STORAGE_CLASS", "longhorn-r2"),
+			CustomDomainIssuer:       getEnv("KUBE_CUSTOM_DOMAIN_ISSUER", "letsencrypt-http01-prod"),
 			TenantPodSecurityProfile: strings.ToLower(strings.TrimSpace(getEnv("KUBE_TENANT_POD_SECURITY_PROFILE", "strict"))),
 		},
 		Worker: WorkerConfig{
@@ -250,13 +277,13 @@ func Load() *Config {
 		Email: EmailConfig{
 			Provider: strings.ToLower(strings.TrimSpace(getEnv("EMAIL_PROVIDER", ""))),
 
-			SMTPHost:     getEnv("SMTP_HOST", ""),
-			SMTPPort:     getEnvInt("SMTP_PORT", 587),
-			SMTPUser:     getEnv("SMTP_USER", ""),
-			SMTPPassword: getEnv("SMTP_PASSWORD", ""),
-			SMTPFrom:     getEnv("SMTP_FROM", ""),
+			SMTPHost:         getEnv("SMTP_HOST", ""),
+			SMTPPort:         getEnvInt("SMTP_PORT", 587),
+			SMTPUser:         getEnv("SMTP_USER", ""),
+			SMTPPassword:     getEnv("SMTP_PASSWORD", ""),
+			SMTPFrom:         getEnv("SMTP_FROM", ""),
 			SMTPEnvelopeFrom: getEnv("SMTP_ENVELOPE_FROM", ""),
-			SMTPReplyTo:  getEnv("SMTP_REPLY_TO", ""),
+			SMTPReplyTo:      getEnv("SMTP_REPLY_TO", ""),
 
 			Outbox: EmailOutboxConfig{
 				PollIntervalMS: getEnvInt("EMAIL_OUTBOX_POLL_INTERVAL_MS", 2000),

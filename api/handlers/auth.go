@@ -2,8 +2,8 @@ package handlers
 
 import (
 	"crypto/subtle"
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -355,6 +355,64 @@ func (h *AuthHandler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	}
 	ws, _ := models.GetWorkspaceByOwner(userID)
 	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{"user": user, "workspace": ws})
+}
+
+func (h *AuthHandler) GetBlueprintAISettings(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	user, err := models.GetUserByID(userID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if user == nil {
+		utils.RespondError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	available := h != nil &&
+		h.Config != nil &&
+		h.Config.BlueprintAI.Enabled &&
+		strings.TrimSpace(h.Config.BlueprintAI.OpenRouterAPIKey) != ""
+	model := ""
+	if h != nil && h.Config != nil {
+		model = strings.TrimSpace(h.Config.BlueprintAI.OpenRouterModel)
+	}
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"enabled":   user.BlueprintAIAutogenEnabled,
+		"available": available,
+		"model":     model,
+	})
+}
+
+func (h *AuthHandler) UpdateBlueprintAISettings(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32*1024)).Decode(&req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	available := h != nil &&
+		h.Config != nil &&
+		h.Config.BlueprintAI.Enabled &&
+		strings.TrimSpace(h.Config.BlueprintAI.OpenRouterAPIKey) != ""
+	if req.Enabled && !available {
+		utils.RespondError(w, http.StatusServiceUnavailable, "blueprint ai is not configured")
+		return
+	}
+	if err := models.UpdateUserBlueprintAIAutogen(userID, req.Enabled); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to update settings")
+		return
+	}
+	model := ""
+	if h != nil && h.Config != nil {
+		model = strings.TrimSpace(h.Config.BlueprintAI.OpenRouterModel)
+	}
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"enabled":   req.Enabled,
+		"available": available,
+		"model":     model,
+	})
 }
 
 func (h *AuthHandler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {

@@ -3,7 +3,7 @@ import type {
   GitHubRepo, GitHubBranch, RegisteredDomain, DnsRecord, DomainSearchResult, Project, ProjectFolder, Environment, PreviewEnvironment, OneOffJob, AutoscalingPolicy,
   DatabaseReplica, WorkspaceMember, AuditLogEntry, SamlSSOConfig, Incident, IncidentDetail, OpsOverview, OpsUserItem, OpsWorkspaceItem, OpsServiceItem, OpsDeployItem,
   OpsEmailOutboxItem, OpsBillingCustomerItem, OpsBillingCustomerDetail, OpsTicketItem, OpsTicketDetail, OpsWorkspaceCreditItem, OpsWorkspaceCreditDetail,
-  OpsKubeSummary, OpsPerformanceSummary, SupportTicket, SupportTicketMessage,
+  OpsKubeSummary, OpsPerformanceSummary, SupportTicket, SupportTicketMessage, BlueprintAISettings,
 } from '../types';
 
 const BASE = '/api/v1';
@@ -54,6 +54,12 @@ export const auth = {
       window.location.href = '/login';
     }
   },
+};
+
+export const settings = {
+  getBlueprintAI: () => request<BlueprintAISettings>('/settings/blueprint-ai'),
+  updateBlueprintAI: (enabled: boolean) =>
+    request<BlueprintAISettings>('/settings/blueprint-ai', { method: 'PUT', body: JSON.stringify({ enabled }) }),
 };
 
 // Services

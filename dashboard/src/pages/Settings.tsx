@@ -1,13 +1,60 @@
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CreditCard, FileText, User, Bell, Key, LogOut, ChevronRight } from 'lucide-react';
+import { CreditCard, FileText, User, Bell, Key, LogOut, ChevronRight, Sparkles } from 'lucide-react';
+import { toast } from 'sonner';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
-import { auth } from '../lib/api';
+import { auth, settings as settingsApi } from '../lib/api';
 import { useSession } from '../lib/session';
 
 export function Settings() {
   const navigate = useNavigate();
   const { user, workspace } = useSession();
+  const [blueprintAIEnabled, setBlueprintAIEnabled] = useState<boolean>(Boolean(user?.blueprint_ai_autogen_enabled));
+  const [blueprintAIAvailable, setBlueprintAIAvailable] = useState<boolean>(false);
+  const [blueprintAIModel, setBlueprintAIModel] = useState<string>('minimax/minimax-m2.5');
+  const [blueprintAILoading, setBlueprintAILoading] = useState<boolean>(true);
+  const [blueprintAISaving, setBlueprintAISaving] = useState<boolean>(false);
+
+  useEffect(() => {
+    let mounted = true;
+    setBlueprintAILoading(true);
+    settingsApi
+      .getBlueprintAI()
+      .then((cfg) => {
+        if (!mounted) return;
+        setBlueprintAIEnabled(Boolean(cfg.enabled));
+        setBlueprintAIAvailable(Boolean(cfg.available));
+        if (cfg.model) setBlueprintAIModel(cfg.model);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setBlueprintAIAvailable(false);
+      })
+      .finally(() => {
+        if (!mounted) return;
+        setBlueprintAILoading(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const toggleBlueprintAI = async () => {
+    const next = !blueprintAIEnabled;
+    setBlueprintAISaving(true);
+    try {
+      const updated = await settingsApi.updateBlueprintAI(next);
+      setBlueprintAIEnabled(Boolean(updated.enabled));
+      setBlueprintAIAvailable(Boolean(updated.available));
+      if (updated.model) setBlueprintAIModel(updated.model);
+      toast.success(`Blueprint AI ${updated.enabled ? 'enabled' : 'disabled'}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to update Blueprint AI');
+    } finally {
+      setBlueprintAISaving(false);
+    }
+  };
 
   return (
     <div className="space-y-8 animate-enter">
@@ -20,6 +67,38 @@ export function Settings() {
         {/* Workspace & Billing */}
         <div className="space-y-6">
           <h2 className="text-sm font-bold uppercase tracking-wider text-content-tertiary px-1">Workspace</h2>
+
+          <Card className="glass-panel p-0 overflow-hidden group">
+            <div className="p-5 border-b border-border-default/50">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="p-2 rounded-lg bg-brand/10 text-brand">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-content-primary">Blueprint AI Autogenerate</h3>
+                  <p className="text-xs text-content-secondary">Scan repo files and generate render.yaml during blueprint sync</p>
+                </div>
+              </div>
+            </div>
+            <div className="bg-surface-tertiary/20 px-5 py-3 flex items-center justify-between gap-3">
+              <span className="text-xs text-content-tertiary">
+                {blueprintAILoading
+                  ? 'Loading...'
+                  : blueprintAIAvailable
+                    ? `Model: ${blueprintAIModel}`
+                    : 'OpenRouter API key is not configured on the server'}
+              </span>
+              <Button
+                variant={blueprintAIEnabled ? 'secondary' : 'primary'}
+                size="sm"
+                loading={blueprintAISaving}
+                disabled={blueprintAILoading || blueprintAISaving || (!blueprintAIAvailable && !blueprintAIEnabled)}
+                onClick={toggleBlueprintAI}
+              >
+                {blueprintAIEnabled ? 'Enabled' : 'Disabled'}
+              </Button>
+            </div>
+          </Card>
 
           <Card className="glass-panel p-0 overflow-hidden group">
             <div className="p-5 border-b border-border-default/50">
