@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"fmt"
+	"net"
+	"sort"
 	"strings"
 	"time"
 
@@ -76,8 +78,98 @@ func (k *KubeDeployer) upsertNetworkPolicy(ctx context.Context, ns string, np *n
 	return nil
 }
 
+func podCIDRBaseIPs(podCIDRs []string) []net.IP {
+	set := map[string]net.IP{}
+	for _, raw := range podCIDRs {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		ip, ipnet, err := net.ParseCIDR(raw)
+		if err != nil || ip == nil || ipnet == nil {
+			continue
+		}
+		// The flannel VXLAN interface uses the base/network IP of the node's podCIDR (e.g. 10.42.3.0/32).
+		base := ipnet.IP
+		if base == nil {
+			base = ip
+		}
+		k := base.String()
+		if k == "" {
+			continue
+		}
+		set[k] = base
+	}
+
+	out := make([]net.IP, 0, len(set))
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		out = append(out, set[k])
+	}
+	return out
+}
+
 func (k *KubeDeployer) ensureTenantNetpolGlobal(ctx context.Context) error {
 	ns := k.namespace()
+	// ingress-nginx runs with hostNetwork=true on this k3s cluster. When it proxies to backends on other nodes,
+	// the kernel picks the flannel VXLAN interface address (the base IP of that node's podCIDR, e.g. 10.42.0.0)
+	// as the source IP. NetworkPolicies that only allow the ingress-nginx Pod IPs will block these cross-node
+	// connections. Allow the node flannel "base" IPs (/32) in addition to the ingress-nginx pod selector.
+	//
+	// This stays narrow (one /32 per node) and doesn't open workspace-to-workspace pod traffic.
+	var nodeFlannelIPs []string
+	if k != nil && k.Client != nil {
+		if nodes, err := k.Client.CoreV1().Nodes().List(ctx, metav1.ListOptions{}); err == nil && nodes != nil {
+			for _, n := range nodes.Items {
+				cidrs := n.Spec.PodCIDRs
+				if len(cidrs) == 0 && strings.TrimSpace(n.Spec.PodCIDR) != "" {
+					cidrs = []string{n.Spec.PodCIDR}
+				}
+				for _, ip := range podCIDRBaseIPs(cidrs) {
+					if ip == nil {
+						continue
+					}
+					ones := 32
+					if ip.To4() == nil {
+						ones = 128
+					}
+					nodeFlannelIPs = append(nodeFlannelIPs, fmt.Sprintf("%s/%d", ip.String(), ones))
+				}
+			}
+		}
+	}
+	sort.Strings(nodeFlannelIPs)
+
+	from := []networkingv1.NetworkPolicyPeer{
+		{
+			NamespaceSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					// Present by default on modern clusters.
+					"kubernetes.io/metadata.name": "ingress-nginx",
+				},
+			},
+			PodSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app.kubernetes.io/name":      "ingress-nginx",
+					"app.kubernetes.io/component": "controller",
+				},
+			},
+		},
+	}
+	for _, cidr := range nodeFlannelIPs {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" {
+			continue
+		}
+		from = append(from, networkingv1.NetworkPolicyPeer{
+			IPBlock: &networkingv1.IPBlock{CIDR: cidr},
+		})
+	}
+
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      kubeNetpolNameIngressFromIngressNginx(),
@@ -97,22 +189,7 @@ func (k *KubeDeployer) ensureTenantNetpolGlobal(ctx context.Context) error {
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
 			Ingress: []networkingv1.NetworkPolicyIngressRule{
 				{
-					From: []networkingv1.NetworkPolicyPeer{
-						{
-							NamespaceSelector: &metav1.LabelSelector{
-								MatchLabels: map[string]string{
-									// Present by default on modern clusters.
-									"kubernetes.io/metadata.name": "ingress-nginx",
-								},
-							},
-							PodSelector: &metav1.LabelSelector{
-								MatchLabels: map[string]string{
-									"app.kubernetes.io/name":      "ingress-nginx",
-									"app.kubernetes.io/component": "controller",
-								},
-							},
-						},
-					},
+					From: from,
 				},
 			},
 		},
@@ -240,4 +317,3 @@ func (k *KubeDeployer) ReconcileTenantNetworkPolicies(ctx context.Context) error
 	}
 	return nil
 }
-
