@@ -5,6 +5,7 @@ NS="${NAMESPACE:-railpush}"
 ROOT="${BACKUP_DIR:-/backups}"
 RETENTION_DAYS="${RETENTION_DAYS:-7}"
 ZSTD_LEVEL="${ZSTD_LEVEL:-6}"
+KUBECTL="${KUBECTL:-/usr/local/bin/kubectl}"
 
 log() {
   printf "%s %s\n" "$(date -u +%FT%TZ)" "$*"
@@ -18,7 +19,7 @@ fail=0
 
 backup_postgres() {
   # Format: podName \t dbID \t workspaceID
-  kubectl -n "${NS}" get pods \
+  "${KUBECTL}" -n "${NS}" get pods \
     -l "app.kubernetes.io/managed-by=railpush,app.kubernetes.io/component=managed-database" \
     -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels["railpush.com/database-id"]}{"\t"}{.metadata.labels["railpush.com/workspace-id"]}{"\n"}{end}' \
     2>/dev/null || true
@@ -26,7 +27,7 @@ backup_postgres() {
 
 backup_redis() {
   # Format: podName \t kvID \t workspaceID
-  kubectl -n "${NS}" get pods \
+  "${KUBECTL}" -n "${NS}" get pods \
     -l "app.kubernetes.io/managed-by=railpush,app.kubernetes.io/component=managed-keyvalue" \
     -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels["railpush.com/keyvalue-id"]}{"\t"}{.metadata.labels["railpush.com/workspace-id"]}{"\n"}{end}' \
     2>/dev/null || true
@@ -55,7 +56,7 @@ while IFS="$(printf '\t')" read -r pod dbid wsid; do
   log "Postgres backup: pod=${pod} workspace=${wsid} db=${dbid}"
 
   # Stream the dump out of the Postgres container, compress locally, then atomically move into place.
-  if kubectl -n "${NS}" exec "${pod}" -c postgres -- sh -lc '
+  if "${KUBECTL}" -n "${NS}" exec "${pod}" -c postgres -- sh -lc '
       set -eu
       export PGPASSWORD="$POSTGRES_PASSWORD"
       pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --no-owner --no-acl
@@ -98,7 +99,7 @@ while IFS="$(printf '\t')" read -r pod kvid wsid; do
   log "Redis backup: pod=${pod} workspace=${wsid} kv=${kvid}"
 
   # Trigger a background snapshot, wait for completion, then stream the RDB file.
-  if ! kubectl -n "${NS}" exec "${pod}" -c redis -- sh -lc '
+  if ! "${KUBECTL}" -n "${NS}" exec "${pod}" -c redis -- sh -lc '
       set -eu
       redis-cli -a "$REDIS_PASSWORD" bgsave >/dev/null 2>&1 || true
       i=0
@@ -116,7 +117,7 @@ while IFS="$(printf '\t')" read -r pod kvid wsid; do
     continue
   fi
 
-  if kubectl -n "${NS}" exec "${pod}" -c redis -- sh -lc 'set -eu; test -f /data/dump.rdb; cat /data/dump.rdb' \
+  if "${KUBECTL}" -n "${NS}" exec "${pod}" -c redis -- sh -lc 'set -eu; test -f /data/dump.rdb; cat /data/dump.rdb' \
     | zstd -T0 "-${ZSTD_LEVEL}" -q -o "${tmp}"; then
     mv -f "${tmp}" "${out}"
     zstd -tq "${out}"
