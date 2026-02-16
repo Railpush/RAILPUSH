@@ -603,16 +603,18 @@ func (w *Worker) processJobKubernetes(job DeployJob, appendLog func(string)) {
 		if key == "" {
 			continue
 		}
-		val := strings.TrimSpace(ev.Value)
-		if val == "" && strings.TrimSpace(ev.EncryptedValue) != "" {
-			if decrypted, err := utils.Decrypt(ev.EncryptedValue, w.Config.Crypto.EncryptionKey); err == nil {
-				val = decrypted
-			}
-		}
-		if val == "" {
+		// Env var values are stored encrypted; preserve empty values ("" is distinct from unset).
+		// Do not TrimSpace: many apps treat whitespace as significant.
+		if strings.TrimSpace(ev.EncryptedValue) == "" {
 			continue
 		}
-		env[key] = val
+		decrypted, err := utils.Decrypt(ev.EncryptedValue, w.Config.Crypto.EncryptionKey)
+		if err != nil {
+			// If we can't decrypt, skipping is safer than deploying with a wrong value.
+			log.Printf("worker: decrypt env var failed for service=%s key=%s: %v", svc.ID, key, err)
+			continue
+		}
+		env[key] = decrypted
 	}
 	if svc.Port <= 0 {
 		svc.Port = 10000
