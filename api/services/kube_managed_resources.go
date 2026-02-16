@@ -309,6 +309,7 @@ func (k *KubeDeployer) EnsureManagedDatabase(db *models.ManagedDatabase, passwor
 						Labels: labels,
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
+						StorageClassName: k.storageClassName(),
 						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
@@ -528,6 +529,7 @@ func (k *KubeDeployer) EnsureManagedKeyValue(kv *models.ManagedKeyValue, passwor
 						Labels: labels,
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
+						StorageClassName: k.storageClassName(),
 						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{

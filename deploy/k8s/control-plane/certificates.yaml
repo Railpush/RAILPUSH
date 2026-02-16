@@ -1,0 +1,27 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: apps-wildcard
+  namespace: railpush
+spec:
+  secretName: apps-wildcard-tls
+  issuerRef:
+    kind: ClusterIssuer
+    name: letsencrypt-prod
+  dnsNames:
+    - apps.railpush.com
+    - "*.apps.railpush.com"
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: railpush-console
+  namespace: railpush
+spec:
+  secretName: railpush-console-tls
+  issuerRef:
+    kind: ClusterIssuer
+    name: letsencrypt-prod
+  dnsNames:
+    - railpush.com
+    - www.railpush.com

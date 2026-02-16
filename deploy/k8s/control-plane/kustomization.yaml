@@ -8,5 +8,8 @@ resources:
   - postgres.yaml
   - control-plane.yaml
   - worker.yaml
+  - certificates.yaml
+  - limitrange.yaml
+  - resourcequota.yaml
   - ingress.yaml
   - ingress-console.yaml

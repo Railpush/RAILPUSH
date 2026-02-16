@@ -59,6 +59,19 @@ func (k *KubeDeployer) namespace() string {
 	return ns
 }
 
+func (k *KubeDeployer) storageClassName() *string {
+	// Default to longhorn-r2 to avoid PVs falling back to local-path if the cluster default changes.
+	if k == nil || k.Config == nil {
+		v := "longhorn-r2"
+		return &v
+	}
+	sc := strings.TrimSpace(k.Config.Kubernetes.StorageClass)
+	if sc == "" {
+		sc = "longhorn-r2"
+	}
+	return &sc
+}
+
 func kubeServiceName(serviceID string) string {
 	id := strings.ToLower(strings.TrimSpace(serviceID))
 	if id == "" {

@@ -5,8 +5,10 @@ This directory deploys the RailPush control plane (API + dashboard) to the k3s c
 ## Prereqs (Already Done)
 
 - ingress-nginx is running HA (2 replicas) on `cpu` + `xeon` and listening on `:80/:443`.
-- cert-manager issued:
-  - `Secret/railpush/apps-wildcard-tls` for `apps.railpush.com` + `*.apps.railpush.com`
+- cert-manager is installed in `cert-manager/` and has:
+  - DNS-01 ClusterIssuers (`deploy/k8s/cluster/clusterissuers-dns01-cloudflare.yaml`)
+  - wildcard + console Certificates (`deploy/k8s/control-plane/certificates.yaml`)
+  - `Secret/cert-manager/cloudflare-api-token-secret` (do not commit; see `deploy/k8s/cluster/cloudflare-api-token-secret.example.yaml`)
 
 ## 1) Build + Push the Control Plane Image (from node `cpu`)
 

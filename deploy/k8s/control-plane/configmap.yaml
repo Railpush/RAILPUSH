@@ -19,6 +19,7 @@ data:
   KUBE_NAMESPACE: "railpush"
   KUBE_INGRESS_CLASS: "nginx"
   KUBE_TLS_SECRET: "apps-wildcard-tls"
+  KUBE_STORAGE_CLASS: "longhorn-r2"
   # Custom domains need HTTP-01 (customer zones are not in our Cloudflare account).
   KUBE_CUSTOM_DOMAIN_ISSUER: "letsencrypt-http01-prod"
 

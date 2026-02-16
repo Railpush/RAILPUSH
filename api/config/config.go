@@ -97,6 +97,9 @@ type KubernetesConfig struct {
 	Namespace    string
 	IngressClass string
 	TLSSecret    string
+	// StorageClass is used for RailPush-managed PVC templates (managed Postgres / Redis).
+	// Default: longhorn-r2.
+	StorageClass string
 	// CustomDomainIssuer is the cert-manager ClusterIssuer to use for custom domains.
 	// In practice this should be an HTTP-01 issuer (customer domains are not in our Cloudflare zone).
 	CustomDomainIssuer string
@@ -224,6 +227,7 @@ func Load() *Config {
 			Namespace:    getEnv("KUBE_NAMESPACE", "railpush"),
 			IngressClass: getEnv("KUBE_INGRESS_CLASS", "nginx"),
 			TLSSecret:    getEnv("KUBE_TLS_SECRET", "apps-wildcard-tls"),
+			StorageClass: getEnv("KUBE_STORAGE_CLASS", "longhorn-r2"),
 			CustomDomainIssuer: getEnv("KUBE_CUSTOM_DOMAIN_ISSUER", "letsencrypt-http01-prod"),
 		},
 		Worker: WorkerConfig{
