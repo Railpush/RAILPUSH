@@ -141,6 +141,104 @@ const footerLinks = {
   Company: ['Privacy'],
 };
 
+// ─── Typing Terminal ───────────────────────────────────────────────
+function TypingTerminal() {
+  const [visibleLines, setVisibleLines] = useState<number>(0);
+  const [charIndex, setCharIndex] = useState<number>(0);
+  const [started, setStarted] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const typingDone = visibleLines >= terminalLines.length;
+
+  // Start when visible
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setStarted(true);
+          observer.disconnect();
+        }
+      },
+      { threshold: 0.3 }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  // Type characters one by one, then advance to next line
+  useEffect(() => {
+    if (!started || typingDone) return;
+
+    const currentLine = terminalLines[visibleLines];
+    if (!currentLine) return;
+
+    if (charIndex < currentLine.text.length) {
+      // Typing speed: faster for spaces/punctuation, slower for letters
+      const ch = currentLine.text[charIndex];
+      const delay = ch === ' ' ? 15 : ch === '.' ? 40 : 25;
+      const timer = setTimeout(() => setCharIndex((c) => c + 1), delay);
+      return () => clearTimeout(timer);
+    } else {
+      // Line done, pause then show next line
+      const pause = visibleLines === 0 ? 400 : 200;
+      const timer = setTimeout(() => {
+        setVisibleLines((l) => l + 1);
+        setCharIndex(0);
+      }, pause);
+      return () => clearTimeout(timer);
+    }
+  }, [started, visibleLines, charIndex, typingDone]);
+
+  return (
+    <div ref={ref} className="max-w-2xl mx-auto animate-slide-up-landing delay-500">
+      <div className="rounded-xl border border-border-default bg-surface-secondary/70 backdrop-blur-sm overflow-hidden shadow-2xl shadow-black/40">
+        {/* Title bar */}
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-border-subtle">
+          <div className="w-3 h-3 rounded-full bg-[#FF5F57]" />
+          <div className="w-3 h-3 rounded-full bg-[#FEBC2E]" />
+          <div className="w-3 h-3 rounded-full bg-[#28C840]" />
+          <span className="ml-2 text-xs text-content-tertiary font-mono">terminal</span>
+        </div>
+        {/* Lines */}
+        <div className="p-4 font-mono text-xs sm:text-sm leading-relaxed text-left min-h-[320px]">
+          {terminalLines.map((line, i) => {
+            if (i > visibleLines) return null;
+            const isCurrentLine = i === visibleLines && !typingDone;
+            const displayText = isCurrentLine
+              ? line.text.slice(0, charIndex)
+              : i < visibleLines
+                ? line.text
+                : '';
+
+            return (
+              <div key={i} className="flex gap-3" style={{ opacity: i <= visibleLines ? 1 : 0 }}>
+                <span className="text-content-tertiary select-none shrink-0">{line.time}</span>
+                <span className={line.color}>
+                  {displayText}
+                  {isCurrentLine && (
+                    <span className="inline-block w-2 h-4 bg-content-primary align-middle animate-blink-cursor ml-px" />
+                  )}
+                </span>
+              </div>
+            );
+          })}
+          {/* Final prompt line */}
+          {typingDone && (
+            <div className="flex gap-3 mt-1">
+              <span className="text-content-tertiary select-none shrink-0">12:00:23</span>
+              <span className="text-content-primary">
+                ${' '}
+                <span className="inline-block w-2 h-4 bg-content-primary align-middle animate-blink-cursor" />
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Component ─────────────────────────────────────────────────────
 export function Landing() {
   const navigate = useNavigate();
@@ -298,34 +396,8 @@ export function Landing() {
             Free tier &middot; No credit card &middot; Self-hosted
           </p>
 
-          {/* Terminal mockup */}
-          <div className="max-w-2xl mx-auto animate-slide-up-landing delay-500">
-            <div className="rounded-xl border border-border-default bg-surface-secondary/70 backdrop-blur-sm overflow-hidden shadow-2xl shadow-black/40">
-              {/* Title bar */}
-              <div className="flex items-center gap-2 px-4 py-3 border-b border-border-subtle">
-                <div className="w-3 h-3 rounded-full bg-[#FF5F57]" />
-                <div className="w-3 h-3 rounded-full bg-[#FEBC2E]" />
-                <div className="w-3 h-3 rounded-full bg-[#28C840]" />
-                <span className="ml-2 text-xs text-content-tertiary font-mono">terminal</span>
-              </div>
-              {/* Lines */}
-              <div className="p-4 font-mono text-xs sm:text-sm leading-relaxed text-left">
-                {terminalLines.map((line, i) => (
-                  <div key={i} className="flex gap-3">
-                    <span className="text-content-tertiary select-none shrink-0">{line.time}</span>
-                    <span className={line.color}>{line.text}</span>
-                  </div>
-                ))}
-                <div className="flex gap-3 mt-1">
-                  <span className="text-content-tertiary select-none shrink-0">12:00:23</span>
-                  <span className="text-content-primary">
-                    ${' '}
-                    <span className="inline-block w-2 h-4 bg-content-primary align-middle animate-blink-cursor" />
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
+          {/* Terminal mockup — typing animation */}
+          <TypingTerminal />
         </div>
       </section>
 
