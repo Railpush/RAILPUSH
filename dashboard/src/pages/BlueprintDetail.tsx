@@ -186,7 +186,18 @@ export function BlueprintDetail() {
               syncError.toLowerCase().includes('billing error') ||
               syncError.toLowerCase().includes('stripe price') ||
               syncError.toLowerCase().includes('free tier limit')) && (
-              <Button size="sm" onClick={() => navigate('/billing/plans')}>
+              <Button
+                size="sm"
+                onClick={() => {
+                  const returnTo = `/blueprints/${encodeURIComponent(bp.id)}`;
+                  const qs = new URLSearchParams({
+                    source: 'blueprint',
+                    blueprint_id: bp.id,
+                    return_to: returnTo,
+                  });
+                  navigate(`/billing/plans?${qs.toString()}`);
+                }}
+              >
                 Upgrade
               </Button>
             )}

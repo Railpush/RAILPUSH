@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, type ComponentType } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Globe, FileText, Lock, Cog, Clock, Database, Key, ArrowLeft, Search, GitBranch, Link, ChevronRight, Terminal } from 'lucide-react';
+import { Globe, FileText, Lock, Cog, Clock, Database, Key, ArrowLeft, Search, GitBranch, Link, ChevronRight, Terminal, Code, Box, Layers } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
@@ -26,15 +26,17 @@ const dbTypes = [
   { type: 'keyvalue', icon: Key, label: 'Key Value', desc: 'Managed Redis-compatible store', color: '#DC382D' },
 ];
 
+type RuntimeIcon = ComponentType<{ className?: string }>;
+
 const runtimes = [
-  { value: 'node', label: 'Node.js', icon: '🟢' },
-  { value: 'python', label: 'Python', icon: '🐍' },
-  { value: 'go', label: 'Go', icon: '🐹' },
-  { value: 'ruby', label: 'Ruby', icon: '💎' },
-  { value: 'rust', label: 'Rust', icon: '🦀' },
-  { value: 'elixir', label: 'Elixir', icon: '💧' },
-  { value: 'docker', label: 'Docker', icon: '🐳' },
-  { value: 'image', label: 'Pre-built Image', icon: '📦' },
+  { value: 'node', label: 'Node.js', icon: Terminal as RuntimeIcon },
+  { value: 'python', label: 'Python', icon: Code as RuntimeIcon },
+  { value: 'go', label: 'Go', icon: Code as RuntimeIcon },
+  { value: 'ruby', label: 'Ruby', icon: Code as RuntimeIcon },
+  { value: 'rust', label: 'Rust', icon: Code as RuntimeIcon },
+  { value: 'elixir', label: 'Elixir', icon: Code as RuntimeIcon },
+  { value: 'docker', label: 'Docker', icon: Box as RuntimeIcon },
+  { value: 'image', label: 'Pre-built Image', icon: Layers as RuntimeIcon },
 ];
 
 export function CreateService() {
@@ -285,21 +287,24 @@ export function CreateService() {
                   <h3 className="text-lg font-medium text-white mb-4">Environment</h3>
 
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-                    {runtimes.map(rt => (
-                      <button
-                        key={rt.value}
-                        onClick={() => handleSelectRuntime(rt.value)}
-                        className={cn(
-                          "flex flex-col items-center justify-center p-3 rounded-lg border transition-all",
-                          form.runtime === rt.value
-                            ? "bg-brand/10 border-brand text-white"
-                            : "bg-surface-tertiary/30 border-border-default text-content-secondary hover:border-border-hover"
-                        )}
-                      >
-                        <span className="text-2xl mb-2 grayscale">{rt.icon}</span>
-                        <span className="text-xs font-medium">{rt.label}</span>
-                      </button>
-                    ))}
+                    {runtimes.map((rt) => {
+                      const Icon = rt.icon;
+                      return (
+                        <button
+                          key={rt.value}
+                          onClick={() => handleSelectRuntime(rt.value)}
+                          className={cn(
+                            "flex flex-col items-center justify-center p-3 rounded-lg border transition-all",
+                            form.runtime === rt.value
+                              ? "bg-brand/10 border-brand text-white"
+                              : "bg-surface-tertiary/30 border-border-default text-content-secondary hover:border-border-hover"
+                          )}
+                        >
+                          <Icon className="w-6 h-6 mb-2" />
+                          <span className="text-xs font-medium">{rt.label}</span>
+                        </button>
+                      );
+                    })}
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">

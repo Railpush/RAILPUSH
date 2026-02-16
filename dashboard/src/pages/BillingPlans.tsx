@@ -4,7 +4,7 @@ import { ArrowLeft, CreditCard } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Modal } from '../components/ui/Modal';
-import { ApiError, billing, databases, keyvalue, services as servicesApi } from '../lib/api';
+import { ApiError, billing, blueprints, databases, keyvalue, services as servicesApi } from '../lib/api';
 import { PLAN_SPECS, type PlanID } from '../lib/plans';
 import { cn } from '../lib/utils';
 import { toast } from 'sonner';
@@ -30,6 +30,15 @@ function rowKey(row: Pick<ResourceRow, 'kind' | 'id'>) {
   return `${row.kind}:${row.id}`;
 }
 
+function safeReturnTo(value: string): string | null {
+  const v = (value || '').trim();
+  if (!v) return null;
+  if (!v.startsWith('/')) return null;
+  if (v.startsWith('//')) return null;
+  if (v.toLowerCase().startsWith('/\\')) return null;
+  return v;
+}
+
 export function BillingPlans() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -46,6 +55,11 @@ export function BillingPlans() {
 
   const focus = (searchParams.get('focus') || '').trim().toLowerCase();
   const focusID = (searchParams.get('resource_id') || '').trim();
+  const source = (searchParams.get('source') || '').trim().toLowerCase();
+  const blueprintId = (searchParams.get('blueprint_id') || '').trim();
+  const returnTo = safeReturnTo(searchParams.get('return_to') || '');
+  const backHref = returnTo || '/billing';
+  const backLabel = returnTo?.startsWith('/blueprints/') ? 'Back to Blueprint' : 'Back';
 
   useEffect(() => {
     let alive = true;
@@ -128,6 +142,20 @@ export function BillingPlans() {
       keyvalue: rows.filter((r) => r.kind === 'keyvalue'),
     };
   }, [rows]);
+
+  const handleRetryBlueprintSync = async () => {
+    if (!blueprintId) return;
+    setBusyKey(`retry-blueprint:${blueprintId}`);
+    try {
+      await blueprints.sync(blueprintId);
+      toast.success('Sync started');
+      if (returnTo) navigate(returnTo);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Failed to start sync');
+    } finally {
+      setBusyKey(null);
+    }
+  };
 
   const handleAddPaymentMethod = async () => {
     try {
@@ -278,11 +306,11 @@ export function BillingPlans() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <button
-            onClick={() => navigate('/billing')}
+            onClick={() => navigate(backHref)}
             className="inline-flex items-center gap-1.5 text-sm text-content-secondary hover:text-content-primary transition-colors mb-3"
           >
             <ArrowLeft className="w-4 h-4" />
-            Back to Billing
+            {backLabel}
           </button>
           <h1 className="text-3xl font-semibold text-content-primary">Plans & Upgrades</h1>
           <p className="text-sm text-content-secondary mt-1">
@@ -299,6 +327,41 @@ export function BillingPlans() {
           )}
         </div>
       </div>
+
+      {source === 'blueprint' && (
+        <Card className="border border-brand/20 bg-brand/5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-content-primary">Blueprint sync needs an upgrade</div>
+              <div className="text-xs text-content-secondary mt-1">
+                Plans apply per resource. If your blueprint failed before resources were created, add/update your payment method and then retry sync.
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {blueprintId && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={busyKey === `retry-blueprint:${blueprintId}`}
+                  loading={busyKey === `retry-blueprint:${blueprintId}`}
+                  onClick={handleRetryBlueprintSync}
+                >
+                  Retry Sync
+                </Button>
+              )}
+              {returnTo && (
+                <Button size="sm" variant="secondary" onClick={() => navigate(returnTo)}>
+                  Back
+                </Button>
+              )}
+              <Button size="sm" onClick={handleAddPaymentMethod}>
+                <CreditCard className="w-4 h-4 mr-2" />
+                {overview?.has_payment_method ? 'Update Card' : 'Add Card'}
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <Card>
         <div className="flex items-center justify-between gap-4">
@@ -336,20 +399,44 @@ export function BillingPlans() {
         ))}
       </div>
 
-      <div className="space-y-4">
-        {sectionHeader('Services', grouped.services.length)}
-        <ResourceTable items={grouped.services} />
-      </div>
+      {rows.length === 0 ? (
+        <Card>
+          <div className="py-10 text-center space-y-4">
+            <div className="text-sm font-semibold text-content-primary">No resources found</div>
+            <div className="text-sm text-content-secondary max-w-[60ch] mx-auto">
+              Plans are applied per resource. Create a service, database, or key value store, then come back here to upgrade it.
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button onClick={() => navigate('/new')}>Create Service</Button>
+              <Button variant="secondary" onClick={() => navigate('/new/postgres')}>Create Database</Button>
+              <Button variant="secondary" onClick={() => navigate('/new/keyvalue')}>Create Key Value</Button>
+              <Button variant="secondary" onClick={() => navigate('/new/blueprint')}>Create Blueprint</Button>
+              {returnTo && (
+                <Button variant="secondary" onClick={() => navigate(returnTo)}>
+                  Back
+                </Button>
+              )}
+            </div>
+          </div>
+        </Card>
+      ) : (
+        <>
+          <div className="space-y-4">
+            {sectionHeader('Services', grouped.services.length)}
+            <ResourceTable items={grouped.services} />
+          </div>
 
-      <div className="space-y-4">
-        {sectionHeader('Databases', grouped.databases.length)}
-        <ResourceTable items={grouped.databases} />
-      </div>
+          <div className="space-y-4">
+            {sectionHeader('Databases', grouped.databases.length)}
+            <ResourceTable items={grouped.databases} />
+          </div>
 
-      <div className="space-y-4">
-        {sectionHeader('Key Value', grouped.keyvalue.length)}
-        <ResourceTable items={grouped.keyvalue} />
-      </div>
+          <div className="space-y-4">
+            {sectionHeader('Key Value', grouped.keyvalue.length)}
+            <ResourceTable items={grouped.keyvalue} />
+          </div>
+        </>
+      )}
 
       <Modal
         open={upgradeModal.open}
@@ -376,4 +463,3 @@ export function BillingPlans() {
     </div>
   );
 }
-
