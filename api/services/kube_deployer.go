@@ -667,6 +667,10 @@ func (k *KubeDeployer) WaitForServiceReady(deploymentName string, svc *models.Se
 		replicas = 0
 	}
 
+	// If the Pod is failing (CrashLoopBackOff, ImagePullBackOff, etc), surface that quickly.
+	// Otherwise workers tend to time out after minutes with an unhelpful "ready=0" message.
+	missingEnvVarRe := regexp.MustCompile(`Missing required environment variable:\s*([A-Za-z_][A-Za-z0-9_]*)`)
+
 	deadline := time.Now().Add(5 * time.Minute)
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -678,6 +682,76 @@ func (k *KubeDeployer) WaitForServiceReady(deploymentName string, svc *models.Se
 
 		if dep.Status.ObservedGeneration >= dep.Generation && dep.Status.ReadyReplicas >= replicas {
 			return nil
+		}
+
+		// Best-effort diagnostics: detect crashloops / image pull failures and return a clearer error.
+		if svc != nil && strings.TrimSpace(svc.ID) != "" && replicas > 0 {
+			dctx, dcancel := context.WithTimeout(context.Background(), 10*time.Second)
+			pods, perr := k.Client.CoreV1().Pods(ns).List(dctx, metav1.ListOptions{
+				LabelSelector: "railpush.com/service-id=" + strings.TrimSpace(svc.ID),
+			})
+			dcancel()
+			if perr == nil {
+				for _, pod := range pods.Items {
+					for _, st := range pod.Status.ContainerStatuses {
+						// Only inspect the primary service container.
+						if st.Name != "service" {
+							continue
+						}
+						if st.State.Waiting == nil {
+							continue
+						}
+						reason := strings.TrimSpace(st.State.Waiting.Reason)
+						msg := strings.TrimSpace(st.State.Waiting.Message)
+
+						isFatal := reason == "CrashLoopBackOff" || reason == "ImagePullBackOff" || reason == "ErrImagePull" || reason == "CreateContainerConfigError" || reason == "InvalidImageName"
+						if !isFatal {
+							continue
+						}
+
+						// Try to include a helpful snippet of logs (especially for crashloops).
+						var detail string
+						if reason == "CrashLoopBackOff" {
+							tail := int64(120)
+							limit := int64(64 * 1024)
+							lctx, lcancel := context.WithTimeout(context.Background(), 5*time.Second)
+							raw, lerr := k.Client.CoreV1().Pods(ns).GetLogs(pod.Name, &corev1.PodLogOptions{
+								Container:  "service",
+								TailLines:  &tail,
+								LimitBytes: &limit,
+							}).DoRaw(lctx)
+							lcancel()
+							if lerr == nil && len(raw) > 0 {
+								lines := strings.Split(string(raw), "\n")
+								// Extract a common "missing env var" pattern if present.
+								for _, ln := range lines {
+									m := missingEnvVarRe.FindStringSubmatch(ln)
+									if len(m) == 2 && strings.TrimSpace(m[1]) != "" {
+										return fmt.Errorf("service pod is crashing: missing required environment variable %s (set it in Environment Variables and redeploy)", strings.TrimSpace(m[1]))
+									}
+								}
+								// Otherwise, keep the last non-empty line as a hint.
+								for i := len(lines) - 1; i >= 0; i-- {
+									ln := strings.TrimSpace(lines[i])
+									if ln == "" {
+										continue
+									}
+									detail = ln
+									break
+								}
+							}
+						}
+
+						if detail != "" {
+							return fmt.Errorf("service pod is failing (%s): %s", reason, detail)
+						}
+						if msg != "" {
+							return fmt.Errorf("service pod is failing (%s): %s", reason, msg)
+						}
+						return fmt.Errorf("service pod is failing (%s)", reason)
+					}
+				}
+			}
 		}
 
 		if time.Now().After(deadline) {
