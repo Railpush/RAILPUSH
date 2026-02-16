@@ -389,7 +389,9 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 	}
 	if !needsService {
 		// Ensure we don't leave behind stale Services when switching types (or upgrading from older versions).
-		_ = k.Client.CoreV1().Services(ns).Delete(ctx, name, metav1.DeleteOptions{})
+		if err := k.Client.CoreV1().Services(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			log.Printf("WARNING: delete stale Service service_id=%s name=%s: %v", svc.ID, name, err)
+		}
 	}
 
 	// 4) Ingress (public service types only)
@@ -455,7 +457,9 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 	}
 	if !wantIngress {
 		// Ensure we don't leave behind stale Ingresses when switching types (or upgrading from older versions).
-		_ = k.Client.NetworkingV1().Ingresses(ns).Delete(ctx, name, metav1.DeleteOptions{})
+		if err := k.Client.NetworkingV1().Ingresses(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			log.Printf("WARNING: delete stale Ingress service_id=%s name=%s: %v", svc.ID, name, err)
+		}
 	}
 
 	// Best-effort: keep any custom-domain ingresses in sync with the Service port.
