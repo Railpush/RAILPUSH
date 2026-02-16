@@ -29,3 +29,29 @@ spec:
   storage:
     size: 30Gi
     storageClass: longhorn-r2
+
+  # Off-cluster backups + PITR (WAL archiving) via S3-compatible object storage (Cloudflare R2).
+  # Create the Secret `railpush/railpush-r2-backup` (do not commit) with keys:
+  # - accessKeyId
+  # - secretAccessKey
+  # - region (for R2 use: auto)
+  backup:
+    barmanObjectStore:
+      destinationPath: s3://rail-push/cnpg/railpush-postgres-cnpg
+      endpointURL: https://106f5e5b2d14aa8a39b4625ff50bffb8.r2.cloudflarestorage.com
+      s3Credentials:
+        accessKeyId:
+          name: railpush-r2-backup
+          key: accessKeyId
+        secretAccessKey:
+          name: railpush-r2-backup
+          key: secretAccessKey
+        region:
+          name: railpush-r2-backup
+          key: region
+      wal:
+        compression: zstd
+        maxParallel: 4
+      data:
+        compression: gzip
+        jobs: 2

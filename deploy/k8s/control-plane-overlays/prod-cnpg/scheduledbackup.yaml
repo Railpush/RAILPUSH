@@ -1,0 +1,14 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: railpush-postgres-cnpg-daily
+  namespace: railpush
+spec:
+  # NOTE: CNPG uses robfig/cron format (includes seconds).
+  schedule: "0 20 3 * * *"
+  immediate: true
+  backupOwnerReference: cluster
+  method: barmanObjectStore
+  target: prefer-standby
+  cluster:
+    name: railpush-postgres-cnpg
