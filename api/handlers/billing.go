@@ -62,6 +62,7 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 		CurrentPlan        string            `json:"current_plan"`
 		Items              []BillingLineItem `json:"items"`
 		MonthlyTotal       int               `json:"monthly_total"`
+		CreditBalanceCents int64             `json:"credit_balance_cents"`
 	}
 
 	overview := BillingOverview{
@@ -69,6 +70,14 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 	}
 
 	var stripeSub *stripe.Subscription
+
+	if ws, _ := models.GetWorkspaceByOwner(userID); ws != nil && strings.TrimSpace(ws.ID) != "" {
+		if bal, err := models.GetWorkspaceCreditBalanceCents(ws.ID); err != nil {
+			log.Printf("Warning: failed to load workspace credit balance: ws=%s err=%v", ws.ID, err)
+		} else {
+			overview.CreditBalanceCents = bal
+		}
+	}
 
 	if bc != nil {
 		if h.Stripe != nil && h.Stripe.Enabled() {

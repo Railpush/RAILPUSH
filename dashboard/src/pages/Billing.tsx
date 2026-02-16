@@ -628,7 +628,7 @@ export function Billing() {
               <div className="space-y-2">
                 <p className="text-xs uppercase tracking-wider text-content-tertiary">Credit Balance</p>
                 <div className="flex items-center justify-between p-3 rounded bg-surface-tertiary/20 border border-border-default/50">
-                  <span className="text-lg font-bold text-white">$0.00</span>
+                  <span className="text-lg font-bold text-white">{formatCurrency(overview?.credit_balance_cents ?? 0)}</span>
                 </div>
               </div>
             </div>

@@ -1,6 +1,7 @@
 package models
 
 import (
+	"strings"
 	"time"
 
 	"github.com/railpush/api/database"
@@ -49,4 +50,19 @@ func ListWorkspaceCreditLedger(workspaceID string, limit int) ([]WorkspaceCredit
 		out = []WorkspaceCreditLedgerEntry{}
 	}
 	return out, nil
+}
+
+func GetWorkspaceCreditBalanceCents(workspaceID string) (int64, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return 0, nil
+	}
+	var balance int64
+	if err := database.DB.QueryRow(
+		"SELECT COALESCE(SUM(amount_cents),0) FROM workspace_credit_ledger WHERE workspace_id=$1",
+		workspaceID,
+	).Scan(&balance); err != nil {
+		return 0, err
+	}
+	return balance, nil
 }

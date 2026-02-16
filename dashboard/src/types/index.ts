@@ -248,6 +248,7 @@ export interface BillingOverview {
   current_plan?: string;
   items: BillingLineItem[];
   monthly_total: number;
+  credit_balance_cents?: number;
 }
 
 export interface GitHubRepo {
