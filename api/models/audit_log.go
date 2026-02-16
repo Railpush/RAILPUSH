@@ -22,7 +22,7 @@ func CreateAuditLog(workspaceID, userID, action, resourceType, resourceID string
 	payload, _ := json.Marshal(details)
 	_, err := database.DB.Exec(
 		`INSERT INTO audit_log (workspace_id, user_id, action, resource_type, resource_id, details_json, created_at)
-		 VALUES ($1, $2, $3, $4, NULLIF($5, '')::uuid, $6::jsonb, NOW())`,
+		 VALUES (NULLIF($1, '')::uuid, NULLIF($2, '')::uuid, $3, $4, NULLIF($5, '')::uuid, $6::jsonb, NOW())`,
 		workspaceID, userID, action, resourceType, resourceID, string(payload),
 	)
 	return err

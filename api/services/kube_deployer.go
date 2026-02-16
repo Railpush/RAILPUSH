@@ -779,6 +779,23 @@ func (k *KubeDeployer) ScaleService(svc *models.Service, replicas int32) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	switch strings.ToLower(strings.TrimSpace(svc.Type)) {
+	case "cron", "cron_job":
+		suspend := replicas <= 0
+		cj, err := k.Client.BatchV1().CronJobs(ns).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("get cronjob: %w", err)
+		}
+		cj.Spec.Suspend = &suspend
+		if _, err := k.Client.BatchV1().CronJobs(ns).Update(ctx, cj, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update cronjob: %w", err)
+		}
+		return nil
+	}
 	dep, err := k.Client.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("get deployment: %w", err)

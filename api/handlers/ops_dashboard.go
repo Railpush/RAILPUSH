@@ -166,7 +166,7 @@ func (h *OpsDashboardHandler) ListUsers(w http.ResponseWriter, r *http.Request) 
 	like := "%" + q + "%"
 
 	rows, err := database.DB.Query(
-		`SELECT id::text, COALESCE(username,''), COALESCE(email,''), COALESCE(role,'member'), created_at
+		`SELECT id::text, COALESCE(username,''), COALESCE(email,''), COALESCE(role,'member'), COALESCE(is_suspended,false), created_at
 		   FROM users
 		  WHERE ($1 = '' OR username ILIKE $2 OR email ILIKE $2)
 		  ORDER BY created_at DESC
@@ -184,12 +184,13 @@ func (h *OpsDashboardHandler) ListUsers(w http.ResponseWriter, r *http.Request) 
 		Username  string    `json:"username"`
 		Email     string    `json:"email"`
 		Role      string    `json:"role"`
+		IsSuspended bool    `json:"is_suspended"`
 		CreatedAt time.Time `json:"created_at"`
 	}
 	var out []item
 	for rows.Next() {
 		var it item
-		if err := rows.Scan(&it.ID, &it.Username, &it.Email, &it.Role, &it.CreatedAt); err != nil {
+		if err := rows.Scan(&it.ID, &it.Username, &it.Email, &it.Role, &it.IsSuspended, &it.CreatedAt); err != nil {
 			continue
 		}
 		out = append(out, it)
@@ -209,7 +210,7 @@ func (h *OpsDashboardHandler) ListWorkspaces(w http.ResponseWriter, r *http.Requ
 	like := "%" + q + "%"
 
 	rows, err := database.DB.Query(
-		`SELECT w.id::text, COALESCE(w.name,''), COALESCE(w.owner_id::text,''), COALESCE(u.email,''), w.created_at
+		`SELECT w.id::text, COALESCE(w.name,''), COALESCE(w.owner_id::text,''), COALESCE(u.email,''), COALESCE(w.is_suspended,false), w.created_at
 		   FROM workspaces w
 		   LEFT JOIN users u ON u.id = w.owner_id
 		  WHERE ($1 = '' OR w.name ILIKE $2 OR COALESCE(u.email,'') ILIKE $2)
@@ -228,12 +229,13 @@ func (h *OpsDashboardHandler) ListWorkspaces(w http.ResponseWriter, r *http.Requ
 		Name       string    `json:"name"`
 		OwnerID    string    `json:"owner_id"`
 		OwnerEmail string    `json:"owner_email"`
+		IsSuspended bool     `json:"is_suspended"`
 		CreatedAt  time.Time `json:"created_at"`
 	}
 	var out []item
 	for rows.Next() {
 		var it item
-		if err := rows.Scan(&it.ID, &it.Name, &it.OwnerID, &it.OwnerEmail, &it.CreatedAt); err != nil {
+		if err := rows.Scan(&it.ID, &it.Name, &it.OwnerID, &it.OwnerEmail, &it.IsSuspended, &it.CreatedAt); err != nil {
 			continue
 		}
 		out = append(out, it)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from './components/layout/Layout';
@@ -24,6 +24,7 @@ import { Landing } from './pages/Landing';
 import { Docs } from './pages/Docs';
 import { Privacy } from './pages/Privacy';
 import { Billing } from './pages/Billing';
+import { BillingPlans } from './pages/BillingPlans';
 import { Domains } from './pages/Domains';
 import { DomainSearch } from './pages/DomainSearch';
 import { DomainDetail } from './pages/DomainDetail';
@@ -34,21 +35,6 @@ import { Settings } from './pages/Settings';
 import { Community } from './pages/Community';
 import { Incidents } from './pages/Incidents';
 import { IncidentDetailPage } from './pages/IncidentDetail';
-import { OpsOverviewPage } from './pages/OpsOverview';
-import { OpsCustomersPage } from './pages/OpsCustomers';
-import { OpsServicesPage } from './pages/OpsServices';
-import { OpsDeploymentsPage } from './pages/OpsDeployments';
-import { OpsEmailOutboxPage } from './pages/OpsEmailOutbox';
-import { OpsSettingsPage } from './pages/OpsSettings';
-import { OpsServiceLogsPage } from './pages/OpsServiceLogs';
-import { OpsBillingPage } from './pages/OpsBilling';
-import { OpsBillingCustomerPage } from './pages/OpsBillingCustomer';
-import { OpsTicketsPage } from './pages/OpsTickets';
-import { OpsTicketDetailPage } from './pages/OpsTicketDetail';
-import { OpsCreditsPage } from './pages/OpsCredits';
-import { OpsCreditsWorkspacePage } from './pages/OpsCreditsWorkspace';
-import { OpsTechnicalPage } from './pages/OpsTechnical';
-import { OpsPerformancePage } from './pages/OpsPerformance';
 import { auth } from './lib/api';
 import { ThemeProvider } from './lib/theme';
 import { SessionProvider } from './lib/session';
@@ -56,6 +42,8 @@ import type { User } from './types';
 import { SupportPage } from './pages/Support';
 import { SupportTicketDetailPage } from './pages/SupportTicketDetail';
 import { VerifyEmail } from './pages/VerifyEmail';
+
+const OpsRoutes = lazy(() => import('./ops/OpsRoutes'));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -186,6 +174,7 @@ function App() {
 
                 {/* Billing */}
                 <Route path="/billing" element={<Billing />} />
+                <Route path="/billing/plans" element={<BillingPlans />} />
 
                 {/* Blueprints */}
                 <Route path="/blueprints" element={<Blueprints />} />
@@ -201,22 +190,21 @@ function App() {
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/community" element={<Community />} />
 
-                {/* Ops */}
-                <Route path="/ops" element={requireOps(<OpsOverviewPage />)} />
-                <Route path="/ops/customers" element={requireOps(<OpsCustomersPage />)} />
-                <Route path="/ops/services" element={requireOps(<OpsServicesPage />)} />
-                <Route path="/ops/services/:serviceId/logs" element={requireOps(<OpsServiceLogsPage />)} />
-                <Route path="/ops/deployments" element={requireOps(<OpsDeploymentsPage />)} />
-                <Route path="/ops/email" element={requireOps(<OpsEmailOutboxPage />)} />
-                <Route path="/ops/billing" element={requireOps(<OpsBillingPage />)} />
-                <Route path="/ops/billing/:customerId" element={requireOps(<OpsBillingCustomerPage />)} />
-                <Route path="/ops/tickets" element={requireOps(<OpsTicketsPage />)} />
-                <Route path="/ops/tickets/:ticketId" element={requireOps(<OpsTicketDetailPage />)} />
-                <Route path="/ops/credits" element={requireOps(<OpsCreditsPage />)} />
-                <Route path="/ops/credits/:workspaceId" element={requireOps(<OpsCreditsWorkspacePage />)} />
-                <Route path="/ops/technical" element={requireOps(<OpsTechnicalPage />)} />
-                <Route path="/ops/performance" element={requireOps(<OpsPerformancePage />)} />
-                <Route path="/ops/settings" element={requireOps(<OpsSettingsPage />)} />
+                {/* Ops (lazy-loaded route tree) */}
+                <Route
+                  path="/ops/*"
+                  element={requireOps(
+                    <Suspense
+                      fallback={
+                        <div className="min-h-[40vh] flex items-center justify-center text-sm text-content-tertiary">
+                          Loading ops...
+                        </div>
+                      }
+                    >
+                      <OpsRoutes />
+                    </Suspense>
+                  )}
+                />
                 <Route path="/incidents" element={requireOps(<Incidents />)} />
                 <Route path="/incidents/:incidentId" element={requireOps(<IncidentDetailPage />)} />
 

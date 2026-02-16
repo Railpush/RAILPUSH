@@ -156,9 +156,19 @@ export function BlueprintDetail() {
       {/* Error banner */}
       {syncError && (
         <Card padding="md" className="mb-4 border-status-error/30 bg-status-error/5">
-          <div className="flex items-start gap-2">
-            <span className="text-status-error text-sm font-medium shrink-0">Sync failed:</span>
-            <span className="text-sm text-content-secondary">{syncError}</span>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-start gap-2 min-w-0">
+              <span className="text-status-error text-sm font-medium shrink-0">Sync failed:</span>
+              <span className="text-sm text-content-secondary break-words">{syncError}</span>
+            </div>
+            {(syncError.toLowerCase().includes('payment method') ||
+              syncError.toLowerCase().includes('billing error') ||
+              syncError.toLowerCase().includes('stripe price') ||
+              syncError.toLowerCase().includes('free tier limit')) && (
+              <Button size="sm" onClick={() => navigate('/billing/plans')}>
+                Upgrade
+              </Button>
+            )}
           </div>
         </Card>
       )}

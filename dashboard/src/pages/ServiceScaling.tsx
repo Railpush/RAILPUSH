@@ -7,12 +7,14 @@ import { PLAN_SPECS } from '../lib/plans';
 import { toast } from 'sonner';
 import type { PlanID } from '../lib/plans';
 import type { Service } from '../types';
+import { UpgradePromptModal } from '../components/billing/UpgradePromptModal';
 
 export function ServiceScaling() {
   const { serviceId } = useParams<{ serviceId: string }>();
   const [service, setService] = useState<Service | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [upgradePrompt, setUpgradePrompt] = useState<{ open: boolean; message: string }>({ open: false, message: '' });
   const [selectedPlan, setSelectedPlan] = useState<PlanID>('starter');
   const [instances, setInstances] = useState(1);
 
@@ -45,12 +47,18 @@ export function ServiceScaling() {
       setService(updated);
       toast.success('Scaling updated');
     } catch (err) {
-      if (err instanceof ApiError && err.status === 402) {
-        toast.error('Payment method required. Redirecting to billing...');
-        window.location.href = '/billing';
-        return;
+      const msg = err instanceof Error ? err.message : 'Failed to update scaling';
+      if (err instanceof ApiError) {
+        if (err.status === 402) {
+          setUpgradePrompt({ open: true, message: msg || 'Payment method required.' });
+          return;
+        }
+        if (msg.toLowerCase().includes('billing error') || msg.toLowerCase().includes('stripe price')) {
+          setUpgradePrompt({ open: true, message: msg });
+          return;
+        }
       }
-      toast.error(err instanceof Error ? err.message : 'Failed to update scaling');
+      toast.error(msg);
     } finally {
       setSaving(false);
     }
@@ -152,6 +160,12 @@ export function ServiceScaling() {
           </div>
         </Card>
       </div>
+
+      <UpgradePromptModal
+        open={upgradePrompt.open}
+        message={upgradePrompt.message}
+        onClose={() => setUpgradePrompt({ open: false, message: '' })}
+      />
     </div>
   );
 }

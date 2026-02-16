@@ -465,6 +465,7 @@ export interface OpsUserItem {
   username: string;
   email: string;
   role: string;
+  is_suspended?: boolean;
   created_at: string;
 }
 
@@ -473,6 +474,7 @@ export interface OpsWorkspaceItem {
   name: string;
   owner_id: string;
   owner_email: string;
+  is_suspended?: boolean;
   created_at: string;
 }
 
@@ -662,4 +664,30 @@ export interface OpsPerformanceSummary {
     p95?: number;
   };
   top_failures: Array<{ service_id: string; service_name: string; failures: number }>;
+}
+
+// Ops: Datastores
+export interface OpsDatastoreItem {
+  id: string;
+  kind: 'postgres' | 'keyvalue';
+  workspace_id: string;
+  workspace_name: string;
+  owner_email: string;
+  name: string;
+  plan: string;
+  status: string;
+  created_at: string;
+}
+
+// Ops: Audit log (global)
+export interface OpsAuditLogEntry {
+  id: string;
+  workspace_id: string;
+  workspace_name: string;
+  user_id: string;
+  actor_email: string;
+  action: string;
+  resource_type: string;
+  resource_id: string;
+  created_at: string;
 }

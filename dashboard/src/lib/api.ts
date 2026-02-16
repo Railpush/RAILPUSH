@@ -3,7 +3,7 @@ import type {
   GitHubRepo, GitHubBranch, RegisteredDomain, DnsRecord, DomainSearchResult, Project, ProjectFolder, Environment, PreviewEnvironment, OneOffJob, AutoscalingPolicy,
   DatabaseReplica, WorkspaceMember, AuditLogEntry, SamlSSOConfig, Incident, IncidentDetail, OpsOverview, OpsUserItem, OpsWorkspaceItem, OpsServiceItem, OpsDeployItem,
   OpsEmailOutboxItem, OpsBillingCustomerItem, OpsBillingCustomerDetail, OpsTicketItem, OpsTicketDetail, OpsWorkspaceCreditItem, OpsWorkspaceCreditDetail,
-  OpsKubeSummary, OpsPerformanceSummary, SupportTicket, SupportTicketMessage, BlueprintAISettings,
+  OpsKubeSummary, OpsPerformanceSummary, OpsDatastoreItem, OpsAuditLogEntry, SupportTicket, SupportTicketMessage, BlueprintAISettings,
 } from '../types';
 
 const BASE = '/api/v1';
@@ -127,6 +127,7 @@ export const databases = {
   list: () => request<ManagedDatabase[]>('/databases'),
   get: (id: string) => request<ManagedDatabase>(`/databases/${id}`),
   create: (data: Partial<ManagedDatabase>) => request<ManagedDatabase>('/databases', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: string, data: Partial<ManagedDatabase>) => request<ManagedDatabase>(`/databases/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (id: string) => request<void>(`/databases/${id}`, { method: 'DELETE' }),
   listBackups: (id: string) => request<Backup[]>(`/databases/${id}/backups`),
   triggerBackup: (id: string) => request<Backup>(`/databases/${id}/backups`, { method: 'POST' }),
@@ -147,6 +148,7 @@ export const keyvalue = {
   list: () => request<ManagedKeyValue[]>('/keyvalue'),
   get: (id: string) => request<ManagedKeyValue>(`/keyvalue/${id}`),
   create: (data: Partial<ManagedKeyValue>) => request<ManagedKeyValue>('/keyvalue', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: string, data: Partial<ManagedKeyValue>) => request<ManagedKeyValue>(`/keyvalue/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (id: string) => request<void>(`/keyvalue/${id}`, { method: 'DELETE' }),
 };
 
@@ -378,6 +380,47 @@ export const ops = {
     request<{ status: string; ack?: unknown }>(`/ops/incidents/${encodeURIComponent(id)}/ack`, { method: 'POST', body: JSON.stringify(data || {}) }),
   silenceIncident: (id: string, data?: { scope?: 'group' | 'alertname'; duration_minutes?: number; comment?: string }) =>
     request<{ status: string; silence?: unknown }>(`/ops/incidents/${encodeURIComponent(id)}/silence`, { method: 'POST', body: JSON.stringify(data || {}) }),
+
+  // Ops: Admin actions (must-have)
+  setUserRole: (userId: string, role: string) =>
+    request<{ status: string }>(`/ops/users/${encodeURIComponent(userId)}`, { method: 'PATCH', body: JSON.stringify({ role }) }),
+  suspendUser: (userId: string) =>
+    request<{ status: string }>(`/ops/users/${encodeURIComponent(userId)}/suspend`, { method: 'POST' }),
+  resumeUser: (userId: string) =>
+    request<{ status: string }>(`/ops/users/${encodeURIComponent(userId)}/resume`, { method: 'POST' }),
+
+  suspendWorkspace: (workspaceId: string) =>
+    request<{ status: string }>(`/ops/workspaces/${encodeURIComponent(workspaceId)}/suspend`, { method: 'POST' }),
+  resumeWorkspace: (workspaceId: string) =>
+    request<{ status: string }>(`/ops/workspaces/${encodeURIComponent(workspaceId)}/resume`, { method: 'POST' }),
+
+  restartService: (serviceId: string) =>
+    request<{ status: string }>(`/ops/services/${encodeURIComponent(serviceId)}/restart`, { method: 'POST' }),
+  suspendService: (serviceId: string) =>
+    request<{ status: string }>(`/ops/services/${encodeURIComponent(serviceId)}/suspend`, { method: 'POST' }),
+  resumeService: (serviceId: string) =>
+    request<{ status: string }>(`/ops/services/${encodeURIComponent(serviceId)}/resume`, { method: 'POST' }),
+
+  // Ops: Datastores
+  listDatastores: (params?: { query?: string; kind?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.query) qs.set('query', params.query);
+    if (params?.kind) qs.set('kind', params.kind);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<OpsDatastoreItem[]>(`/ops/datastores${suffix}`);
+  },
+
+  // Ops: Audit log (global)
+  listAuditLogs: (params?: { query?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.query) qs.set('query', params.query);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<OpsAuditLogEntry[]>(`/ops/audit-logs${suffix}`);
+  },
 };
 
 // Support (customer-facing)

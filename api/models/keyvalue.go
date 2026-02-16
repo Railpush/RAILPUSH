@@ -80,3 +80,8 @@ func UpdateManagedKeyValueConnection(id string, port int, host string) error {
 	_, err := database.DB.Exec("UPDATE managed_keyvalue SET port=$1, host=$2 WHERE id=$3", port, host, id)
 	return err
 }
+
+func UpdateManagedKeyValuePlan(id, plan string) error {
+	_, err := database.DB.Exec("UPDATE managed_keyvalue SET plan=$1 WHERE id=$2", plan, id)
+	return err
+}

@@ -94,6 +94,11 @@ func UpdateManagedDatabaseConnection(id string, port int, host string) error {
 	return err
 }
 
+func UpdateManagedDatabasePlan(id, plan string) error {
+	_, err := database.DB.Exec("UPDATE managed_databases SET plan=$1 WHERE id=$2", plan, id)
+	return err
+}
+
 func UpdateManagedDatabaseHA(id string, enabled bool, strategy string, standbyReplicaID *string) error {
 	_, err := database.DB.Exec(
 		"UPDATE managed_databases SET ha_enabled=$1, ha_strategy=$2, standby_replica_id=NULLIF($3,'')::uuid WHERE id=$4",

@@ -259,6 +259,8 @@ export function Sidebar() {
               <div className="pl-3 mt-1 space-y-0.5 border-l border-border-subtle ml-2">
                 <NavItem icon={<LifeBuoy className="w-3.5 h-3.5" />} label="Tickets" path="/ops/tickets" active={path.startsWith('/ops/tickets')} collapsed={false} />
                 <NavItem icon={<Coins className="w-3.5 h-3.5" />} label="Credits" path="/ops/credits" active={path.startsWith('/ops/credits')} collapsed={false} />
+                <NavItem icon={<Database className="w-3.5 h-3.5" />} label="Datastores" path="/ops/datastores" active={path.startsWith('/ops/datastores')} collapsed={false} />
+                <NavItem icon={<ScrollText className="w-3.5 h-3.5" />} label="Audit Log" path="/ops/audit" active={path.startsWith('/ops/audit')} collapsed={false} />
                 <NavItem icon={<Server className="w-3.5 h-3.5" />} label="Technical" path="/ops/technical" active={path.startsWith('/ops/technical')} collapsed={false} />
                 <NavItem icon={<BarChart3 className="w-3.5 h-3.5" />} label="Performance" path="/ops/performance" active={path.startsWith('/ops/performance')} collapsed={false} />
                 <NavItem icon={<Mail className="w-3.5 h-3.5" />} label="Email" path="/ops/email" active={path.startsWith('/ops/email')} collapsed={false} />

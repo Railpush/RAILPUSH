@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, Users } from 'lucide-react';
 import { Card } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
+import { Modal } from '../components/ui/Modal';
 import { Skeleton } from '../components/ui/Skeleton';
 import { ApiError, ops } from '../lib/api';
+import { cn } from '../lib/utils';
+import { toast } from 'sonner';
 import type { OpsUserItem, OpsWorkspaceItem } from '../types';
 
 export function OpsCustomersPage() {
@@ -12,6 +16,8 @@ export function OpsCustomersPage() {
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [roleModal, setRoleModal] = useState<{ open: boolean; userId: string; email: string; role: string }>({ open: false, userId: '', email: '', role: 'member' });
 
   const q = useMemo(() => query.trim(), [query]);
 
@@ -109,10 +115,51 @@ export function OpsCustomersPage() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-semibold text-content-primary truncate">{u.username || 'User'}</div>
-                      <div className="text-xs text-content-tertiary truncate">{u.email || '(no email)'} · {u.role}</div>
+                      <div className="text-xs text-content-tertiary truncate">
+                        {u.email || '(no email)'} · {u.role}
+                        {u.is_suspended ? <span className="ml-2 text-status-warning">suspended</span> : null}
+                      </div>
                     </div>
-                    <div className="text-[11px] px-2 py-1 rounded-full border border-border-default bg-surface-tertiary text-content-tertiary">
-                      {u.id.slice(0, 8)}
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={busyKey === `role:${u.id}`}
+                        loading={busyKey === `role:${u.id}`}
+                        onClick={() => setRoleModal({ open: true, userId: u.id, email: u.email || '', role: (u.role || 'member').toLowerCase() })}
+                      >
+                        Role
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={u.is_suspended ? 'secondary' : 'danger'}
+                        className={cn(u.is_suspended ? '' : 'bg-status-error hover:bg-red-600 text-white border-0')}
+                        disabled={busyKey === `suspend-user:${u.id}`}
+                        loading={busyKey === `suspend-user:${u.id}`}
+                        onClick={async () => {
+                          setBusyKey(`suspend-user:${u.id}`);
+                          try {
+                            if (u.is_suspended) {
+                              await ops.resumeUser(u.id);
+                              setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, is_suspended: false } : x)));
+                              toast.success('User resumed');
+                            } else {
+                              await ops.suspendUser(u.id);
+                              setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, is_suspended: true } : x)));
+                              toast.success('User suspended');
+                            }
+                          } catch (e: unknown) {
+                            toast.error(e instanceof Error ? e.message : 'Failed');
+                          } finally {
+                            setBusyKey(null);
+                          }
+                        }}
+                      >
+                        {u.is_suspended ? 'Resume' : 'Suspend'}
+                      </Button>
+                      <div className="text-[11px] px-2 py-1 rounded-full border border-border-default bg-surface-tertiary text-content-tertiary">
+                        {u.id.slice(0, 8)}
+                      </div>
                     </div>
                   </div>
                 ))
@@ -140,10 +187,42 @@ export function OpsCustomersPage() {
                   <div key={ws.id} className="flex items-center justify-between gap-3 border border-border-subtle rounded-xl p-3">
                     <div className="min-w-0">
                       <div className="text-sm font-semibold text-content-primary truncate">{ws.name || 'Workspace'}</div>
-                      <div className="text-xs text-content-tertiary truncate">Owner: {ws.owner_email || ws.owner_id.slice(0, 8)}</div>
+                      <div className="text-xs text-content-tertiary truncate">
+                        Owner: {ws.owner_email || ws.owner_id.slice(0, 8)}
+                        {ws.is_suspended ? <span className="ml-2 text-status-warning">suspended</span> : null}
+                      </div>
                     </div>
-                    <div className="text-[11px] px-2 py-1 rounded-full border border-border-default bg-surface-tertiary text-content-tertiary shrink-0">
-                      {ws.id.slice(0, 8)}
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Button
+                        size="sm"
+                        variant={ws.is_suspended ? 'secondary' : 'danger'}
+                        className={cn(ws.is_suspended ? '' : 'bg-status-error hover:bg-red-600 text-white border-0')}
+                        disabled={busyKey === `suspend-ws:${ws.id}`}
+                        loading={busyKey === `suspend-ws:${ws.id}`}
+                        onClick={async () => {
+                          setBusyKey(`suspend-ws:${ws.id}`);
+                          try {
+                            if (ws.is_suspended) {
+                              await ops.resumeWorkspace(ws.id);
+                              setWorkspaces((prev) => prev.map((x) => (x.id === ws.id ? { ...x, is_suspended: false } : x)));
+                              toast.success('Workspace resumed');
+                            } else {
+                              await ops.suspendWorkspace(ws.id);
+                              setWorkspaces((prev) => prev.map((x) => (x.id === ws.id ? { ...x, is_suspended: true } : x)));
+                              toast.success('Workspace suspended');
+                            }
+                          } catch (e: unknown) {
+                            toast.error(e instanceof Error ? e.message : 'Failed');
+                          } finally {
+                            setBusyKey(null);
+                          }
+                        }}
+                      >
+                        {ws.is_suspended ? 'Resume' : 'Suspend'}
+                      </Button>
+                      <div className="text-[11px] px-2 py-1 rounded-full border border-border-default bg-surface-tertiary text-content-tertiary shrink-0">
+                        {ws.id.slice(0, 8)}
+                      </div>
                     </div>
                   </div>
                 ))
@@ -152,7 +231,60 @@ export function OpsCustomersPage() {
           </Card>
         </div>
       )}
+
+      <Modal
+        open={roleModal.open}
+        onClose={() => setRoleModal({ open: false, userId: '', email: '', role: 'member' })}
+        title="Change User Role"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setRoleModal({ open: false, userId: '', email: '', role: 'member' })}>
+              Cancel
+            </Button>
+            <Button
+              disabled={!roleModal.userId || busyKey === `role:${roleModal.userId}`}
+              loading={busyKey === `role:${roleModal.userId}`}
+              onClick={async () => {
+                if (!roleModal.userId) return;
+                setBusyKey(`role:${roleModal.userId}`);
+                try {
+                  await ops.setUserRole(roleModal.userId, roleModal.role);
+                  setUsers((prev) => prev.map((x) => (x.id === roleModal.userId ? { ...x, role: roleModal.role } : x)));
+                  toast.success('Role updated');
+                  setRoleModal({ open: false, userId: '', email: '', role: 'member' });
+                } catch (e: unknown) {
+                  toast.error(e instanceof Error ? e.message : 'Failed to update role');
+                } finally {
+                  setBusyKey(null);
+                }
+              }}
+            >
+              Save
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="text-sm text-content-secondary">
+            User: <span className="font-mono text-xs">{roleModal.email || roleModal.userId}</span>
+          </div>
+          <label className="block">
+            <div className="text-xs text-content-tertiary mb-1.5">Role</div>
+            <select
+              value={roleModal.role}
+              onChange={(e) => setRoleModal((p) => ({ ...p, role: e.target.value }))}
+              className="w-full h-10 px-3 rounded-md bg-surface-secondary border border-border-default text-sm capitalize"
+            >
+              <option value="member">member</option>
+              <option value="ops">ops</option>
+              <option value="admin">admin</option>
+            </select>
+          </label>
+          <div className="text-xs text-content-tertiary">
+            Ops/Admin can access the ops dashboard. Use with care.
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
-

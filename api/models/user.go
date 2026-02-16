@@ -16,6 +16,8 @@ type User struct {
 	PasswordHash              string     `json:"-"`
 	AvatarURL                 string     `json:"avatar_url"`
 	Role                      string     `json:"role"`
+	IsSuspended               bool       `json:"is_suspended"`
+	SuspendedAt               *time.Time `json:"suspended_at,omitempty"`
 	BlueprintAIAutogenEnabled bool       `json:"blueprint_ai_autogen_enabled"`
 	GitHubAccessToken         string     `json:"-"`
 	CreatedAt                 time.Time  `json:"created_at"`
@@ -34,15 +36,20 @@ type APIKey struct {
 func GetUserByGitHubID(ghID int64) (*User, error) {
 	u := &User{}
 	var verifiedAt sql.NullTime
+	var suspendedAt sql.NullTime
 	err := database.DB.QueryRow(
-		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), COALESCE(email, ''), email_verified_at, COALESCE(avatar_url, ''), COALESCE(role, 'member'), COALESCE(blueprint_ai_autogen_enabled, false), created_at FROM users WHERE github_id = $1", ghID,
-	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &verifiedAt, &u.AvatarURL, &u.Role, &u.BlueprintAIAutogenEnabled, &u.CreatedAt)
+		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), COALESCE(email, ''), email_verified_at, COALESCE(avatar_url, ''), COALESCE(role, 'member'), COALESCE(is_suspended,false), suspended_at, COALESCE(blueprint_ai_autogen_enabled, false), created_at FROM users WHERE github_id = $1", ghID,
+	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &verifiedAt, &u.AvatarURL, &u.Role, &u.IsSuspended, &suspendedAt, &u.BlueprintAIAutogenEnabled, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if verifiedAt.Valid {
 		v := verifiedAt.Time
 		u.EmailVerifiedAt = &v
+	}
+	if suspendedAt.Valid {
+		v := suspendedAt.Time
+		u.SuspendedAt = &v
 	}
 	return u, err
 }
@@ -50,15 +57,20 @@ func GetUserByGitHubID(ghID int64) (*User, error) {
 func GetUserByID(id string) (*User, error) {
 	u := &User{}
 	var verifiedAt sql.NullTime
+	var suspendedAt sql.NullTime
 	err := database.DB.QueryRow(
-		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), COALESCE(email, ''), email_verified_at, COALESCE(avatar_url, ''), COALESCE(role, 'member'), COALESCE(blueprint_ai_autogen_enabled, false), created_at FROM users WHERE id = $1", id,
-	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &verifiedAt, &u.AvatarURL, &u.Role, &u.BlueprintAIAutogenEnabled, &u.CreatedAt)
+		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), COALESCE(email, ''), email_verified_at, COALESCE(avatar_url, ''), COALESCE(role, 'member'), COALESCE(is_suspended,false), suspended_at, COALESCE(blueprint_ai_autogen_enabled, false), created_at FROM users WHERE id = $1", id,
+	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &verifiedAt, &u.AvatarURL, &u.Role, &u.IsSuspended, &suspendedAt, &u.BlueprintAIAutogenEnabled, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if verifiedAt.Valid {
 		v := verifiedAt.Time
 		u.EmailVerifiedAt = &v
+	}
+	if suspendedAt.Valid {
+		v := suspendedAt.Time
+		u.SuspendedAt = &v
 	}
 	return u, err
 }
@@ -74,15 +86,20 @@ func CreateUser(u *User) error {
 func GetUserByEmail(email string) (*User, error) {
 	u := &User{}
 	var verifiedAt sql.NullTime
+	var suspendedAt sql.NullTime
 	err := database.DB.QueryRow(
-		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), email, email_verified_at, COALESCE(password_hash, ''), COALESCE(avatar_url, ''), COALESCE(role, 'member'), COALESCE(blueprint_ai_autogen_enabled, false), created_at FROM users WHERE email = $1", email,
-	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &verifiedAt, &u.PasswordHash, &u.AvatarURL, &u.Role, &u.BlueprintAIAutogenEnabled, &u.CreatedAt)
+		"SELECT id, COALESCE(github_id, 0), COALESCE(username, ''), email, email_verified_at, COALESCE(password_hash, ''), COALESCE(avatar_url, ''), COALESCE(role, 'member'), COALESCE(is_suspended,false), suspended_at, COALESCE(blueprint_ai_autogen_enabled, false), created_at FROM users WHERE email = $1", email,
+	).Scan(&u.ID, &u.GitHubID, &u.Username, &u.Email, &verifiedAt, &u.PasswordHash, &u.AvatarURL, &u.Role, &u.IsSuspended, &suspendedAt, &u.BlueprintAIAutogenEnabled, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if verifiedAt.Valid {
 		v := verifiedAt.Time
 		u.EmailVerifiedAt = &v
+	}
+	if suspendedAt.Valid {
+		v := suspendedAt.Time
+		u.SuspendedAt = &v
 	}
 	return u, err
 }

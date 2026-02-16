@@ -214,6 +214,128 @@ func (h *DatabaseHandler) GetDatabase(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, db)
 }
 
+func (h *DatabaseHandler) UpdateDatabase(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	db, err := models.GetManagedDatabase(id)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if db == nil {
+		utils.RespondError(w, http.StatusNotFound, "database not found")
+		return
+	}
+
+	userID := middleware.GetUserID(r)
+	if err := services.EnsureWorkspaceAccess(userID, db.WorkspaceID, models.RoleDeveloper); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	oldPlan := db.Plan
+	if p, ok := services.NormalizePlan(oldPlan); ok {
+		oldPlan = p
+	} else {
+		oldPlan = services.PlanStarter
+	}
+
+	planProvided := false
+	desiredPlan := oldPlan
+	var updates map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if v, ok := updates["plan"].(string); ok {
+		planProvided = true
+		if p, ok := services.NormalizePlan(v); ok {
+			desiredPlan = p
+		} else {
+			utils.RespondError(w, http.StatusBadRequest, "invalid plan")
+			return
+		}
+	}
+	if !planProvided || desiredPlan == oldPlan {
+		utils.RespondJSON(w, http.StatusOK, db)
+		return
+	}
+
+	// Free tier: limit 1 free database per workspace
+	if desiredPlan == services.PlanFree {
+		count, err := models.CountResourcesByWorkspaceAndPlan(db.WorkspaceID, "database", "free")
+		if err == nil && count >= 1 {
+			utils.RespondError(w, http.StatusBadRequest, "free tier limit reached: 1 free database per workspace")
+			return
+		}
+	}
+
+	// Gate plan changes on Stripe success so users cannot upgrade resources without billing.
+	if h.Stripe != nil && h.Stripe.Enabled() {
+		if desiredPlan == services.PlanFree {
+			if err := h.Stripe.RemoveSubscriptionItem("database", db.ID); err != nil {
+				utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
+				return
+			}
+		} else {
+			user, err := models.GetUserByID(userID)
+			if err != nil || user == nil {
+				utils.RespondError(w, http.StatusInternalServerError, "failed to get user")
+				return
+			}
+			bc, err := h.Stripe.EnsureCustomer(userID, user.Email)
+			if err != nil || bc == nil {
+				if err == nil {
+					err = fmt.Errorf("billing customer not found")
+				}
+				utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
+				return
+			}
+			if err := h.Stripe.AddSubscriptionItem(bc, "database", db.ID, db.Name, desiredPlan); err != nil {
+				if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
+					utils.RespondError(w, http.StatusPaymentRequired, "payment method required. Please add a default payment method in billing settings.")
+					return
+				}
+				utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
+				return
+			}
+		}
+	}
+
+	db.Plan = desiredPlan
+	if err := models.UpdateManagedDatabasePlan(db.ID, desiredPlan); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to update database plan")
+		return
+	}
+
+	// Best-effort: apply Kubernetes resource updates immediately.
+	if h.Config != nil && h.Config.Kubernetes.Enabled && strings.HasPrefix(strings.TrimSpace(db.ContainerID), "k8s:") {
+		if pw, err := utils.Decrypt(db.EncryptedPassword, h.Config.Crypto.EncryptionKey); err == nil && strings.TrimSpace(pw) != "" {
+			var kd *services.KubeDeployer
+			if h.Worker != nil {
+				if k, err := h.Worker.GetKubeDeployer(); err == nil {
+					kd = k
+				}
+			}
+			if kd == nil {
+				if k, err := services.NewKubeDeployer(h.Config); err == nil {
+					kd = k
+				}
+			}
+			if kd != nil {
+				if _, err := kd.EnsureManagedDatabase(db, pw); err != nil {
+					log.Printf("WARNING: k8s managed database update failed db=%s: %v", db.ID, err)
+				}
+			}
+		}
+	}
+
+	services.Audit(db.WorkspaceID, userID, "database.updated", "database", db.ID, map[string]interface{}{
+		"plan": db.Plan,
+	})
+
+	utils.RespondJSON(w, http.StatusOK, db)
+}
+
 func (h *DatabaseHandler) DeleteDatabase(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 	userID := middleware.GetUserID(r)

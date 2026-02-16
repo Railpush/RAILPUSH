@@ -492,7 +492,13 @@ function SettingsTab({ db, navigate }: { db: ManagedDatabase; navigate: (path: s
               <div className="text-sm text-content-primary">Plan</div>
               <div className="text-xs text-content-tertiary capitalize">{db.plan}</div>
             </div>
-            <Button size="sm" variant="secondary">Upgrade Plan</Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => navigate(`/billing/plans?focus=database&resource_id=${encodeURIComponent(db.id)}`)}
+            >
+              Change Plan
+            </Button>
           </div>
           <div className="flex items-center justify-between">
             <div>

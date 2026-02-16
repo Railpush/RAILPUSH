@@ -32,6 +32,12 @@ func HasWorkspaceAccess(userID, workspaceID, minRole string) (bool, string, erro
 	if role == "" {
 		return false, "", nil
 	}
+	// Abuse response: a suspended workspace denies access for all non-ops actions.
+	if ws, err := models.GetWorkspace(workspaceID); err != nil {
+		return false, "", err
+	} else if ws == nil || ws.IsSuspended {
+		return false, role, nil
+	}
 	allow := roleRank(role) >= roleRank(minRole)
 	return allow, role, nil
 }

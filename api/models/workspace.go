@@ -12,6 +12,8 @@ type Workspace struct {
 	Name         string    `json:"name"`
 	OwnerID      string    `json:"owner_id"`
 	DeployPolicy string    `json:"deploy_policy"`
+	IsSuspended  bool      `json:"is_suspended"`
+	SuspendedAt  *time.Time `json:"suspended_at,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 
@@ -27,22 +29,32 @@ func CreateWorkspace(w *Workspace) error {
 
 func GetWorkspaceByOwner(ownerID string) (*Workspace, error) {
 	w := &Workspace{}
+	var suspendedAt sql.NullTime
 	err := database.DB.QueryRow(
-		"SELECT id, name, owner_id, COALESCE(deploy_policy, 'cancel'), created_at FROM workspaces WHERE owner_id = $1 LIMIT 1", ownerID,
-	).Scan(&w.ID, &w.Name, &w.OwnerID, &w.DeployPolicy, &w.CreatedAt)
+		"SELECT id, name, owner_id, COALESCE(deploy_policy, 'cancel'), COALESCE(is_suspended,false), suspended_at, created_at FROM workspaces WHERE owner_id = $1 LIMIT 1", ownerID,
+	).Scan(&w.ID, &w.Name, &w.OwnerID, &w.DeployPolicy, &w.IsSuspended, &suspendedAt, &w.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
+	}
+	if suspendedAt.Valid {
+		v := suspendedAt.Time
+		w.SuspendedAt = &v
 	}
 	return w, err
 }
 
 func GetWorkspace(id string) (*Workspace, error) {
 	w := &Workspace{}
+	var suspendedAt sql.NullTime
 	err := database.DB.QueryRow(
-		"SELECT id, name, owner_id, COALESCE(deploy_policy, 'cancel'), created_at FROM workspaces WHERE id = $1", id,
-	).Scan(&w.ID, &w.Name, &w.OwnerID, &w.DeployPolicy, &w.CreatedAt)
+		"SELECT id, name, owner_id, COALESCE(deploy_policy, 'cancel'), COALESCE(is_suspended,false), suspended_at, created_at FROM workspaces WHERE id = $1", id,
+	).Scan(&w.ID, &w.Name, &w.OwnerID, &w.DeployPolicy, &w.IsSuspended, &suspendedAt, &w.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
+	}
+	if suspendedAt.Valid {
+		v := suspendedAt.Time
+		w.SuspendedAt = &v
 	}
 	return w, err
 }

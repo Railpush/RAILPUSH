@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   ChevronDown,
   ChevronRight,
@@ -190,7 +191,6 @@ function StatCard({
           {helper && <div className="text-sm text-content-secondary mt-1">{helper}</div>}
         </div>
       </div>
-      <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-brand/5 to-transparent rounded-bl-full pointer-events-none" />
     </div>
   );
 }
@@ -228,6 +228,7 @@ function SectionFrame({
 }
 
 export function Billing() {
+  const navigate = useNavigate();
   const [overview, setOverview] = useState<BillingOverview | null>(null);
   const [billingEmail, setBillingEmail] = useState('');
   const [loading, setLoading] = useState(true);
@@ -503,7 +504,7 @@ export function Billing() {
               </div>
 
               <div className="border-l border-border-default/50 pl-6 space-y-3 flex flex-col justify-center">
-                <Button variant="secondary" onClick={handleOpenBillingPortal} className="w-full justify-start">
+                <Button variant="secondary" onClick={() => navigate('/billing/plans')} className="w-full justify-start">
                   <PencilLine className="w-4 h-4 mr-2" />
                   Change Plan
                 </Button>

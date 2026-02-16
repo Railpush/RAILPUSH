@@ -6,6 +6,7 @@ import { Button } from '../components/ui/Button';
 import { Skeleton } from '../components/ui/Skeleton';
 import { ApiError, ops } from '../lib/api';
 import { cn, truncate } from '../lib/utils';
+import { toast } from 'sonner';
 import type { OpsServiceItem } from '../types';
 
 type StatusFilter = 'all' | 'created' | 'building' | 'deploying' | 'live' | 'failed' | 'deploy_failed';
@@ -18,6 +19,7 @@ export function OpsServicesPage() {
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
 
   const q = useMemo(() => query.trim(), [query]);
 
@@ -140,17 +142,70 @@ export function OpsServicesPage() {
                   <div className="text-sm text-content-secondary truncate">{truncate(s.repo_url || '', 60) || '(no repo)'}</div>
                   <div className="text-xs text-content-tertiary truncate">{s.branch || 'main'}</div>
                 </div>
-                <div className="col-span-2 text-right">
-                  <span className={cn(
-                    'text-[11px] px-2 py-1 rounded-full border inline-flex',
-                    s.status === 'failed' || s.status === 'deploy_failed'
-                      ? 'border-status-error/30 bg-status-error/10 text-status-error'
-                      : s.status === 'live'
-                        ? 'border-status-success/30 bg-status-success/10 text-status-success'
-                        : 'border-border-default bg-surface-tertiary text-content-tertiary'
-                  )}>
+                <div className="col-span-2 flex flex-col items-end gap-2">
+                  <span
+                    className={cn(
+                      'text-[11px] px-2 py-1 rounded-full border inline-flex capitalize',
+                      s.status === 'failed' || s.status === 'deploy_failed'
+                        ? 'border-status-error/30 bg-status-error/10 text-status-error'
+                        : s.status === 'live'
+                          ? 'border-status-success/30 bg-status-success/10 text-status-success'
+                          : s.status === 'suspended'
+                            ? 'border-status-warning/30 bg-status-warning/10 text-status-warning'
+                            : 'border-border-default bg-surface-tertiary text-content-tertiary'
+                    )}
+                  >
                     {s.status}
                   </span>
+
+                  <div className="flex items-center justify-end gap-2">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={busyKey === `restart:${s.id}`}
+                      loading={busyKey === `restart:${s.id}`}
+                      onClick={async () => {
+                        setBusyKey(`restart:${s.id}`);
+                        try {
+                          await ops.restartService(s.id);
+                          setRows((prev) => prev.map((x) => (x.id === s.id ? { ...x, status: 'restarting' } : x)));
+                          toast.success('Restart requested');
+                        } catch (e: unknown) {
+                          toast.error(e instanceof Error ? e.message : 'Failed to restart service');
+                        } finally {
+                          setBusyKey(null);
+                        }
+                      }}
+                    >
+                      Restart
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={s.status === 'suspended' ? 'primary' : 'danger'}
+                      disabled={busyKey === `suspend:${s.id}`}
+                      loading={busyKey === `suspend:${s.id}`}
+                      onClick={async () => {
+                        setBusyKey(`suspend:${s.id}`);
+                        try {
+                          if (s.status === 'suspended') {
+                            await ops.resumeService(s.id);
+                            setRows((prev) => prev.map((x) => (x.id === s.id ? { ...x, status: 'deploying' } : x)));
+                            toast.success('Resume requested');
+                          } else {
+                            await ops.suspendService(s.id);
+                            setRows((prev) => prev.map((x) => (x.id === s.id ? { ...x, status: 'suspended' } : x)));
+                            toast.success('Service suspended');
+                          }
+                        } catch (e: unknown) {
+                          toast.error(e instanceof Error ? e.message : 'Failed');
+                        } finally {
+                          setBusyKey(null);
+                        }
+                      }}
+                    >
+                      {s.status === 'suspended' ? 'Resume' : 'Suspend'}
+                    </Button>
+                  </div>
                 </div>
               </div>
             ))}

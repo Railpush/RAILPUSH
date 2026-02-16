@@ -9,6 +9,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/railpush/api/config"
+	"github.com/railpush/api/models"
 	"github.com/railpush/api/utils"
 )
 
@@ -64,6 +65,16 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			userID, err := AuthenticateRequest(cfg, r)
 			if err != nil {
 				utils.RespondError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			if u, err := models.GetUserByID(userID); err != nil {
+				utils.RespondError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			} else if u == nil {
+				utils.RespondError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			} else if u.IsSuspended {
+				utils.RespondError(w, http.StatusForbidden, "account suspended")
 				return
 			}
 			ctx := context.WithValue(r.Context(), UserIDKey, userID)

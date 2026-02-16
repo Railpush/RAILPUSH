@@ -3,8 +3,10 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/railpush/api/config"
@@ -196,6 +198,128 @@ func (h *KeyValueHandler) GetKeyValue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	utils.RespondJSON(w, http.StatusOK, kv)
+}
+
+func (h *KeyValueHandler) UpdateKeyValue(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	kv, err := models.GetManagedKeyValue(id)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if kv == nil {
+		utils.RespondError(w, http.StatusNotFound, "key-value store not found")
+		return
+	}
+
+	userID := middleware.GetUserID(r)
+	if err := services.EnsureWorkspaceAccess(userID, kv.WorkspaceID, models.RoleDeveloper); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	oldPlan := kv.Plan
+	if p, ok := services.NormalizePlan(oldPlan); ok {
+		oldPlan = p
+	} else {
+		oldPlan = services.PlanStarter
+	}
+
+	planProvided := false
+	desiredPlan := oldPlan
+	var updates map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if v, ok := updates["plan"].(string); ok {
+		planProvided = true
+		if p, ok := services.NormalizePlan(v); ok {
+			desiredPlan = p
+		} else {
+			utils.RespondError(w, http.StatusBadRequest, "invalid plan")
+			return
+		}
+	}
+	if !planProvided || desiredPlan == oldPlan {
+		utils.RespondJSON(w, http.StatusOK, kv)
+		return
+	}
+
+	// Free tier: limit 1 free key-value per workspace
+	if desiredPlan == services.PlanFree {
+		count, err := models.CountResourcesByWorkspaceAndPlan(kv.WorkspaceID, "keyvalue", "free")
+		if err == nil && count >= 1 {
+			utils.RespondError(w, http.StatusBadRequest, "free tier limit reached: 1 free key-value store per workspace")
+			return
+		}
+	}
+
+	// Gate plan changes on Stripe success so users cannot upgrade resources without billing.
+	if h.Stripe != nil && h.Stripe.Enabled() {
+		if desiredPlan == services.PlanFree {
+			if err := h.Stripe.RemoveSubscriptionItem("keyvalue", kv.ID); err != nil {
+				utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
+				return
+			}
+		} else {
+			user, err := models.GetUserByID(userID)
+			if err != nil || user == nil {
+				utils.RespondError(w, http.StatusInternalServerError, "failed to get user")
+				return
+			}
+			bc, err := h.Stripe.EnsureCustomer(userID, user.Email)
+			if err != nil || bc == nil {
+				if err == nil {
+					err = fmt.Errorf("billing customer not found")
+				}
+				utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
+				return
+			}
+			if err := h.Stripe.AddSubscriptionItem(bc, "keyvalue", kv.ID, kv.Name, desiredPlan); err != nil {
+				if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
+					utils.RespondError(w, http.StatusPaymentRequired, "payment method required. Please add a default payment method in billing settings.")
+					return
+				}
+				utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
+				return
+			}
+		}
+	}
+
+	kv.Plan = desiredPlan
+	if err := models.UpdateManagedKeyValuePlan(kv.ID, desiredPlan); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to update key-value plan")
+		return
+	}
+
+	// Best-effort: apply Kubernetes resource updates immediately.
+	if h.Config != nil && h.Config.Kubernetes.Enabled && strings.HasPrefix(strings.TrimSpace(kv.ContainerID), "k8s:") {
+		if pw, err := utils.Decrypt(kv.EncryptedPassword, h.Config.Crypto.EncryptionKey); err == nil && strings.TrimSpace(pw) != "" {
+			var kd *services.KubeDeployer
+			if h.Worker != nil {
+				if k, err := h.Worker.GetKubeDeployer(); err == nil {
+					kd = k
+				}
+			}
+			if kd == nil {
+				if k, err := services.NewKubeDeployer(h.Config); err == nil {
+					kd = k
+				}
+			}
+			if kd != nil {
+				if _, err := kd.EnsureManagedKeyValue(kv, pw); err != nil {
+					log.Printf("WARNING: k8s managed keyvalue update failed kv=%s: %v", kv.ID, err)
+				}
+			}
+		}
+	}
+
+	services.Audit(kv.WorkspaceID, userID, "keyvalue.updated", "keyvalue", kv.ID, map[string]interface{}{
+		"plan": kv.Plan,
+	})
 
 	utils.RespondJSON(w, http.StatusOK, kv)
 }

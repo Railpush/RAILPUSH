@@ -11,6 +11,7 @@ import { buildDefaultServiceHostname } from '../lib/serviceUrl';
 import { toast } from 'sonner';
 import type { ServiceType, Runtime, GitHubRepo } from '../types';
 import { cn } from '../lib/utils';
+import { UpgradePromptModal } from '../components/billing/UpgradePromptModal';
 
 const serviceTypes = [
   { type: 'web' as ServiceType, icon: Globe, label: 'Web Service', desc: 'HTTP service with public URL', color: '#4351E8' },
@@ -41,6 +42,7 @@ export function CreateService() {
   const { type: preselectedType } = useParams<{ type: string }>();
   const [step, setStep] = useState(preselectedType ? 2 : 1);
   const [selectedType, setSelectedType] = useState<string>(preselectedType || '');
+  const [upgradePrompt, setUpgradePrompt] = useState<{ open: boolean; message: string }>({ open: false, message: '' });
   const [form, setForm] = useState({
     name: '',
     repo_url: '',
@@ -157,12 +159,24 @@ export function CreateService() {
       toast.success('Service created');
       navigate('/');
     } catch (err) {
-      if (err instanceof ApiError && err.status === 402) {
-        toast.error('Payment method required. Redirecting to billing...');
-        setTimeout(() => navigate('/billing'), 1500);
-        return;
+      const msg = err instanceof Error ? err.message : 'Failed to create service';
+
+      if (err instanceof ApiError) {
+        if (err.status === 402) {
+          setUpgradePrompt({ open: true, message: msg || 'Payment method required.' });
+          return;
+        }
+        if (err.status === 400 && msg.toLowerCase().includes('free tier limit')) {
+          setUpgradePrompt({ open: true, message: msg });
+          return;
+        }
+        if (msg.toLowerCase().includes('billing error') || msg.toLowerCase().includes('stripe price')) {
+          setUpgradePrompt({ open: true, message: msg });
+          return;
+        }
       }
-      toast.error(err instanceof Error ? err.message : 'Failed to create service');
+
+      toast.error(msg);
     }
   };
 
@@ -490,6 +504,12 @@ export function CreateService() {
           </div>
         </div>
       </div>
+
+      <UpgradePromptModal
+        open={upgradePrompt.open}
+        message={upgradePrompt.message}
+        onClose={() => setUpgradePrompt({ open: false, message: '' })}
+      />
     </div>
   );
 }
