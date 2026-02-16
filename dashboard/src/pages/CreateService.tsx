@@ -282,7 +282,7 @@ export function CreateService() {
                             : "bg-surface-tertiary/30 border-border-default text-content-secondary hover:border-border-hover"
                         )}
                       >
-                        <span className="text-2xl mb-2">{rt.icon}</span>
+                        <span className="text-2xl mb-2 grayscale">{rt.icon}</span>
                         <span className="text-xs font-medium">{rt.label}</span>
                       </button>
                     ))}
