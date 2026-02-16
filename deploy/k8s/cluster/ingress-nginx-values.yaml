@@ -20,6 +20,11 @@ controller:
   dnsPolicy: ClusterFirstWithHostNet
   replicaCount: 2
 
+  # Serve our wildcard TLS cert when no Ingress matches the SNI host.
+  # This avoids scary browser TLS warnings for "unknown" *.apps.<domain> hosts.
+  extraArgs:
+    default-ssl-certificate: "railpush/apps-wildcard-tls"
+
   # Real client IP support when the console is proxied behind Cloudflare.
   #
   # - Cloudflare sets: CF-Connecting-IP=<original client IP>
