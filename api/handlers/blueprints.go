@@ -706,19 +706,42 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	yamlPath := filepath.Join(tmpDir, bp.FilePath)
 	data, err := os.ReadFile(yamlPath)
 	repoFileExists := err == nil
-	if h.blueprintAIAutogenEnabled(bp.WorkspaceID) {
-		// Only generate when the repo doesn't have a YAML file yet OR the user explicitly asked us to ignore it.
-		if !repoFileExists || bp.AIIgnoreRepoYAML {
-			ai := services.NewBlueprintAIGenerator(h.Config)
+	aiEnabled := h.blueprintAIAutogenEnabled(bp.WorkspaceID)
+	// We normally only autogenerate when the user has enabled Blueprint AI.
+	// However, if the YAML file doesn't exist in the repo, the product UX is that
+	// we can still generate it (when the server has OpenRouter configured) so users
+	// aren't forced to author YAML just to try Blueprints.
+	aiFallbackOnMissing := !repoFileExists && !aiEnabled
+	aiShouldGenerate := (aiEnabled && (!repoFileExists || bp.AIIgnoreRepoYAML)) || aiFallbackOnMissing
+	if aiShouldGenerate {
+		ai := services.NewBlueprintAIGenerator(h.Config)
+		if !ai.Available() {
+			if !repoFileExists {
+				fail(bp.FilePath + " not found in repository (and Blueprint AI is not configured)")
+				return
+			}
+		} else {
 			generated, genErr := ai.GenerateRenderYAMLFromRepo(tmpDir, bp.RepoURL, bp.Branch)
 			if genErr != nil {
 				log.Printf("Blueprint sync: OpenRouter generation failed blueprint=%s err=%v", bp.ID, genErr)
+				if !repoFileExists {
+					fail("failed to generate " + bp.FilePath + " with Blueprint AI")
+					return
+				}
 			} else {
 				var candidate RenderYAML
 				if parseErr := yaml.Unmarshal([]byte(generated), &candidate); parseErr != nil {
 					log.Printf("Blueprint sync: OpenRouter returned invalid YAML blueprint=%s err=%v", bp.ID, parseErr)
+					if !repoFileExists {
+						fail("Blueprint AI generated invalid YAML")
+						return
+					}
 				} else if len(candidate.Services) == 0 && len(candidate.Databases) == 0 && len(candidate.KeyValues) == 0 && len(candidate.EnvVarGroups) == 0 {
 					log.Printf("Blueprint sync: OpenRouter returned empty blueprint=%s", bp.ID)
+					if !repoFileExists {
+						fail("Blueprint AI generated an empty blueprint")
+						return
+					}
 				} else {
 					data = []byte(generated)
 					if mkErr := os.MkdirAll(filepath.Dir(yamlPath), 0o755); mkErr == nil {
