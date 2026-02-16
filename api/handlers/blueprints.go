@@ -233,7 +233,7 @@ func (h *BlueprintHandler) DeleteBlueprint(w http.ResponseWriter, r *http.Reques
 		}
 
 		// Remove from Stripe subscription before deleting.
-		if stripeSvc != nil && svc != nil && strings.TrimSpace(svc.Plan) != "" && strings.ToLower(strings.TrimSpace(svc.Plan)) != services.PlanFree {
+		if stripeSvc != nil {
 			if err := stripeSvc.RemoveSubscriptionItem("service", svcID); err != nil {
 				log.Printf("Blueprint delete: failed to remove billing for service %s: %v", svcID, err)
 			}
