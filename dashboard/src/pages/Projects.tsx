@@ -412,32 +412,13 @@ export function Projects() {
     const canManage = card.kind === 'project' && !!card.projectId && !!card.editable;
 
     return (
-      <div
+      <Card
         key={card.key}
+        hover={clickable}
         onClick={clickable ? () => openCard(card) : undefined}
-        className={cn('group relative min-h-[160px]', clickable ? 'cursor-pointer' : '')}
-        role={clickable ? 'button' : undefined}
-        tabIndex={clickable ? 0 : undefined}
+        className="group min-h-[160px] rounded-none bg-transparent border-border-default/80"
       >
-        {/* Folder body */}
-        <div
-          aria-hidden="true"
-          className={cn(
-            'absolute inset-0 top-4 glass-panel border-border-default/80 rounded-none transition-colors',
-            clickable ? 'group-hover:border-border-hover' : '',
-          )}
-        />
-
-        {/* Folder tab */}
-        <div
-          aria-hidden="true"
-          className={cn(
-            'absolute left-6 top-0 z-10 h-7 w-28 bg-surface-tertiary border border-border-default/80 border-b-0 rounded-none transition-colors',
-            clickable ? 'group-hover:border-border-hover' : '',
-          )}
-        />
-
-        <div className="h-full flex flex-col justify-between px-5 pb-5 pt-7">
+        <div className="h-full flex flex-col justify-between">
           <div className="flex items-start justify-between gap-2">
             <div className="text-content-primary leading-none">
               <FolderKanban className="w-5 h-5" />
@@ -483,13 +464,13 @@ export function Projects() {
           >
             <span
               className={cn(
-                'h-2.5 w-2.5 rounded-full border border-white/40',
+                'h-2.5 w-2.5 rounded-full border border-white/40 shadow-[0_0_0_4px_rgba(255,255,255,0.18)]',
                 health.tone === 'healthy' ? 'bg-emerald-500' : 'bg-rose-500',
               )}
             />
           </span>
         </div>
-      </div>
+      </Card>
     );
   };
 
@@ -562,24 +543,9 @@ export function Projects() {
               <button
                 type="button"
                 onClick={() => navigate('/new/blueprint')}
-                className="group relative min-h-[160px] text-content-secondary hover:text-content-primary transition-colors flex items-center justify-center text-lg"
+                className="min-h-[160px] rounded-none border border-dashed border-border-default/70 hover:border-border-hover text-content-secondary hover:text-content-primary transition-colors flex items-center justify-center text-lg"
               >
-                {/* Folder body */}
-                <div
-                  aria-hidden="true"
-                  className="absolute inset-0 top-4 bg-surface-primary border border-dashed border-border-default/70 rounded-none group-hover:border-border-hover"
-                />
-
-                {/* Folder tab */}
-                <div
-                  aria-hidden="true"
-                  className="absolute left-6 top-0 z-10 h-7 w-28 bg-surface-primary border border-dashed border-border-default/70 border-b-0 rounded-none group-hover:border-border-hover"
-                />
-
-                <span className="inline-flex items-center gap-2">
-                  <span className="text-content-tertiary group-hover:text-content-secondary transition-colors">+</span>
-                  <span>Create new project</span>
-                </span>
+                + Create new project
               </button>
             </div>
 
