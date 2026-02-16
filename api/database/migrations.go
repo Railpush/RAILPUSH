@@ -1,10 +1,40 @@
 package database
 
-import "log"
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+)
 
 func RunMigrations() error {
+	if DB == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	// Serialize migrations across all control-plane/worker replicas.
+	// A dedicated connection is required so the advisory lock is held for the full run.
+	const migrationAdvisoryLockKey int64 = 724011201
+	conn, err := DB.Conn(context.Background())
+	if err != nil {
+		return fmt.Errorf("migration conn: %w", err)
+	}
+	defer conn.Close()
+
+	log.Printf("Acquiring migration advisory lock (%d)...", migrationAdvisoryLockKey)
+	if _, err := conn.ExecContext(context.Background(), "SELECT pg_advisory_lock($1)", migrationAdvisoryLockKey); err != nil {
+		return fmt.Errorf("acquire migration advisory lock: %w", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", migrationAdvisoryLockKey); err != nil {
+			log.Printf("WARNING: release migration advisory lock failed: %v", err)
+		}
+	}()
+
 	for i, m := range migrationSQL {
-		if _, err := DB.Exec(m); err != nil {
+		if _, err := conn.ExecContext(context.Background(), m); err != nil {
 			log.Printf("Migration %d failed: %v", i, err)
 			return err
 		}

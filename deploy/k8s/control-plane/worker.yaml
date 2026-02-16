@@ -14,6 +14,9 @@ spec:
         app: railpush-worker
     spec:
       serviceAccountName: railpush-control-plane
+      # Worker can be running long deploy/build tasks; keep a long enough shutdown window
+      # to release leases cleanly and avoid mid-build SIGKILL.
+      terminationGracePeriodSeconds: 1800
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -69,4 +72,3 @@ spec:
       volumes:
         - name: data
           emptyDir: {}
-

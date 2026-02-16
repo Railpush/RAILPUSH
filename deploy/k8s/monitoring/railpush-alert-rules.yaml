@@ -129,3 +129,95 @@ spec:
           annotations:
             summary: "Loki PVC usage is critical (>90%)"
             description: "Loki storage PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} is above 90% usage. Logging may stop soon; increase disk or reduce retention immediately."
+
+        # API 5xx (via ingress-nginx metrics)
+        - alert: RailPushAPIHigh5xxErrorRate
+          expr: |
+            (
+              sum(increase(nginx_ingress_controller_requests{namespace="railpush",ingress=~"railpush-control-plane|railpush-control-plane-console",status=~"5.."}[5m]))
+              /
+              clamp_min(sum(increase(nginx_ingress_controller_requests{namespace="railpush",ingress=~"railpush-control-plane|railpush-control-plane-console"}[5m])), 1)
+            ) > 0.05
+          for: 10m
+          labels:
+            severity: warning
+            product: railpush
+            component: api
+          annotations:
+            summary: "RailPush API 5xx error ratio is high (>5%)"
+            description: "Ingress is reporting elevated 5xx responses for railpush control-plane over the last 5 minutes."
+
+        - alert: RailPushAPI5xxBurst
+          expr: |
+            sum(increase(nginx_ingress_controller_requests{namespace="railpush",ingress=~"railpush-control-plane|railpush-control-plane-console",status=~"5.."}[5m])) > 25
+          for: 5m
+          labels:
+            severity: critical
+            product: railpush
+            component: api
+          annotations:
+            summary: "RailPush API is serving a burst of 5xx responses"
+            description: "More than 25 5xx responses were served by ingress for railpush control-plane over 5 minutes."
+
+        # Deploy/build failures (Kubernetes build jobs)
+        - alert: RailPushBuildJobFailures
+          expr: |
+            increase(kube_job_status_failed{namespace="railpush",job_name=~"rp-build-.*"}[15m]) > 0
+          for: 2m
+          labels:
+            severity: warning
+            product: railpush
+            component: build
+          annotations:
+            summary: "RailPush build job failures detected"
+            description: "One or more Kubernetes build jobs failed in the last 15 minutes."
+
+        # Tenant backup health (CronJob + Jobs)
+        - alert: RailPushTenantBackupStale
+          expr: |
+            (time() - kube_cronjob_status_last_successful_time{namespace="railpush",cronjob="railpush-tenant-backup"}) > 7200
+          for: 15m
+          labels:
+            severity: warning
+            product: railpush
+            component: backup
+          annotations:
+            summary: "RailPush tenant backup is stale"
+            description: "CronJob railpush/railpush-tenant-backup has not succeeded for over 2 hours."
+
+        - alert: RailPushTenantBackupJobFailures
+          expr: |
+            increase(kube_job_status_failed{namespace="railpush",job_name=~"railpush-tenant-backup-.*"}[2h]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            product: railpush
+            component: backup
+          annotations:
+            summary: "RailPush tenant backup job failures detected"
+            description: "One or more tenant backup jobs failed in the last 2 hours."
+
+        # Longhorn volume robustness (data-loss precursors)
+        - alert: LonghornVolumeDegraded
+          expr: |
+            max by (pvc_namespace, pvc, volume) (longhorn_volume_robustness{state="degraded"}) > 0
+          for: 10m
+          labels:
+            severity: warning
+            product: railpush
+            component: longhorn
+          annotations:
+            summary: "Longhorn volume is degraded"
+            description: "Longhorn volume {{ $labels.volume }} (PVC {{ $labels.pvc_namespace }}/{{ $labels.pvc }}) is degraded."
+
+        - alert: LonghornVolumeFaulted
+          expr: |
+            max by (pvc_namespace, pvc, volume) (longhorn_volume_robustness{state="faulted"}) > 0
+          for: 2m
+          labels:
+            severity: critical
+            product: railpush
+            component: longhorn
+          annotations:
+            summary: "Longhorn volume is faulted"
+            description: "Longhorn volume {{ $labels.volume }} (PVC {{ $labels.pvc_namespace }}/{{ $labels.pvc }}) is faulted and at risk."
