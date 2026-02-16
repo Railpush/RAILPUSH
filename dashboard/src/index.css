@@ -153,6 +153,15 @@ body {
   animation: blink-cursor 1s step-end infinite;
 }
 
+.terminal-cursor {
+  display: inline-block;
+  width: 0.65ch;
+  height: 1em;
+  vertical-align: middle;
+  border-radius: 2px;
+  background: var(--color-content-primary);
+}
+
 .delay-100 { animation-delay: 100ms; }
 .delay-200 { animation-delay: 200ms; }
 .delay-300 { animation-delay: 300ms; }

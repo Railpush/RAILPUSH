@@ -176,12 +176,12 @@ function TypingTerminal() {
     if (charIndex < currentLine.text.length) {
       // Typing speed: faster for spaces/punctuation, slower for letters
       const ch = currentLine.text[charIndex];
-      const delay = ch === ' ' ? 15 : ch === '.' ? 40 : 25;
+      const delay = ch === ' ' ? 8 : ch === '.' || ch === ':' ? 18 : 14;
       const timer = setTimeout(() => setCharIndex((c) => c + 1), delay);
       return () => clearTimeout(timer);
     } else {
       // Line done, pause then show next line
-      const pause = visibleLines === 0 ? 400 : 200;
+      const pause = visibleLines === 0 ? 250 : 120;
       const timer = setTimeout(() => {
         setVisibleLines((l) => l + 1);
         setCharIndex(0);
@@ -217,7 +217,7 @@ function TypingTerminal() {
                 <span className={line.color}>
                   {displayText}
                   {isCurrentLine && (
-                    <span className="inline-block w-2 h-4 bg-content-primary align-middle animate-blink-cursor ml-px" />
+                    <span className="terminal-cursor animate-blink-cursor ml-px" />
                   )}
                 </span>
               </div>
@@ -229,7 +229,7 @@ function TypingTerminal() {
               <span className="text-content-tertiary select-none shrink-0">12:00:23</span>
               <span className="text-content-primary">
                 ${' '}
-                <span className="inline-block w-2 h-4 bg-content-primary align-middle animate-blink-cursor" />
+                <span className="terminal-cursor animate-blink-cursor" />
               </span>
             </div>
           )}
@@ -661,7 +661,7 @@ export function Landing() {
               </div>
               <div className="flex gap-3 mt-4">
                 <span className="text-content-tertiary select-none">$</span>
-                <span className="inline-block w-2 h-4 bg-content-primary align-middle animate-blink-cursor" />
+                <span className="terminal-cursor animate-blink-cursor" />
               </div>
             </div>
           </div>
