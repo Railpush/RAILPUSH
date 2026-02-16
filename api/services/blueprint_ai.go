@@ -128,39 +128,91 @@ func (g *BlueprintAIGenerator) GenerateRenderYAMLFromRepo(repoDir string, repoUR
 
 	systemPrompt := `You generate RailPush render.yaml files from repository source.
 Return ONLY valid YAML, no markdown fences and no explanation.
-Use this schema:
+
+Full schema:
+
 services:
-  - name: <required>
+  - name: <required string>
     type: web|worker|cron|static|pserv
     runtime: docker|node|python|go|ruby|rust|elixir|image
     repo: <repo-url>
     branch: <branch>
-    buildCommand: <string optional>
-    startCommand: <string optional>
-    dockerfilePath: <optional>
-    dockerContext: <optional>
-    staticPublishPath: <for static>
-    schedule: <for cron>
-    port: <int for web/pserv/static>
+    buildCommand: <optional string>
+    startCommand: <optional string>
+    dockerfilePath: <optional, path to Dockerfile>
+    dockerContext: <optional, docker build context directory>
+    dockerCommand: <optional, overrides container CMD>
+    rootDir: <optional, monorepo subdirectory containing the app>
+    staticPublishPath: <required for type=static, e.g. ./dist or ./build>
+    schedule: <required for type=cron, cron expression e.g. "*/5 * * * *">
+    port: <int, default 10000, required for web/pserv/static>
     autoDeploy: true|false
     plan: free|starter|standard|pro
-    healthCheckPath: <optional>
+    numInstances: <int, default 1>
+    healthCheckPath: <optional, e.g. /healthz>
+    preDeployCommand: <optional, runs before deploy e.g. "npm run migrate">
+    domains:
+      - <custom domain string, e.g. app.example.com>
+    disk:
+      name: <string>
+      mountPath: <string, e.g. /data>
+      sizeGB: <int, default 10>
+    buildFilter:
+      paths:
+        - <paths that trigger a build, e.g. src/**>
+      ignoredPaths:
+        - <paths to ignore, e.g. docs/**>
+    image:
+      url: <pre-built image URL, use with runtime=image>
+    envVars:
+      - key: <ENV_NAME>
+        value: <literal value>
+      - key: <ENV_NAME>
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: <database name from databases section>
+          property: connectionString|host|port|user|password|database
+      - key: <ENV_NAME>
+        fromService:
+          name: <service name from services section>
+          type: <service type>
+          property: host|port|hostport|connectionString
+          envVarKey: <optional, read an env var from the referenced service>
+      - key: <ENV_NAME>
+        fromGroup: <env var group name from envVarGroups section>
+
+databases:
+  - name: <required string>
+    plan: free|starter|standard|pro
+    postgresMajorVersion: <int, default 16>
+    databaseName: <optional, defaults to name>
+    user: <optional, defaults to name>
+
+keyValues:
+  - name: <required string>
+    plan: free|starter|standard|pro
+    maxmemoryPolicy: <optional, default allkeys-lru>
+
+envVarGroups:
+  - name: <required string>
     envVars:
       - key: <ENV_NAME>
         value: <value>
-databases:
-  - name: <optional if needed>
-    plan: free|starter|standard|pro
-keyValues:
-  - name: <optional if needed>
-    plan: free|starter|standard|pro
 
 Rules:
-- Infer a practical deployable configuration from detected files.
-- Prefer runtime=image only when an explicit image is present; otherwise infer standard runtime.
+- Infer a practical, deployable configuration from the detected source files.
 - Include at least one service.
 - Plan values MUST be one of: free, starter, standard, pro. If unsure use starter.
 - Never invent custom plan names.
+- Prefer runtime=image only when a pre-built image URL is explicitly present; otherwise infer the standard runtime from source (node, python, go, etc.).
+- If the project uses a database (e.g. DATABASE_URL, pg, prisma, sqlalchemy, gorm, sequelize, typeorm, knex, diesel), add a databases entry and wire it via fromDatabase with property connectionString.
+- If the project uses Redis (e.g. REDIS_URL, ioredis, redis, bull, celery broker), add a keyValues entry.
+- Use generateValue: true for secrets like SESSION_SECRET, JWT_SECRET, API_KEY, SECRET_KEY_BASE.
+- Use preDeployCommand for migration commands when detected (e.g. "npx prisma migrate deploy", "python manage.py migrate", "bundle exec rake db:migrate").
+- For monorepos with multiple apps, set rootDir for each service.
+- For static sites (React, Vue, Svelte, Next.js export), use type=static with the correct staticPublishPath.
+- For cron jobs, use type=cron with a valid cron schedule expression.
 - Keep values conservative and production-safe.`
 
 	userPrompt := fmt.Sprintf(
@@ -178,7 +230,7 @@ Rules:
 			{Role: "user", Content: userPrompt},
 		},
 		Temperature: 0.1,
-		MaxTokens:   2200,
+		MaxTokens:   4000,
 	}
 	raw, err := json.Marshal(reqBody)
 	if err != nil {

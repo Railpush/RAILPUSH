@@ -187,17 +187,32 @@ if [ "$RUNTIME" = "static" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
   PUBLISH_PATH="${RAILPUSH_STATIC_PUBLISH_PATH:-dist}"
   PUBLISH_PATH="${PUBLISH_PATH#/}"
 
+  # If the build command already installs deps (npm/yarn/pnpm), don't duplicate work.
+  NEEDS_INSTALL="1"
+  if [ -n "$BUILD_COMMAND" ]; then
+    if echo "$BUILD_COMMAND" | grep -Eq '(^|[[:space:];&|])npm[[:space:]]+(ci|install)([[:space:];&|]|$)'; then
+      NEEDS_INSTALL="0"
+    elif echo "$BUILD_COMMAND" | grep -Eq '(^|[[:space:];&|])(yarn|pnpm)[[:space:]]+install([[:space:];&|]|$)'; then
+      NEEDS_INSTALL="0"
+    fi
+  fi
+
   {
     printf '%s\n' "FROM node:20-alpine AS build"
     printf '%s\n' "WORKDIR /app"
     printf '%s\n' "COPY . ."
+    if [ "$NEEDS_INSTALL" = "1" ]; then
+      printf '%s\n' "RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi"
+    fi
     printf '%s\n' "RUN $BUILD_COMMAND"
     printf '\n'
     printf '%s\n' "FROM nginx:alpine"
     printf '%s\n' "COPY --from=build /app/$PUBLISH_PATH /usr/share/nginx/html"
-    printf '%s\n' "RUN printf 'server {\\n    listen ${PORT};\\n    location / {\\n        root /usr/share/nginx/html;\\n        try_files \$uri \$uri/ /index.html;\\n    }\\n}\\n' > /etc/nginx/conf.d/default.conf"
+    printf '%s\n' "RUN printf 'worker_processes auto;\\nerror_log /dev/stderr notice;\\npid /tmp/nginx.pid;\\n\\nevents {\\n  worker_connections 1024;\\n}\\n\\nhttp {\\n  include /etc/nginx/mime.types;\\n  default_type application/octet-stream;\\n\\n  access_log /dev/stdout;\\n  sendfile on;\\n  keepalive_timeout 65;\\n\\n  client_body_temp_path /tmp/nginx/client_temp 1 2;\\n  proxy_temp_path       /tmp/nginx/proxy_temp 1 2;\\n  fastcgi_temp_path     /tmp/nginx/fastcgi_temp 1 2;\\n  uwsgi_temp_path       /tmp/nginx/uwsgi_temp 1 2;\\n  scgi_temp_path        /tmp/nginx/scgi_temp 1 2;\\n\\n  include /etc/nginx/conf.d/*.conf;\\n}\\n' > /etc/nginx/nginx.conf"
+    printf '%s\n' "RUN printf 'server {\\n  listen ${PORT};\\n  server_name _;\\n  root /usr/share/nginx/html;\\n  index index.html;\\n\\n  location = /healthz {\\n    add_header Content-Type text/plain;\\n    return 200 ok;\\n  }\\n\\n  location / {\\n    try_files \$uri \$uri/ /index.html;\\n  }\\n}\\n' > /etc/nginx/conf.d/default.conf"
     printf '%s\n' "EXPOSE ${PORT}"
-    printf '%s\n' 'CMD ["nginx", "-g", "daemon off;"]'
+    printf '%s\n' 'ENTRYPOINT ["nginx"]'
+    printf '%s\n' 'CMD ["-g", "daemon off;"]'
   } > "$DOCKERFILE_PATH"
 fi
 
@@ -218,12 +233,6 @@ if [ "$RUNTIME" = "node" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
     fi
   fi
 
-  mkdir -p .railpush
-  if [ -n "$BUILD_COMMAND" ]; then
-    printf '%s\n' '#!/bin/sh' 'set -e' "$BUILD_COMMAND" > .railpush/build.sh
-    chmod +x .railpush/build.sh
-  fi
-
   {
     printf '%s\n' "FROM node:20-alpine"
     printf '%s\n' "WORKDIR /app"
@@ -232,7 +241,9 @@ if [ "$RUNTIME" = "node" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
     if [ "$NEEDS_INSTALL" = "1" ]; then
       printf '%s\n' "RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi"
     fi
-    printf '%s\n' "RUN if [ -f .railpush/build.sh ]; then sh .railpush/build.sh; fi"
+    if [ -n "$BUILD_COMMAND" ]; then
+      printf '%s\n' "RUN $BUILD_COMMAND"
+    fi
     printf '%s\n' "ENV NODE_ENV=production"
     printf '%s\n' "EXPOSE ${PORT}"
     printf '%s\n' "CMD [\"sh\",\"-lc\",\"npm start\"]"

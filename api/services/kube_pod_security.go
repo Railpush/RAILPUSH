@@ -5,6 +5,12 @@ import (
 )
 
 func boolPtr(v bool) *bool { return &v }
+func int64Ptr(v int64) *int64 { return &v }
+
+// Matches the uid used by distroless "nonroot" images.
+// We set this explicitly in strict mode so images that default to USER 0 don't fail
+// kubelet's runAsNonRoot check ("image will run as root") before the container starts.
+const tenantDefaultUID int64 = 65532
 
 func ensureWritableTmp(pod *corev1.PodSpec, c *corev1.Container) {
 	if pod != nil {
@@ -67,8 +73,19 @@ func applyTenantSecurityContext(pod *corev1.PodSpec, c *corev1.Container, strict
 				Type: corev1.SeccompProfileTypeRuntimeDefault,
 			}
 		}
-		if strict && pod.SecurityContext.RunAsNonRoot == nil {
-			pod.SecurityContext.RunAsNonRoot = boolPtr(true)
+		if strict {
+			if pod.SecurityContext.RunAsNonRoot == nil {
+				pod.SecurityContext.RunAsNonRoot = boolPtr(true)
+			}
+			if pod.SecurityContext.RunAsUser == nil {
+				pod.SecurityContext.RunAsUser = int64Ptr(tenantDefaultUID)
+			}
+			if pod.SecurityContext.RunAsGroup == nil {
+				pod.SecurityContext.RunAsGroup = int64Ptr(tenantDefaultUID)
+			}
+			if pod.SecurityContext.FSGroup == nil {
+				pod.SecurityContext.FSGroup = int64Ptr(tenantDefaultUID)
+			}
 		}
 	}
 
