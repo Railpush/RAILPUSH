@@ -29,7 +29,23 @@ func NewBlueprintHandler(cfg *config.Config, worker *services.Worker) *Blueprint
 }
 
 func (h *BlueprintHandler) ListBlueprints(w http.ResponseWriter, r *http.Request) {
-	bps, err := models.ListBlueprints()
+	userID := middleware.GetUserID(r)
+	wsID := r.URL.Query().Get("workspace_id")
+	if wsID == "" {
+		if ws, err := models.GetWorkspaceByOwner(userID); err == nil && ws != nil {
+			wsID = ws.ID
+		}
+	}
+	if wsID == "" {
+		utils.RespondJSON(w, http.StatusOK, []models.Blueprint{})
+		return
+	}
+	if err := services.EnsureWorkspaceAccess(userID, wsID, models.RoleViewer); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	bps, err := models.ListBlueprintsByWorkspace(wsID)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to list blueprints")
 		return
@@ -41,6 +57,7 @@ func (h *BlueprintHandler) ListBlueprints(w http.ResponseWriter, r *http.Request
 }
 
 func (h *BlueprintHandler) CreateBlueprint(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
 	var bp models.Blueprint
 	if err := json.NewDecoder(r.Body).Decode(&bp); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
@@ -60,13 +77,16 @@ func (h *BlueprintHandler) CreateBlueprint(w http.ResponseWriter, r *http.Reques
 		bp.FilePath = "render.yaml"
 	}
 	if bp.WorkspaceID == "" {
-		userID := middleware.GetUserID(r)
 		ws, err := models.GetWorkspaceByOwner(userID)
 		if err != nil || ws == nil {
 			utils.RespondError(w, http.StatusBadRequest, "no workspace found for user")
 			return
 		}
 		bp.WorkspaceID = ws.ID
+	}
+	if err := services.EnsureWorkspaceAccess(userID, bp.WorkspaceID, models.RoleDeveloper); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
 	}
 	if err := models.CreateBlueprint(&bp); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to create blueprint: "+err.Error())
@@ -89,6 +109,7 @@ type blueprintDetailResponse struct {
 
 func (h *BlueprintHandler) GetBlueprint(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+	userID := middleware.GetUserID(r)
 	bp, err := models.GetBlueprint(id)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "database error")
@@ -96,6 +117,10 @@ func (h *BlueprintHandler) GetBlueprint(w http.ResponseWriter, r *http.Request) 
 	}
 	if bp == nil {
 		utils.RespondError(w, http.StatusNotFound, "blueprint not found")
+		return
+	}
+	if err := services.EnsureWorkspaceAccess(userID, bp.WorkspaceID, models.RoleViewer); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	resources, err := models.ListBlueprintResources(id)
@@ -111,9 +136,14 @@ func (h *BlueprintHandler) GetBlueprint(w http.ResponseWriter, r *http.Request) 
 // SyncBlueprint clones the repo, parses render.yaml, and creates/updates services
 func (h *BlueprintHandler) SyncBlueprint(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+	userID := middleware.GetUserID(r)
 	bp, err := models.GetBlueprint(id)
 	if err != nil || bp == nil {
 		utils.RespondError(w, http.StatusNotFound, "blueprint not found")
+		return
+	}
+	if err := services.EnsureWorkspaceAccess(userID, bp.WorkspaceID, models.RoleDeveloper); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	if err := models.UpdateBlueprintSync(id, "syncing"); err != nil {
@@ -129,11 +159,131 @@ func (h *BlueprintHandler) SyncBlueprint(w http.ResponseWriter, r *http.Request)
 
 func (h *BlueprintHandler) DeleteBlueprint(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+	userID := middleware.GetUserID(r)
+
+	bp, err := models.GetBlueprint(id)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if bp == nil {
+		utils.RespondError(w, http.StatusNotFound, "blueprint not found")
+		return
+	}
+	if err := services.EnsureWorkspaceAccess(userID, bp.WorkspaceID, models.RoleDeveloper); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	resources, err := models.ListBlueprintResources(id)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to load blueprint resources")
+		return
+	}
+
+	// If any linked service is in a protected environment, require admin.
+	adminOK := false
+	for _, br := range resources {
+		if br.ResourceType != "service" || strings.TrimSpace(br.ResourceID) == "" {
+			continue
+		}
+		svc, _ := models.GetService(br.ResourceID)
+		if svc == nil || svc.EnvironmentID == nil || strings.TrimSpace(*svc.EnvironmentID) == "" {
+			continue
+		}
+		env, err := models.GetEnvironment(strings.TrimSpace(*svc.EnvironmentID))
+		if err != nil || env == nil || !env.IsProtected {
+			continue
+		}
+		if !adminOK {
+			if err := services.EnsureWorkspaceAccess(userID, bp.WorkspaceID, models.RoleAdmin); err != nil {
+				utils.RespondError(w, http.StatusForbidden, "admin required to delete blueprints in protected environments")
+				return
+			}
+			adminOK = true
+		}
+	}
+
+	var stripeSvc *services.StripeService
+	if h != nil && h.Config != nil {
+		if s := services.NewStripeService(h.Config); s != nil && s.Enabled() {
+			stripeSvc = s
+		}
+	}
+	var kd *services.KubeDeployer
+	if h != nil && h.Config != nil && h.Config.Kubernetes.Enabled && h.Worker != nil {
+		if k, err := h.Worker.GetKubeDeployer(); err == nil {
+			kd = k
+		}
+	}
+
+	deleted := 0
+	var deleteErrors []string
+
+	// Delete all services linked to this blueprint.
+	for _, br := range resources {
+		if br.ResourceType != "service" || strings.TrimSpace(br.ResourceID) == "" {
+			continue
+		}
+		svcID := strings.TrimSpace(br.ResourceID)
+		svc, _ := models.GetService(svcID)
+		if svc != nil && strings.TrimSpace(svc.WorkspaceID) != "" && svc.WorkspaceID != bp.WorkspaceID {
+			// Safety: never delete cross-workspace resources.
+			continue
+		}
+
+		// Remove from Stripe subscription before deleting.
+		if stripeSvc != nil && svc != nil && strings.TrimSpace(svc.Plan) != "" && strings.ToLower(strings.TrimSpace(svc.Plan)) != services.PlanFree {
+			if err := stripeSvc.RemoveSubscriptionItem("service", svcID); err != nil {
+				log.Printf("Blueprint delete: failed to remove billing for service %s: %v", svcID, err)
+			}
+		}
+
+		// Delete runtime resources (Kubernetes/Docker/Caddy).
+		if kd != nil && svc != nil {
+			_ = kd.DeleteServiceResources(svc)
+		} else if h != nil && h.Worker != nil && svc != nil {
+			if svc.ContainerID != "" && h.Worker.Deployer != nil {
+				h.Worker.Deployer.RemoveContainer(svc.ContainerID)
+			}
+			if instances, err := models.ListServiceInstances(svcID); err == nil {
+				for _, inst := range instances {
+					if inst.ContainerID != "" && h.Worker.Deployer != nil {
+						_ = h.Worker.Deployer.RemoveContainer(inst.ContainerID)
+					}
+				}
+			}
+			_ = models.DeleteServiceInstancesByService(svcID)
+			if h.Config != nil && strings.TrimSpace(h.Config.Deploy.Domain) != "" && h.Config.Deploy.Domain != "localhost" && !h.Config.Deploy.DisableRouter && h.Worker.Router != nil {
+				domain := utils.ServiceHostLabel(svc.Name, svc.Subdomain) + "." + h.Config.Deploy.Domain
+				h.Worker.Router.RemoveRoute(domain)
+			}
+		}
+
+		if err := models.DeleteService(svcID); err != nil {
+			deleteErrors = append(deleteErrors, svcID)
+			continue
+		}
+		_ = models.DeleteBlueprintResource(&br)
+		deleted++
+		services.Audit(bp.WorkspaceID, userID, "blueprint.service_deleted", "service", svcID, map[string]interface{}{
+			"blueprint_id": id,
+		})
+	}
+
+	if len(deleteErrors) > 0 {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to delete one or more services linked to this blueprint")
+		return
+	}
+
 	if err := models.DeleteBlueprint(id); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to delete blueprint")
 		return
 	}
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	services.Audit(bp.WorkspaceID, userID, "blueprint.deleted", "blueprint", id, map[string]interface{}{
+		"deleted_services": deleted,
+	})
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{"status": "deleted", "deleted_services": deleted})
 }
 
 // RenderYAML represents the render.yaml file format

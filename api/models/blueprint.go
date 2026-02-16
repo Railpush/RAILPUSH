@@ -63,6 +63,23 @@ func ListBlueprints() ([]Blueprint, error) {
 	return bps, nil
 }
 
+func ListBlueprintsByWorkspace(workspaceID string) ([]Blueprint, error) {
+	rows, err := database.DB.Query("SELECT "+blueprintSelectCols+" FROM blueprints WHERE workspace_id=$1 ORDER BY created_at DESC", workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var bps []Blueprint
+	for rows.Next() {
+		var b Blueprint
+		if err := rows.Scan(&b.ID, &b.WorkspaceID, &b.Name, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.CreatedAt); err != nil {
+			return nil, err
+		}
+		bps = append(bps, b)
+	}
+	return bps, nil
+}
+
 func DeleteBlueprint(id string) error {
 	_, err := database.DB.Exec("DELETE FROM blueprints WHERE id=$1", id)
 	return err

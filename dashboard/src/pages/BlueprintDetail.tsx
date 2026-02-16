@@ -98,7 +98,11 @@ export function BlueprintDetail() {
 
   const handleDelete = async () => {
     if (!blueprintId) return;
-    if (!confirm('Delete this blueprint? Created resources will not be removed.')) return;
+    const svcCount = resources.filter((r) => r.resource_type === 'service').length;
+    const msg = svcCount > 0
+      ? `Delete this blueprint and ${svcCount} linked service${svcCount === 1 ? '' : 's'}?\n\nServices will be deleted. Databases and key-value stores will remain.`
+      : 'Delete this blueprint?';
+    if (!confirm(msg)) return;
     setDeleting(true);
     try {
       await bpApi.delete(blueprintId);
