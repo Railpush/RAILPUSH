@@ -11,6 +11,61 @@ log() {
   printf "%s %s\n" "$(date -u +%FT%TZ)" "$*"
 }
 
+ensure_kubeconfig() {
+  # kubectl does not always auto-detect in-cluster auth. Generate a minimal kubeconfig
+  # from the mounted ServiceAccount token so this CronJob works reliably.
+  if [ -n "${KUBECONFIG:-}" ] && [ -f "${KUBECONFIG}" ]; then
+    return 0
+  fi
+
+  sa_dir="/var/run/secrets/kubernetes.io/serviceaccount"
+  token_file="${sa_dir}/token"
+  ca_file="${sa_dir}/ca.crt"
+  ns_file="${sa_dir}/namespace"
+
+  if [ ! -f "${token_file}" ] || [ ! -f "${ca_file}" ]; then
+    log "ERROR: serviceaccount token/ca not mounted; cannot talk to Kubernetes API"
+    exit 1
+  fi
+  if [ -z "${KUBERNETES_SERVICE_HOST:-}" ] || [ -z "${KUBERNETES_SERVICE_PORT:-}" ]; then
+    log "ERROR: missing KUBERNETES_SERVICE_HOST/PORT; cannot talk to Kubernetes API"
+    exit 1
+  fi
+
+  kube_ns="${NS}"
+  if [ -f "${ns_file}" ]; then
+    kube_ns="$(cat "${ns_file}" 2>/dev/null || echo "${NS}")"
+  fi
+
+  token="$(cat "${token_file}")"
+  server="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}"
+
+  tmp_cfg="/tmp/kubeconfig"
+  umask 077
+  cat > "${tmp_cfg}" <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+- name: in-cluster
+  cluster:
+    certificate-authority: ${ca_file}
+    server: ${server}
+users:
+- name: sa
+  user:
+    token: ${token}
+contexts:
+- name: default
+  context:
+    cluster: in-cluster
+    user: sa
+    namespace: ${kube_ns}
+current-context: default
+EOF
+
+  export KUBECONFIG="${tmp_cfg}"
+}
+
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
 
 mkdir -p "${ROOT}/postgres" "${ROOT}/redis"
@@ -22,7 +77,7 @@ backup_postgres() {
   "${KUBECTL}" -n "${NS}" get pods \
     -l "app.kubernetes.io/managed-by=railpush,app.kubernetes.io/component=managed-database" \
     -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels["railpush.com/database-id"]}{"\t"}{.metadata.labels["railpush.com/workspace-id"]}{"\n"}{end}' \
-    2>/dev/null || true
+    ;
 }
 
 backup_redis() {
@@ -30,8 +85,10 @@ backup_redis() {
   "${KUBECTL}" -n "${NS}" get pods \
     -l "app.kubernetes.io/managed-by=railpush,app.kubernetes.io/component=managed-keyvalue" \
     -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels["railpush.com/keyvalue-id"]}{"\t"}{.metadata.labels["railpush.com/workspace-id"]}{"\n"}{end}' \
-    2>/dev/null || true
+    ;
 }
+
+ensure_kubeconfig
 
 log "Starting tenant backups (ns=${NS} retention=${RETENTION_DAYS}d)"
 
