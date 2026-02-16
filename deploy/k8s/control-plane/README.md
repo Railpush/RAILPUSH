@@ -52,7 +52,11 @@ sudo k3s kubectl -n railpush create secret generic railpush-secrets \
 ssh cpu
 cd /opt/railpush
 
-sudo k3s kubectl apply -k deploy/k8s/control-plane
+# Production (CNPG cutover): uses `railpush-postgres-cnpg-rw` (TLS required) and does not deploy the legacy Postgres StatefulSet.
+sudo k3s kubectl apply -k deploy/k8s/control-plane-overlays/prod-cnpg-cutover
+
+# (Optional) Legacy "fast MVP" path: deploys a single Postgres StatefulSet named `railpush-postgres`.
+# sudo k3s kubectl apply -k deploy/k8s/control-plane
 sudo k3s kubectl -n railpush rollout status deploy/railpush-control-plane
 sudo k3s kubectl -n railpush get pods -o wide
 ```
