@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, RefreshCw, GitBranch, FileText, Database, Globe, Key, Trash2 } from 'lucide-react';
+import { ArrowLeft, RefreshCw, GitBranch, FileText, Database, Globe, Key, Trash2, Sparkles } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { StatusBadge } from '../components/ui/StatusBadge';
-import { blueprints as bpApi } from '../lib/api';
+import { blueprints as bpApi, settings as settingsApi } from '../lib/api';
 import { timeAgo } from '../lib/utils';
 import { toast } from 'sonner';
 import type { Blueprint, BlueprintResource } from '../types';
@@ -39,6 +39,10 @@ function formatSyncError(syncError: string | null): string | null {
     return 'Billing error. Open Billing > Plans and try syncing again.';
   }
 
+  if (lower === 'yaml_missing_ai_disabled') {
+    return 'No render.yaml found in the repository. Enable Blueprint AI to automatically generate one.';
+  }
+
   // Legacy format: sometimes we stored a JSON-encoded Stripe error blob.
   if (syncError.includes('{"status"') && syncError.includes('"message"')) {
     const m = syncError.match(/"message"\s*:\s*"([^"]+)"/);
@@ -56,6 +60,7 @@ export function BlueprintDetail() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [enablingAI, setEnablingAI] = useState(false);
 
   const load = useCallback(async () => {
     if (!blueprintId) return;
@@ -112,6 +117,26 @@ export function BlueprintDetail() {
       toast.error('Failed to delete blueprint');
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleEnableAIAndSync = async () => {
+    if (!blueprintId) return;
+    setEnablingAI(true);
+    try {
+      const aiStatus = await settingsApi.getBlueprintAI();
+      if (!aiStatus.available) {
+        toast.error('Blueprint AI is not available — OpenRouter is not configured on this server.');
+        return;
+      }
+      await settingsApi.updateBlueprintAI(true);
+      await bpApi.sync(blueprintId);
+      toast.success('Blueprint AI enabled — sync started');
+      setBp((prev) => prev ? { ...prev, last_sync_status: 'syncing' } : prev);
+    } catch {
+      toast.error('Failed to enable Blueprint AI');
+    } finally {
+      setEnablingAI(false);
     }
   };
 
@@ -208,6 +233,12 @@ export function BlueprintDetail() {
                 }}
               >
                 Upgrade
+              </Button>
+            )}
+            {syncError === 'yaml_missing_ai_disabled' && (
+              <Button size="sm" onClick={handleEnableAIAndSync} loading={enablingAI}>
+                <Sparkles className="w-3.5 h-3.5" />
+                Enable Blueprint AI
               </Button>
             )}
           </div>

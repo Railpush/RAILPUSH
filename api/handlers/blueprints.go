@@ -707,12 +707,11 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	data, err := os.ReadFile(yamlPath)
 	repoFileExists := err == nil
 	aiEnabled := h.blueprintAIAutogenEnabled(bp.WorkspaceID)
-	// We normally only autogenerate when the user has enabled Blueprint AI.
-	// However, if the YAML file doesn't exist in the repo, the product UX is that
-	// we can still generate it (when the server has OpenRouter configured) so users
-	// aren't forced to author YAML just to try Blueprints.
-	aiFallbackOnMissing := !repoFileExists && !aiEnabled
-	aiShouldGenerate := (aiEnabled && (!repoFileExists || bp.AIIgnoreRepoYAML)) || aiFallbackOnMissing
+	if !repoFileExists && !aiEnabled {
+		fail("yaml_missing_ai_disabled")
+		return
+	}
+	aiShouldGenerate := aiEnabled && (!repoFileExists || bp.AIIgnoreRepoYAML)
 	if aiShouldGenerate {
 		ai := services.NewBlueprintAIGenerator(h.Config)
 		if !ai.Available() {
