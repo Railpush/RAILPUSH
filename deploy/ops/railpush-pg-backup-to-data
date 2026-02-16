@@ -2,9 +2,12 @@
 set -euo pipefail
 
 NS="${NS:-railpush}"
-POD="${POD:-railpush-postgres-0}"
+CLUSTER="${CLUSTER:-railpush-postgres-cnpg}"
+POD="${POD:-}"
 DB="${DB:-railpush}"
-DB_USER="${DB_USER:-railpush}"
+# CNPG pods use peer auth on the local socket; run pg_dump as the `postgres` OS user.
+DB_USER="${DB_USER:-postgres}"
+CONTAINER="${CONTAINER:-postgres}"
 
 REMOTE_HOST="${REMOTE_HOST:-142.132.255.45}"
 REMOTE_USER="${REMOTE_USER:-railpush-backup}"
@@ -17,6 +20,24 @@ RETENTION_DAYS_REMOTE="${RETENTION_DAYS_REMOTE:-30}"
 
 log() {
   printf "%s %s\n" "$(date -u +%FT%TZ)" "$*"
+}
+
+detect_pod() {
+  # 1) CNPG: read the current primary from the Cluster status (works across failovers).
+  if [ -z "${POD}" ] && kubectl -n "$NS" get cluster.postgresql.cnpg.io "$CLUSTER" >/dev/null 2>&1; then
+    POD="$(kubectl -n "$NS" get cluster.postgresql.cnpg.io "$CLUSTER" -o jsonpath='{.status.currentPrimary}' 2>/dev/null || true)"
+  fi
+
+  # 2) CNPG: fallback to label selector if status is unavailable.
+  if [ -z "${POD}" ]; then
+    POD="$(kubectl -n "$NS" get pods -l "cnpg.io/cluster=${CLUSTER},cnpg.io/instanceRole=primary" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  fi
+
+  # 3) Legacy fallback (pre-CNPG).
+  if [ -z "${POD}" ]; then
+    POD="railpush-postgres-0"
+    log "WARN: unable to detect CNPG primary; falling back to ${NS}/${POD}"
+  fi
 }
 
 mkdir -p "$LOCAL_DIR"
@@ -46,9 +67,11 @@ tmp="${LOCAL_DIR}/${base}.dump.zst.partial"
 out="${LOCAL_DIR}/${base}.dump.zst"
 sha="${out}.sha256"
 
+detect_pod
+
 log "Starting pg_dump (${NS}/${POD} db=${DB})"
 # Use custom format so restores are fast and flexible.
-kubectl -n "$NS" exec "$POD" -- \
+kubectl -n "$NS" exec "$POD" -c "$CONTAINER" -- \
   pg_dump -U "$DB_USER" -d "$DB" --format=custom --no-owner --no-acl \
   | zstd -T0 -6 -q -o "$tmp"
 
