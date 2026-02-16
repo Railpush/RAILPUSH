@@ -154,15 +154,17 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 
 	// Validate and normalize env var keys (required for envFrom).
 	cleanEnv := map[string]string{}
-	for k, v := range env {
-		key := strings.TrimSpace(k)
+	for envKey, v := range env {
+		key := strings.TrimSpace(envKey)
 		if key == "" || !kubeEnvKeyRegex.MatchString(key) {
 			continue
 		}
 		cleanEnv[key] = v
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// This path performs multiple API calls (Secret/Deployment/Service/Ingress/custom domains), so keep a
+	// single reasonably-sized budget rather than a tiny shared 30s timeout that can expire mid-way.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	// Enforce multi-tenant network isolation (best-effort upsert; fails deploy if it can't be applied).

@@ -40,15 +40,16 @@ func (k *KubeDeployer) DeployCronJob(deployID string, svc *models.Service, image
 
 	// Validate and normalize env var keys (required for envFrom).
 	cleanEnv := map[string]string{}
-	for k, v := range env {
-		key := strings.TrimSpace(k)
+	for envKey, v := range env {
+		key := strings.TrimSpace(envKey)
 		if key == "" || !kubeEnvKeyRegex.MatchString(key) {
 			continue
 		}
 		cleanEnv[key] = v
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Deploying a CronJob performs multiple API calls (Secret + CronJob), so avoid a tiny shared timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	// Enforce multi-tenant network isolation (default-deny ingress between workspaces).
