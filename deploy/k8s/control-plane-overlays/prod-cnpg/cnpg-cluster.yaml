@@ -36,6 +36,7 @@ spec:
   # - secretAccessKey
   # - region (for R2 use: auto)
   backup:
+    retentionPolicy: 30d
     barmanObjectStore:
       destinationPath: s3://rail-push/cnpg/railpush-postgres-cnpg
       endpointURL: https://106f5e5b2d14aa8a39b4625ff50bffb8.r2.cloudflarestorage.com
