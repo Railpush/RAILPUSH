@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, RefreshCw, GitBranch, FileText, Database, Globe, Key, Trash2 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
@@ -27,6 +27,27 @@ function resourceLink(r: BlueprintResource): string {
   return `/`;
 }
 
+function formatSyncError(syncError: string | null): string | null {
+  if (!syncError) return null;
+  const lower = syncError.toLowerCase();
+
+  // Hide raw Stripe/internal errors from end-users. Keep it actionable.
+  if (lower.includes('payment method required')) {
+    return 'Payment method required. Add a payment method in Billing, then try syncing again.';
+  }
+  if (lower.startsWith('billing error')) {
+    return 'Billing error. Open Billing > Plans and try syncing again.';
+  }
+
+  // Legacy format: sometimes we stored a JSON-encoded Stripe error blob.
+  if (syncError.includes('{"status"') && syncError.includes('"message"')) {
+    const m = syncError.match(/"message"\s*:\s*"([^"]+)"/);
+    if (m && m[1]) return m[1];
+  }
+
+  return syncError;
+}
+
 export function BlueprintDetail() {
   const { blueprintId } = useParams<{ blueprintId: string }>();
   const navigate = useNavigate();
@@ -36,7 +57,7 @@ export function BlueprintDetail() {
   const [syncing, setSyncing] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!blueprintId) return;
     try {
       const data = await bpApi.get(blueprintId);
@@ -47,16 +68,19 @@ export function BlueprintDetail() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [blueprintId]);
 
-  useEffect(() => { load(); }, [blueprintId]);
+  useEffect(() => {
+    setLoading(true);
+    load();
+  }, [load]);
 
   // Poll while syncing
   useEffect(() => {
     if (bp?.last_sync_status !== 'syncing') return;
     const interval = setInterval(load, 3000);
     return () => clearInterval(interval);
-  }, [bp?.last_sync_status]);
+  }, [bp?.last_sync_status, load]);
 
   const handleSync = async () => {
     if (!blueprintId) return;
@@ -109,26 +133,7 @@ export function BlueprintDetail() {
     ? bp.last_sync_status.substring(bp.last_sync_status.indexOf(': ') + 2)
     : null;
 
-  const syncErrorDisplay = useMemo(() => {
-    if (!syncError) return null;
-    const lower = syncError.toLowerCase();
-
-    // Hide raw Stripe/internal errors from end-users. Keep it actionable.
-    if (lower.includes('payment method required')) {
-      return 'Payment method required. Add a payment method in Billing, then try syncing again.';
-    }
-    if (lower.startsWith('billing error')) {
-      return 'Billing error. Open Billing > Plans and try syncing again.';
-    }
-
-    // Legacy format: sometimes we stored a JSON-encoded Stripe error blob.
-    if (syncError.includes('{"status"') && syncError.includes('"message"')) {
-      const m = syncError.match(/"message"\s*:\s*"([^"]+)"/);
-      if (m && m[1]) return m[1];
-    }
-
-    return syncError;
-  }, [syncError]);
+  const syncErrorDisplay = formatSyncError(syncError);
 
   const syncBadgeStatus = bp.last_sync_status === 'synced' ? 'live'
     : bp.last_sync_status === 'syncing' ? 'building'
