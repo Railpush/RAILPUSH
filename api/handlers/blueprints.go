@@ -599,7 +599,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 						}
 						continue
 					}
-					if err := stripeSvc.AddSubscriptionItem(bc, "service", before.ID, before.Name, beforePlan); err != nil {
+					if err := stripeSvc.AddSubscriptionItem(bc, before.WorkspaceID, "service", before.ID, before.Name, beforePlan); err != nil {
 						log.Printf("Blueprint sync rollback: failed to restore billing for adopted service %s: %v", before.ID, err)
 					}
 				}
@@ -977,7 +977,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				failBilling(err)
 				return
 			}
-			if err := stripeSvc.AddSubscriptionItem(bc, "database", db.ID, db.Name, db.Plan); err != nil {
+			if err := stripeSvc.AddSubscriptionItem(bc, db.WorkspaceID, "database", db.ID, db.Name, db.Plan); err != nil {
 				if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
 					fail("payment method required. Please add a default payment method in billing settings.")
 					return
@@ -1046,7 +1046,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				failBilling(err)
 				return
 			}
-			if err := stripeSvc.AddSubscriptionItem(bc, "keyvalue", kv.ID, kv.Name, kv.Plan); err != nil {
+			if err := stripeSvc.AddSubscriptionItem(bc, kv.WorkspaceID, "keyvalue", kv.ID, kv.Name, kv.Plan); err != nil {
 				if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
 					fail("payment method required. Please add a default payment method in billing settings.")
 					return
@@ -1167,7 +1167,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 					failBilling(err)
 					return
 				}
-				if err := stripeSvc.AddSubscriptionItem(bc, "service", svc.ID, svc.Name, svc.Plan); err != nil {
+				if err := stripeSvc.AddSubscriptionItem(bc, svc.WorkspaceID, "service", svc.ID, svc.Name, svc.Plan); err != nil {
 					if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
 						fail("payment method required. Please add a default payment method in billing settings.")
 						return
@@ -1237,7 +1237,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 						failBilling(err)
 						return
 					}
-					if err := stripeSvc.AddSubscriptionItem(bc, "service", svc.ID, svc.Name, desiredPlan); err != nil {
+					if err := stripeSvc.AddSubscriptionItem(bc, svc.WorkspaceID, "service", svc.ID, svc.Name, desiredPlan); err != nil {
 						if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
 							fail("payment method required. Please add a default payment method in billing settings.")
 							return

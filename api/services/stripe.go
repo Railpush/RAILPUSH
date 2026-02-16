@@ -321,16 +321,71 @@ func (s *StripeService) getDefaultPaymentMethod(bc *models.BillingCustomer) (str
 }
 
 // AddSubscriptionItem adds a resource to the user's subscription. Creates a subscription if one doesn't exist.
-func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, resourceType, resourceID, name, plan string) error {
+// If the workspace has sufficient credits, credits are spent instead of modifying Stripe.
+func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspaceID, resourceType, resourceID, name, plan string) error {
+	if bc == nil || strings.TrimSpace(bc.ID) == "" {
+		return fmt.Errorf("billing customer not found")
+	}
 	// Idempotency: don't double-bill the same resource if a request is retried.
 	if existing, err := models.GetBillingItemByResource(resourceType, resourceID); err != nil {
 		log.Printf("Stripe: failed to query existing billing item resource=%s/%s err=%v", resourceType, resourceID, err)
 		return fmt.Errorf("billing update failed. please try again")
 	} else if existing != nil {
 		if strings.TrimSpace(existing.Plan) != strings.TrimSpace(plan) {
+			// Credit-billed items have no Stripe linkage; update plan using credits if possible.
+			if strings.TrimSpace(existing.StripeSubscriptionItemID) == "" || strings.TrimSpace(existing.StripePriceID) == "" {
+				oldCost := planMonthlyCostCents(existing.Plan)
+				newCost := planMonthlyCostCents(plan)
+				delta := newCost - oldCost
+				if delta > 0 {
+					reason := fmt.Sprintf("billing: %s %s (%s) plan=%s", strings.TrimSpace(resourceType), strings.TrimSpace(name), strings.TrimSpace(resourceID), strings.TrimSpace(plan))
+					spent, _, err := models.TrySpendWorkspaceCredits(workspaceID, delta, reason, bc.UserID)
+					if err != nil {
+						log.Printf("Stripe: failed to spend workspace credits ws=%s resource=%s/%s err=%v", workspaceID, resourceType, resourceID, err)
+						return fmt.Errorf("billing update failed. please try again")
+					}
+					if !spent {
+						return ErrNoDefaultPaymentMethod
+					}
+				}
+				// Persist plan change locally (Stripe IDs remain blank).
+				existing.Plan = plan
+				if err := models.UpdateBillingItem(existing); err != nil {
+					log.Printf("Stripe: failed to update credit billing item resource=%s/%s err=%v", resourceType, resourceID, err)
+					return fmt.Errorf("billing update failed. please try again")
+				}
+				return nil
+			}
 			return s.UpdateSubscriptionItemPlan(resourceType, resourceID, plan)
 		}
 		return nil
+	}
+
+	// Credits: if the workspace has enough balance, spend credits and record the billing item locally.
+	if strings.TrimSpace(workspaceID) != "" {
+		cost := planMonthlyCostCents(plan)
+		if cost > 0 {
+			reason := fmt.Sprintf("billing: %s %s (%s) plan=%s", strings.TrimSpace(resourceType), strings.TrimSpace(name), strings.TrimSpace(resourceID), strings.TrimSpace(plan))
+			if spent, _, err := models.TrySpendWorkspaceCredits(workspaceID, cost, reason, bc.UserID); err != nil {
+				log.Printf("Stripe: failed to spend workspace credits ws=%s resource=%s/%s err=%v", workspaceID, resourceType, resourceID, err)
+				return fmt.Errorf("billing update failed. please try again")
+			} else if spent {
+				bi := &models.BillingItem{
+					BillingCustomerID:        bc.ID,
+					StripeSubscriptionItemID: "",
+					StripePriceID:            "",
+					ResourceType:             resourceType,
+					ResourceID:               resourceID,
+					ResourceName:             name,
+					Plan:                     plan,
+				}
+				if err := models.CreateBillingItem(bi); err != nil {
+					log.Printf("Stripe: failed to save credit billing item resource=%s/%s err=%v", resourceType, resourceID, err)
+					return fmt.Errorf("billing update failed. please try again")
+				}
+				return nil
+			}
+		}
 	}
 
 	priceID := s.PriceIDForPlan(plan)

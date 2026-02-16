@@ -205,10 +205,7 @@ func (h *ServiceHandler) CreateService(w http.ResponseWriter, r *http.Request) {
 			utils.RespondError(w, http.StatusInternalServerError, "billing error: "+err.Error())
 			return
 		}
-		if bc.PaymentMethodLast4 == "" {
-			utils.RespondError(w, http.StatusPaymentRequired, "payment method required. Please add a payment method in billing settings.")
-			return
-		}
+		_ = bc // Payment method is optional when workspace credits cover the charge.
 	}
 
 	if err := models.CreateService(&svc); err != nil {
@@ -222,7 +219,7 @@ func (h *ServiceHandler) CreateService(w http.ResponseWriter, r *http.Request) {
 		if user != nil {
 			bc, _ := models.GetBillingCustomerByUserID(userID)
 			if bc != nil {
-				if err := h.Stripe.AddSubscriptionItem(bc, "service", svc.ID, svc.Name, svc.Plan); err != nil {
+				if err := h.Stripe.AddSubscriptionItem(bc, svc.WorkspaceID, "service", svc.ID, svc.Name, svc.Plan); err != nil {
 					log.Printf("Warning: failed to add billing for service %s: %v", svc.ID, err)
 					// Rollback: delete the service
 					models.DeleteService(svc.ID)
@@ -443,7 +440,7 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 				utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
 				return
 			}
-			if err := h.Stripe.AddSubscriptionItem(bc, "service", svc.ID, svc.Name, newPlanEffective); err != nil {
+			if err := h.Stripe.AddSubscriptionItem(bc, svc.WorkspaceID, "service", svc.ID, svc.Name, newPlanEffective); err != nil {
 				if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
 					utils.RespondError(w, http.StatusPaymentRequired, "payment method required. Please add a default payment method in billing settings.")
 					return

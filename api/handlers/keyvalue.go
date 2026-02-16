@@ -114,10 +114,7 @@ func (h *KeyValueHandler) CreateKeyValue(w http.ResponseWriter, r *http.Request)
 			utils.RespondError(w, http.StatusInternalServerError, "billing error: "+err.Error())
 			return
 		}
-		if bc.PaymentMethodLast4 == "" {
-			utils.RespondError(w, http.StatusPaymentRequired, "payment method required. Please add a payment method in billing settings.")
-			return
-		}
+		_ = bc // Payment method is optional when workspace credits cover the charge.
 	}
 
 	pw, _ := utils.GenerateRandomString(16)
@@ -140,7 +137,7 @@ func (h *KeyValueHandler) CreateKeyValue(w http.ResponseWriter, r *http.Request)
 	if kv.Plan != "free" && h.Stripe.Enabled() {
 		bc, _ := models.GetBillingCustomerByUserID(userID)
 		if bc != nil {
-			if err := h.Stripe.AddSubscriptionItem(bc, "keyvalue", kv.ID, kv.Name, kv.Plan); err != nil {
+			if err := h.Stripe.AddSubscriptionItem(bc, kv.WorkspaceID, "keyvalue", kv.ID, kv.Name, kv.Plan); err != nil {
 				log.Printf("Warning: failed to add billing for key-value %s: %v", kv.ID, err)
 				models.DeleteManagedKeyValue(kv.ID)
 				if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
@@ -278,7 +275,7 @@ func (h *KeyValueHandler) UpdateKeyValue(w http.ResponseWriter, r *http.Request)
 				utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
 				return
 			}
-			if err := h.Stripe.AddSubscriptionItem(bc, "keyvalue", kv.ID, kv.Name, desiredPlan); err != nil {
+			if err := h.Stripe.AddSubscriptionItem(bc, kv.WorkspaceID, "keyvalue", kv.ID, kv.Name, desiredPlan); err != nil {
 				if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
 					utils.RespondError(w, http.StatusPaymentRequired, "payment method required. Please add a default payment method in billing settings.")
 					return

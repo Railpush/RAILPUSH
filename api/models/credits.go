@@ -1,6 +1,8 @@
 package models
 
 import (
+	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 
@@ -65,4 +67,66 @@ func GetWorkspaceCreditBalanceCents(workspaceID string) (int64, error) {
 		return 0, err
 	}
 	return balance, nil
+}
+
+// TrySpendWorkspaceCredits atomically deducts credits from a workspace if sufficient balance exists.
+// Returns (spent, resultingBalanceCents, error).
+//
+// Concurrency: we take a row lock on the workspace to prevent double-spends from concurrent requests.
+func TrySpendWorkspaceCredits(workspaceID string, amountCents int64, reason string, createdBy string) (bool, int64, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	reason = strings.TrimSpace(reason)
+	createdBy = strings.TrimSpace(createdBy)
+
+	if workspaceID == "" || amountCents <= 0 {
+		return false, 0, nil
+	}
+	// workspace_credit_ledger.amount_cents is INT.
+	if amountCents > 2147483647 {
+		return false, 0, fmt.Errorf("credit amount too large")
+	}
+
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return false, 0, err
+	}
+	defer tx.Rollback()
+
+	// Lock the workspace row to serialize credit spends.
+	var lockedID string
+	if err := tx.QueryRow("SELECT id::text FROM workspaces WHERE id=$1 FOR UPDATE", workspaceID).Scan(&lockedID); err != nil {
+		if err == sql.ErrNoRows {
+			return false, 0, fmt.Errorf("workspace not found")
+		}
+		return false, 0, err
+	}
+
+	var balance int64
+	if err := tx.QueryRow(
+		"SELECT COALESCE(SUM(amount_cents),0) FROM workspace_credit_ledger WHERE workspace_id=$1",
+		workspaceID,
+	).Scan(&balance); err != nil {
+		return false, 0, err
+	}
+
+	if balance < amountCents {
+		return false, balance, nil
+	}
+
+	// Insert negative adjustment.
+	var entryID string
+	var createdAt time.Time
+	if err := tx.QueryRow(
+		`INSERT INTO workspace_credit_ledger (workspace_id, amount_cents, reason, created_by)
+		 VALUES ($1, $2, COALESCE(NULLIF($3,''), ''), NULLIF($4,'')::uuid)
+		 RETURNING id::text, created_at`,
+		workspaceID, -int(amountCents), reason, createdBy,
+	).Scan(&entryID, &createdAt); err != nil {
+		return false, 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, 0, err
+	}
+	return true, balance - amountCents, nil
 }

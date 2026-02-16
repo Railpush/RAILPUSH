@@ -117,10 +117,7 @@ func (h *DatabaseHandler) CreateDatabase(w http.ResponseWriter, r *http.Request)
 			utils.RespondError(w, http.StatusInternalServerError, "billing error: "+err.Error())
 			return
 		}
-		if bc.PaymentMethodLast4 == "" {
-			utils.RespondError(w, http.StatusPaymentRequired, "payment method required. Please add a payment method in billing settings.")
-			return
-		}
+		_ = bc // Payment method is optional when workspace credits cover the charge.
 	}
 
 	// Generate and encrypt the password
@@ -144,7 +141,7 @@ func (h *DatabaseHandler) CreateDatabase(w http.ResponseWriter, r *http.Request)
 	if db.Plan != "free" && h.Stripe.Enabled() {
 		bc, _ := models.GetBillingCustomerByUserID(userID)
 		if bc != nil {
-			if err := h.Stripe.AddSubscriptionItem(bc, "database", db.ID, db.Name, db.Plan); err != nil {
+			if err := h.Stripe.AddSubscriptionItem(bc, db.WorkspaceID, "database", db.ID, db.Name, db.Plan); err != nil {
 				log.Printf("Warning: failed to add billing for database %s: %v", db.ID, err)
 				models.DeleteManagedDatabase(db.ID)
 				if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
@@ -290,7 +287,7 @@ func (h *DatabaseHandler) UpdateDatabase(w http.ResponseWriter, r *http.Request)
 				utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
 				return
 			}
-			if err := h.Stripe.AddSubscriptionItem(bc, "database", db.ID, db.Name, desiredPlan); err != nil {
+			if err := h.Stripe.AddSubscriptionItem(bc, db.WorkspaceID, "database", db.ID, db.Name, desiredPlan); err != nil {
 				if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
 					utils.RespondError(w, http.StatusPaymentRequired, "payment method required. Please add a default payment method in billing settings.")
 					return
