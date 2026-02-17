@@ -66,17 +66,18 @@ function OpsPanel({ collapsed, children }: { collapsed?: boolean; children: Reac
   return (
     <div
       className={cn(
-        'mt-4 rounded-xl border border-border-default/70 bg-surface-primary/30 p-2 relative overflow-hidden',
-        'before:absolute before:inset-0 before:pointer-events-none before:opacity-40 before:bg-[radial-gradient(circle_at_30%_-20%,rgba(59,130,246,0.22),transparent_55%)]'
+        'mt-4 rounded-xl border border-brand/10 bg-surface-tertiary/20 p-2 relative overflow-hidden',
+        "before:content-[''] before:absolute before:inset-0 before:pointer-events-none before:bg-[radial-gradient(circle_at_30%_-20%,rgba(59,130,246,0.14),transparent_60%)] before:opacity-90",
+        "after:content-[''] after:absolute after:inset-x-0 after:top-0 after:h-px after:bg-gradient-to-r after:from-transparent after:via-brand/25 after:to-transparent after:opacity-80"
       )}
     >
       <div className="relative">
         <div className={cn('flex items-center gap-2 px-2 pt-2 pb-1', collapsed && 'justify-center px-0')}>
-          <ShieldCheck className="w-4 h-4 text-content-tertiary" />
+          <ShieldCheck className="w-4 h-4 text-brand/70" />
           {!collapsed && (
             <>
               <span className="text-[10px] font-bold uppercase tracking-widest text-content-tertiary">Ops Mode</span>
-              <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full border border-border-default/80 bg-surface-secondary/70 text-content-tertiary">
+              <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full border border-brand/15 bg-brand/5 text-brand/80">
                 Restricted
               </span>
             </>
