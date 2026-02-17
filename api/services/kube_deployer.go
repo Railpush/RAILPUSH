@@ -764,14 +764,72 @@ func (k *KubeDeployer) WaitForServiceReady(deploymentName string, svc *models.Se
 										return fmt.Errorf("service pod is crashing: missing required environment variable %s (set it in Environment Variables and redeploy)", strings.TrimSpace(m[1]))
 									}
 								}
-								// Otherwise, keep the last non-empty line as a hint.
-								for i := len(lines) - 1; i >= 0; i-- {
-									ln := strings.TrimSpace(lines[i])
-									if ln == "" {
+
+								// Otherwise, try to pick a useful error line (avoid noisy tails like "Node.js vX.Y.Z").
+								isNoise := func(s string) bool {
+									if s == "" {
+										return true
+									}
+									if strings.HasPrefix(s, "Node.js v") {
+										return true
+									}
+									if s == "}" || s == "{" || s == ")" || s == "(" {
+										return true
+									}
+									// Common stack trace frames (Node, Go, etc).
+									if strings.HasPrefix(s, "at ") || strings.HasPrefix(s, "    at ") {
+										return true
+									}
+									return false
+								}
+								looksLikeError := func(s string) bool {
+									l := strings.ToLower(s)
+									if strings.HasPrefix(s, "Error:") {
+										return true
+									}
+									if strings.Contains(l, "cannot find module") {
+										return true
+									}
+									if strings.Contains(l, "missing script:") {
+										return true
+									}
+									if strings.Contains(l, "module_not_found") || strings.Contains(l, "err_module_not_found") {
+										return true
+									}
+									if strings.Contains(l, "panic:") || strings.Contains(l, "fatal") || strings.Contains(l, "exception") {
+										return true
+									}
+									// Python/Node stack heads; the actual error is usually near the bottom.
+									if strings.Contains(l, "traceback (most recent call last)") {
+										return true
+									}
+									return false
+								}
+
+								candidates := []string{}
+								for _, ln := range lines {
+									t := strings.TrimSpace(ln)
+									if t == "" || isNoise(t) {
 										continue
 									}
-									detail = ln
-									break
+									if looksLikeError(t) {
+										candidates = append(candidates, t)
+									}
+								}
+								if len(candidates) > 0 {
+									detail = candidates[len(candidates)-1]
+								} else {
+									for i := len(lines) - 1; i >= 0; i-- {
+										t := strings.TrimSpace(lines[i])
+										if t == "" || isNoise(t) {
+											continue
+										}
+										detail = t
+										break
+									}
+								}
+								if len(detail) > 420 {
+									detail = detail[:420] + "…"
 								}
 							}
 						}

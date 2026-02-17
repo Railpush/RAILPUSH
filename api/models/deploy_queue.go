@@ -78,7 +78,7 @@ func ClaimExpiredDeploys(owner string, limit int, leaseSeconds int, maxAttempts 
 	rows, err := tx.Query(
 		`SELECT id, service_id, COALESCE(trigger,''), COALESCE(status,'pending'),
 		        COALESCE(commit_sha,''), COALESCE(commit_message,''), COALESCE(branch,''),
-		        COALESCE(image_tag,''), COALESCE(build_log,''), started_at, finished_at, created_by
+		        COALESCE(image_tag,''), COALESCE(build_log,''), COALESCE(dockerfile_override,''), started_at, finished_at, created_by
 		   FROM deploys
 		  WHERE status IN ('pending','building','deploying')
 		    AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
@@ -97,7 +97,7 @@ func ClaimExpiredDeploys(owner string, limit int, leaseSeconds int, maxAttempts 
 	ids := []string{}
 	for rows.Next() {
 		var d Deploy
-		if err := rows.Scan(&d.ID, &d.ServiceID, &d.Trigger, &d.Status, &d.CommitSHA, &d.CommitMessage, &d.Branch, &d.ImageTag, &d.BuildLog, &d.StartedAt, &d.FinishedAt, &d.CreatedBy); err != nil {
+		if err := rows.Scan(&d.ID, &d.ServiceID, &d.Trigger, &d.Status, &d.CommitSHA, &d.CommitMessage, &d.Branch, &d.ImageTag, &d.BuildLog, &d.DockerfileOverride, &d.StartedAt, &d.FinishedAt, &d.CreatedBy); err != nil {
 			return nil, err
 		}
 		deploys = append(deploys, d)

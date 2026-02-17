@@ -210,10 +210,22 @@ if [ "$RUNTIME" = "static" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
     fi
   fi
 
+  # If the build command uses yarn/pnpm, ensure the base image has shims available.
+  # Node images ship corepack, but it is not enabled by default.
+  NEEDS_COREPACK="0"
+  if [ -n "$BUILD_COMMAND" ]; then
+    if echo "$BUILD_COMMAND" | grep -Eq '(^|[[:space:];&|])(yarn|pnpm)([[:space:];&|]|$)'; then
+      NEEDS_COREPACK="1"
+    fi
+  fi
+
   {
     printf '%s\n' "FROM node:20-alpine AS build"
     printf '%s\n' "WORKDIR /app"
     printf '%s\n' "COPY . ."
+    if [ "$NEEDS_COREPACK" = "1" ]; then
+      printf '%s\n' "RUN corepack enable"
+    fi
     if [ "$NEEDS_INSTALL" = "1" ]; then
       printf '%s\n' "RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi"
     fi
@@ -246,11 +258,22 @@ if [ "$RUNTIME" = "node" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
     fi
   fi
 
+  # If the build command uses yarn/pnpm, ensure the base image has shims available.
+  NEEDS_COREPACK="0"
+  if [ -n "$BUILD_COMMAND" ]; then
+    if echo "$BUILD_COMMAND" | grep -Eq '(^|[[:space:];&|])(yarn|pnpm)([[:space:];&|]|$)'; then
+      NEEDS_COREPACK="1"
+    fi
+  fi
+
   {
     printf '%s\n' "FROM node:20-alpine"
     printf '%s\n' "WORKDIR /app"
     printf '%s\n' "COPY . ."
     printf '%s\n' "RUN rm -rf .git"
+    if [ "$NEEDS_COREPACK" = "1" ]; then
+      printf '%s\n' "RUN corepack enable"
+    fi
     if [ "$NEEDS_INSTALL" = "1" ]; then
       printf '%s\n' "RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi"
     fi
