@@ -218,7 +218,7 @@ export function Billing() {
   const [overview, setOverview] = useState<BillingOverview | null>(null);
   const [billingEmail, setBillingEmail] = useState('');
   const [loading, setLoading] = useState(true);
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string> | null>(null);
   const [promoCode, setPromoCode] = useState('');
 
   useEffect(() => {
@@ -305,18 +305,33 @@ export function Billing() {
       .sort((a, b) => b.total - a.total);
   }, [paidItems]);
 
-  const allGroupKeys = groupedCharges.map((group) => group.key);
+  const allGroupKeys = useMemo(() => groupedCharges.map((group) => group.key), [groupedCharges]);
+  const allGroupKeysSignature = useMemo(() => allGroupKeys.join('|'), [allGroupKeys]);
+  const effectiveCollapsedGroups = useMemo(
+    () => collapsedGroups ?? new Set(allGroupKeys),
+    [collapsedGroups, allGroupKeysSignature],
+  );
 
   useEffect(() => {
+    // Collapse all groups by default once they load, and prune removed keys if the list changes.
     setCollapsedGroups((prev) => {
+      if (prev === null) {
+        if (allGroupKeys.length === 0) return prev;
+        return new Set(allGroupKeys);
+      }
       if (prev.size === 0) return prev;
+
+      const valid = new Set(allGroupKeys);
+      let changed = false;
       const next = new Set<string>();
       prev.forEach((key) => {
-        if (allGroupKeys.includes(key)) next.add(key);
+        if (valid.has(key)) next.add(key);
+        else changed = true;
       });
+      if (!changed) return prev;
       return next;
     });
-  }, [allGroupKeys]);
+  }, [allGroupKeysSignature]);
 
   const handleAddPaymentMethod = async () => {
     try {
@@ -572,14 +587,15 @@ export function Billing() {
               ) : (
                 <div className="space-y-2">
                   {groupedCharges.map((group) => {
-                    const isOpen = !collapsedGroups.has(group.key);
+                    const isOpen = !effectiveCollapsedGroups.has(group.key);
                     return (
                       <div key={group.key} className="border border-border-default/50 rounded-lg overflow-hidden bg-surface-tertiary/10">
                         <button
                           type="button"
                           onClick={() => {
                             setCollapsedGroups((prev) => {
-                              const next = new Set(prev);
+                              const current = prev ?? new Set(allGroupKeys);
+                              const next = new Set(current);
                               if (next.has(group.key)) next.delete(group.key);
                               else next.add(group.key);
                               return next;
