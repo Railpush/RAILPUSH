@@ -1,14 +1,22 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Search, Server, Database, Key, Activity, ArrowUpRight, Zap } from 'lucide-react';
+import { Plus, Search, Server, Database, Key, Activity, ArrowUpRight, Zap, FolderKanban } from 'lucide-react';
 import { ServiceIcon } from '../components/ui/ServiceIcon';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { serviceTypeLabel, timeAgo } from '../lib/utils';
-import type { Service, ManagedDatabase, ManagedKeyValue, ServiceStatus, DeployStatus } from '../types';
-import { services as servicesApi, databases as dbApi, keyvalue as kvApi } from '../lib/api';
+import type { Service, ManagedDatabase, ManagedKeyValue, ServiceStatus, DeployStatus, Project } from '../types';
+import { services as servicesApi, databases as dbApi, keyvalue as kvApi, projects as projectsApi } from '../lib/api';
+
+function isSuspendedService(svc: Service): boolean {
+  return Boolean(svc.is_suspended) || svc.status === 'suspended';
+}
+
+function effectiveServiceStatus(svc: Service): ServiceStatus {
+  return isSuspendedService(svc) ? 'suspended' : svc.status;
+}
 
 export type DashboardScope =
   | 'all'
@@ -72,6 +80,7 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
   const [serviceList, setServiceList] = useState<Service[]>([]);
   const [dbList, setDbList] = useState<ManagedDatabase[]>([]);
   const [kvList, setKvList] = useState<ManagedKeyValue[]>([]);
+  const [projectList, setProjectList] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'suspended'>('all');
@@ -82,57 +91,142 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
       servicesApi.list().catch(() => []),
       dbApi.list().catch(() => []),
       kvApi.list().catch(() => []),
-    ]).then(([s, d, k]) => {
+      projectsApi.list().catch(() => []),
+    ]).then(([s, d, k, p]) => {
       setServiceList(s);
       setDbList(d);
       setKvList(k);
+      setProjectList(p);
       setLoading(false);
     });
-  }, [scope]);
+	  }, [scope]);
 
-  const serviceSearch = search.toLowerCase();
-  const filteredServices = useMemo(
-    () => serviceList.filter((s) => s.name.toLowerCase().includes(serviceSearch)),
-    [serviceList, serviceSearch]
-  );
-  const filteredByStatus = filteredServices.filter((s) => {
-    if (statusFilter === 'all') return true;
-    if (statusFilter === 'suspended') return s.status === 'suspended';
-    return s.status !== 'suspended';
-  });
-  const filteredDatabases = useMemo(
-    () => dbList.filter((d) => d.name.toLowerCase().includes(serviceSearch)),
-    [dbList, serviceSearch]
-  );
+	  const query = search.trim().toLowerCase();
+
+	  const serviceType = scope in SERVICE_SCOPE_MAP ? SERVICE_SCOPE_MAP[scope as ServiceScope] : null;
+	  const servicesInScope = useMemo(() => {
+	    if (scope === 'all') return serviceList;
+    if (serviceType) return serviceList.filter((s) => s.type === serviceType);
+    return [];
+  }, [serviceList, scope, serviceType]);
+
+	  const filteredServices = useMemo(
+	    () => servicesInScope.filter((s) => s.name.toLowerCase().includes(query)),
+	    [servicesInScope, query]
+	  );
+	  const filteredByStatus = useMemo(() => filteredServices.filter((s) => {
+	    if (statusFilter === 'all') return true;
+	    if (statusFilter === 'suspended') return isSuspendedService(s);
+	    return !isSuspendedService(s);
+	  }), [filteredServices, statusFilter]);
+	  const filteredDatabases = useMemo(
+	    () => dbList.filter((d) => d.name.toLowerCase().includes(query)),
+	    [dbList, query]
+	  );
   const filteredKeyValue = useMemo(
-    () => kvList.filter((k) => k.name.toLowerCase().includes(serviceSearch)),
-    [kvList, serviceSearch]
+    () => kvList.filter((k) => k.name.toLowerCase().includes(query)),
+    [kvList, query]
   );
 
-  const serviceType = scope in SERVICE_SCOPE_MAP ? SERVICE_SCOPE_MAP[scope as ServiceScope] : null;
-  const scopedServices = serviceType ? filteredServices.filter((s) => s.type === serviceType) : [];
+  const scopedServices = serviceType ? servicesInScope : [];
 
   const pageTitle = TITLE_BY_SCOPE[scope];
   const createPath = CREATE_ROUTE_BY_SCOPE[scope];
   const createLabel = CREATE_LABEL_BY_SCOPE[scope];
 
-  const allEmpty = serviceList.length === 0 && dbList.length === 0 && kvList.length === 0;
+	  const allEmpty = serviceList.length === 0 && dbList.length === 0 && kvList.length === 0 && projectList.length === 0;
 
-  // Logic to determine if we show search bar
-  const shouldShowSearch =
-    scope === 'all'
-      ? serviceList.length > 3 || dbList.length > 3 || kvList.length > 3
+	  const hasProjects = scope === 'all' && projectList.length > 0;
+	  const projectIDs = useMemo(() => new Set(projectList.map((p) => p.id)), [projectList]);
+
+	  const servicesByProjectID = useMemo(() => {
+	    const out = new Map<string, Service[]>();
+	    for (const svc of serviceList) {
+	      if (!svc.project_id) continue;
+	      const key = svc.project_id;
+	      const list = out.get(key) || [];
+	      list.push(svc);
+	      out.set(key, list);
+	    }
+	    for (const [, list] of out) {
+	      list.sort((a, b) => {
+	        const ta = new Date(a.updated_at || a.created_at).getTime();
+	        const tb = new Date(b.updated_at || b.created_at).getTime();
+	        return tb - ta;
+	      });
+	    }
+	    return out;
+	  }, [serviceList]);
+
+	  const projectCards = useMemo(() => {
+	    if (!hasProjects) return [];
+	    const q = query;
+	    const out: Array<{ project: Project; services: Service[]; servicesForDisplay: Service[]; lastTouchedAt?: string }> = [];
+
+	    for (const project of projectList) {
+	      const services = servicesByProjectID.get(project.id) || [];
+	      const nameMatch = q !== '' && (project.name || '').toLowerCase().includes(q);
+	      const matching = q === '' ? services : services.filter((svc) => svc.name.toLowerCase().includes(q));
+
+	      if (q !== '' && !nameMatch && matching.length === 0) {
+	        continue;
+	      }
+
+	      const servicesForDisplay = nameMatch || q === '' ? services : matching;
+	      const lastTouchedAt = services.reduce((best: string | undefined, svc) => {
+	        const t = svc.updated_at || svc.created_at;
+	        if (!t) return best;
+	        if (!best) return t;
+	        return new Date(t).getTime() > new Date(best).getTime() ? t : best;
+	      }, undefined);
+
+	      out.push({ project, services, servicesForDisplay, lastTouchedAt });
+	    }
+
+	    out.sort((a, b) => {
+	      const ta = a.lastTouchedAt ? new Date(a.lastTouchedAt).getTime() : new Date(a.project.created_at).getTime();
+	      const tb = b.lastTouchedAt ? new Date(b.lastTouchedAt).getTime() : new Date(b.project.created_at).getTime();
+	      if (tb !== ta) return tb - ta;
+	      return (a.project.name || '').localeCompare(b.project.name || '');
+	    });
+
+	    return out;
+	  }, [hasProjects, projectList, servicesByProjectID, query]);
+
+	  const standaloneServicesAll = useMemo(() => {
+	    if (!hasProjects) return [];
+	    return serviceList.filter((svc) => !svc.project_id || !projectIDs.has(svc.project_id));
+	  }, [hasProjects, projectIDs, serviceList]);
+
+	  const filteredStandaloneServices = useMemo(() => {
+	    if (!hasProjects) return [];
+	    return standaloneServicesAll.filter((svc) => svc.name.toLowerCase().includes(query));
+	  }, [hasProjects, standaloneServicesAll, query]);
+
+	  const filteredStandaloneByStatus = useMemo(() => {
+	    if (!hasProjects) return [];
+	    return filteredStandaloneServices.filter((svc) => {
+	      if (statusFilter === 'all') return true;
+	      if (statusFilter === 'suspended') return isSuspendedService(svc);
+	      return !isSuspendedService(svc);
+	    });
+	  }, [filteredStandaloneServices, statusFilter]);
+
+	  // Logic to determine if we show search bar
+	  const shouldShowSearch =
+	    scope === 'all'
+	      ? serviceList.length > 3 || dbList.length > 3 || kvList.length > 3 || projectList.length > 3
       : scope === 'postgres'
         ? dbList.length > 3
         : scope === 'keyvalue'
           ? kvList.length > 3
           : scopedServices.length > 3;
 
-  if (loading) {
-    return (
-      <div className="space-y-8 animate-pulse">
-        <div className="flex items-center justify-between">
-          <div className="h-8 w-48 bg-surface-tertiary rounded-md" />
+	  if (loading) {
+	    return (
+	      <div className="space-y-8 animate-pulse">
+	        <div className="flex items-center justify-between">
+	          <div className="h-8 w-48 bg-surface-tertiary rounded-md" />
           <div className="h-10 w-32 bg-surface-tertiary rounded-md" />
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -142,12 +236,12 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
         </div>
         <div className="h-[400px] bg-surface-tertiary rounded-xl" />
       </div>
-    );
-  }
+	    );
+	  }
 
-  // Calculate stats
-  const activeServices = serviceList.filter(s => s.status !== 'suspended').length;
-  const healthyServices = serviceList.filter(s => s.status === 'live').length;
+	  // Calculate stats
+	  const activeServices = serviceList.filter(s => s.status !== 'suspended').length;
+	  const healthyServices = serviceList.filter(s => s.status === 'live').length;
 
   return (
     <div className="space-y-8 pb-10">
@@ -222,17 +316,49 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
             </div>
           )}
 
-          {/* Main Services Table */}
-          {(scope === 'all' || serviceType) && serviceList.length > 0 && (
-            <div className="space-y-4 animate-enter animate-enter-delay-2">
-              <div className="flex items-center justify-between px-1">
-                <h2 className="text-sm font-bold uppercase tracking-wider text-content-tertiary">
-                  {scope === 'all' ? 'Active Services' : TITLE_BY_SCOPE[scope]}
-                </h2>
+	          {/* Main Services Table */}
+	          {scope === 'all' && hasProjects && (
+	            <div className="space-y-4 animate-enter animate-enter-delay-2">
+	              <div className="flex items-center justify-between px-1">
+	                <h2 className="text-sm font-bold uppercase tracking-wider text-content-tertiary">Projects</h2>
+	                <Button variant="ghost" size="sm" onClick={() => navigate('/projects')} className="text-xs">
+	                  View All <ArrowUpRight className="w-3 h-3 ml-1" />
+	                </Button>
+	              </div>
 
-                {/* Filter Tabs */}
-                <div className="flex items-center p-1 bg-surface-tertiary/50 rounded-lg border border-border-default/50">
-                  {(['all', 'active', 'suspended'] as const).map((f) => (
+	              {projectCards.length === 0 ? (
+	                <Card className="py-10 text-center text-sm text-content-secondary">
+	                  No projects match your search.
+	                </Card>
+	              ) : (
+	                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+	                  {projectCards.map(({ project, services, servicesForDisplay, lastTouchedAt }) => (
+	                    <ProjectCard
+	                      key={project.id}
+	                      project={project}
+	                      services={services}
+	                      servicesForDisplay={servicesForDisplay}
+	                      lastTouchedAt={lastTouchedAt}
+	                      onClick={() => navigate(`/projects/${project.id}`)}
+	                    />
+	                  ))}
+	                </div>
+	              )}
+	            </div>
+	          )}
+
+	          {(scope === 'all' || serviceType) && (hasProjects ? standaloneServicesAll.length > 0 : serviceList.length > 0) && (
+	            <div className="space-y-4 animate-enter animate-enter-delay-2">
+	              <div className="flex items-center justify-between px-1">
+	                <h2 className="text-sm font-bold uppercase tracking-wider text-content-tertiary">
+	                  {scope === 'all'
+	                    ? (hasProjects ? 'Standalone Services' : 'Active Services')
+	                    : TITLE_BY_SCOPE[scope]}
+	                </h2>
+
+	                {/* Filter Tabs */}
+	                <div className="flex items-center p-1 bg-surface-tertiary/50 rounded-lg border border-border-default/50">
+	                  {(['all', 'active', 'suspended'] as const).map((f) => (
                     <button
                       key={f}
                       onClick={() => setStatusFilter(f)}
@@ -247,11 +373,11 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
                 </div>
               </div>
 
-              <Card className="p-0 overflow-hidden shadow-lg shadow-black/20">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm">
-                    <thead>
-                      <tr className="border-b border-border-default bg-surface-tertiary/30 text-content-tertiary text-xs uppercase tracking-wider font-semibold">
+	              <Card className="p-0 overflow-hidden shadow-lg shadow-black/20">
+	                <div className="overflow-x-auto">
+	                  <table className="w-full text-left text-sm">
+	                    <thead>
+	                      <tr className="border-b border-border-default bg-surface-tertiary/30 text-content-tertiary text-xs uppercase tracking-wider font-semibold">
                         <th className="px-6 py-3">Name</th>
                         <th className="px-6 py-3">Status</th>
                         <th className="px-6 py-3">Type</th>
@@ -259,20 +385,20 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
                         <th className="px-6 py-3 text-right">Updated</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-border-default/40">
-                      {filteredByStatus.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="px-6 py-8 text-center text-content-secondary">
-                            No services match your filters.
-                          </td>
-                        </tr>
-                      ) : (
-                        filteredByStatus.map((service) => (
-                          <tr
-                            key={service.id}
-                            onClick={() => navigate(`/services/${service.id}`)}
-                            className="group hover:bg-surface-tertiary/40 transition-colors cursor-pointer"
-                          >
+	                    <tbody className="divide-y divide-border-default/40">
+	                      {(hasProjects ? filteredStandaloneByStatus : filteredByStatus).length === 0 ? (
+	                        <tr>
+	                          <td colSpan={5} className="px-6 py-8 text-center text-content-secondary">
+	                            No services match your filters.
+	                          </td>
+	                        </tr>
+		                      ) : (
+		                        (hasProjects ? filteredStandaloneByStatus : filteredByStatus).map((service) => (
+		                          <tr
+		                            key={service.id}
+	                            onClick={() => navigate(`/services/${service.id}`)}
+	                            className="group hover:bg-surface-tertiary/40 transition-colors cursor-pointer"
+	                          >
                             <td className="px-6 py-4">
                               <div className="flex items-center gap-3">
                                 <div className="p-2 rounded-lg bg-surface-tertiary ring-1 ring-border-default group-hover:ring-brand/30 transition-all">
@@ -286,12 +412,12 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
                                 </div>
                               </div>
                             </td>
-                            <td className="px-6 py-4">
-                              <StatusBadge status={service.status} />
-                            </td>
-                            <td className="px-6 py-4 text-content-secondary">
-                              {serviceTypeLabel(service.type)}
-                            </td>
+		                            <td className="px-6 py-4">
+		                              <StatusBadge status={effectiveServiceStatus(service)} />
+		                            </td>
+		                            <td className="px-6 py-4 text-content-secondary">
+		                              {serviceTypeLabel(service.type)}
+		                            </td>
                             <td className="px-6 py-4">
                               <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-surface-tertiary/80 border border-border-subtle text-xs font-medium text-content-secondary group-hover:border-brand/20 transition-colors">
                                 <Zap className="w-3 h-3 text-amber-400" />
@@ -302,14 +428,14 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
                               {timeAgo(service.updated_at || service.created_at)}
                             </td>
                           </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </Card>
-            </div>
-          )}
+	                        ))
+	                      )}
+	                    </tbody>
+	                  </table>
+	                </div>
+	              </Card>
+	            </div>
+	          )}
 
           {/* Databases Section */}
           {(scope === 'all' || scope === 'postgres') && filteredDatabases.length > 0 && (
@@ -372,6 +498,101 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
 }
 
 // Subcomponents
+
+type ProjectCardProps = {
+  project: Project;
+  services: Service[];
+  servicesForDisplay: Service[];
+  lastTouchedAt?: string;
+  onClick?: () => void;
+};
+
+function ProjectCard({ project, services, servicesForDisplay, lastTouchedAt, onClick }: ProjectCardProps) {
+  const total = services.length;
+  const suspended = services.filter((svc) => isSuspendedService(svc)).length;
+  const active = services.filter((svc) => !isSuspendedService(svc) && svc.status !== 'deactivated').length;
+  const live = services.filter((svc) => !isSuspendedService(svc) && svc.status === 'live').length;
+
+  const health = (() => {
+    if (total === 0) {
+      return { label: 'Empty', className: 'text-content-tertiary bg-surface-tertiary/40 border-border-default/50' };
+    }
+    if (active === 0) {
+      return { label: 'Paused', className: 'text-status-warning bg-status-warning/10 border-status-warning/20' };
+    }
+    if (live === active) {
+      return { label: 'Healthy', className: 'text-status-success bg-status-success/10 border-status-success/20' };
+    }
+    if (live === 0) {
+      return { label: 'Down', className: 'text-status-error bg-status-error/10 border-status-error/20' };
+    }
+    return { label: `${live}/${active} live`, className: 'text-status-warning bg-status-warning/10 border-status-warning/20' };
+  })();
+
+  const visible = servicesForDisplay.slice(0, 3);
+  const remaining = Math.max(0, servicesForDisplay.length - visible.length);
+
+  return (
+    <Card hover onClick={onClick} className="relative group">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="p-2.5 rounded-lg bg-surface-tertiary ring-1 ring-border-default group-hover:ring-brand/30 transition-all">
+            <FolderKanban className="w-5 h-5 text-brand" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="font-semibold text-content-primary group-hover:text-brand transition-colors truncate">
+              {project.name || 'Untitled Project'}
+            </h3>
+            <p className="text-xs text-content-tertiary mt-0.5">
+              {total === 0 ? 'No services yet' : `${active} active \u00b7 ${suspended} suspended`}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <span className={`text-[11px] px-2 py-0.5 rounded-full border ${health.className}`}>
+            {health.label}
+          </span>
+          <ArrowUpRight className="w-4 h-4 text-content-tertiary group-hover:text-content-primary transition-colors" />
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        {total === 0 ? (
+          <div className="text-xs text-content-tertiary">
+            Create a service in this project to get started.
+          </div>
+        ) : (
+          visible.map((svc) => (
+            <div key={svc.id} className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <ServiceIcon type={svc.type} size="sm" />
+                <div className="min-w-0">
+                  <div className="text-[13px] font-semibold text-content-primary truncate">{svc.name}</div>
+                  <div className="text-[11px] text-content-tertiary">{serviceTypeLabel(svc.type)}</div>
+                </div>
+              </div>
+              <StatusBadge status={effectiveServiceStatus(svc)} size="sm" pulse={false} />
+            </div>
+          ))
+        )}
+
+        {remaining > 0 && (
+          <div className="text-xs text-content-tertiary pl-1">+{remaining} more</div>
+        )}
+      </div>
+
+      <div className="mt-4 pt-3 border-t border-border-default/50 flex items-center justify-between text-xs">
+        <span className="text-content-tertiary">
+          {lastTouchedAt ? `Updated ${timeAgo(lastTouchedAt)}` : `Created ${timeAgo(project.created_at)}`}
+        </span>
+        <span className="text-content-tertiary group-hover:text-content-primary transition-colors">
+          Open project &rarr;
+        </span>
+      </div>
+    </Card>
+  );
+}
 
 type StatsCardProps = {
   label: string;
