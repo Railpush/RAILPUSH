@@ -149,25 +149,44 @@ func (b *Builder) GenerateDockerfile(runtime, buildCmd, startCmd string, port in
 
 	switch runtime {
 	case "node":
-		bc := "npm install"
-		if buildCmd != "" {
-			bc = fmt.Sprintf("npm install && %s", buildCmd)
+		bc := strings.TrimSpace(buildCmd)
+		if bc == "" {
+			// Common for TS backends; safe no-op if the script doesn't exist.
+			bc = "npm run build --if-present"
 		}
-		sc := "npm start"
-		if startCmd != "" {
-			sc = startCmd
+		sc := strings.TrimSpace(startCmd)
+		if sc == "" {
+			// Reasonable defaults for typical backends.
+			sc = "if [ -f dist/index.js ]; then node dist/index.js; elif [ -f server-index.js ]; then node server-index.js; elif [ -f server.js ]; then node server.js; elif [ -f index.js ]; then node index.js; else npm start; fi"
 		}
+
+		// Support pnpm/yarn when a repo uses them. Corepack is shipped with Node images but is disabled by default.
+		needsCorepack := false
+		lc := strings.ToLower(bc + " " + sc)
+		if strings.Contains(lc, "pnpm") || strings.Contains(lc, "yarn") {
+			needsCorepack = true
+		}
+		corepackLine := ""
+		if needsCorepack {
+			corepackLine = "RUN corepack enable\n"
+		}
+
 		return fmt.Sprintf(`FROM node:20-alpine
 WORKDIR /app
 COPY package*.json ./
-RUN npm install --production=false
+%sRUN if [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then yarn install --frozen-lockfile; else npm install; fi
 COPY . .
+RUN rm -rf .git
 RUN %s
+ENV NODE_ENV=production
 ENV PORT=%d
+ENV HOME=/tmp
+ENV XDG_CACHE_HOME=/tmp/.cache
+ENV COREPACK_HOME=/tmp/.corepack
 ENV NPM_CONFIG_CACHE=/tmp/.npm
 EXPOSE %d
-CMD ["/bin/sh", "-c", "%s"]
-`, bc, port, port, sc)
+CMD ["sh","-lc","%s"]
+`, corepackLine, bc, port, port, sc)
 
 	case "python":
 		bc := "pip install --no-cache-dir -r requirements.txt"

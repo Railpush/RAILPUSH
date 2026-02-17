@@ -33,16 +33,16 @@ function formatSyncError(syncError: string | null): string | null {
 
   // Hide raw Stripe/internal errors from end-users. Keep it actionable.
   if (lower.includes('payment method required')) {
-    return 'Payment method required. Add a payment method in Billing, then try syncing again.';
+    return 'Payment method required (or insufficient credits). Open Billing to add/update a card or credits, then try syncing again.';
   }
   if (lower.startsWith('billing error')) {
     // If the backend included details (e.g. "billing error: <detail>") show them.
     const idx = syncError.indexOf(':');
     if (idx !== -1 && idx < syncError.length - 1) {
       const detail = syncError.slice(idx + 1).trim();
-      if (detail) return detail;
+      if (detail) return `Billing error: ${detail}. Open Billing to fix payment/credits, then retry sync.`;
     }
-    return 'Billing error. Open Billing > Plans and try syncing again.';
+    return 'Billing is blocking this blueprint sync. Open Billing to add/update a card or credits, then retry sync.';
   }
 
   if (lower === 'yaml_missing_ai_disabled') {
@@ -293,8 +293,23 @@ export function BlueprintDetail() {
             </div>
             {(syncError.toLowerCase().includes('payment method') ||
               syncError.toLowerCase().includes('billing error') ||
-              syncError.toLowerCase().includes('stripe price') ||
-              syncError.toLowerCase().includes('free tier limit')) && (
+              syncError.toLowerCase().includes('stripe price')) && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  const returnTo = `/blueprints/${encodeURIComponent(bp.id)}`;
+                  const qs = new URLSearchParams({
+                    source: 'blueprint',
+                    blueprint_id: bp.id,
+                    return_to: returnTo,
+                  });
+                  navigate(`/billing?${qs.toString()}`);
+                }}
+              >
+                Fix Billing
+              </Button>
+            )}
+            {syncError.toLowerCase().includes('free tier limit') && (
               <Button
                 size="sm"
                 onClick={() => {

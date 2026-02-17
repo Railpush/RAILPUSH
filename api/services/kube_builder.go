@@ -247,6 +247,9 @@ if [ "$RUNTIME" = "node" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
 
   PORT="${RAILPUSH_PORT:-10000}"
   BUILD_COMMAND="${RAILPUSH_BUILD_COMMAND:-}"
+  if [ -z "$BUILD_COMMAND" ]; then
+    BUILD_COMMAND="npm run build --if-present"
+  fi
 
   # If the build command already installs deps (npm/yarn/pnpm), don't duplicate work.
   NEEDS_INSTALL="1"
@@ -277,14 +280,13 @@ if [ "$RUNTIME" = "node" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
     if [ "$NEEDS_INSTALL" = "1" ]; then
       printf '%s\n' "RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi"
     fi
-    if [ -n "$BUILD_COMMAND" ]; then
-      printf '%s\n' "RUN $BUILD_COMMAND"
-    fi
+    printf '%s\n' "RUN $BUILD_COMMAND"
     printf '%s\n' "ENV NODE_ENV=production"
+    printf '%s\n' "ENV PORT=${PORT}"
     # In strict tenant security mode the root filesystem is read-only; keep npm cache/logs under /tmp.
     printf '%s\n' "ENV NPM_CONFIG_CACHE=/tmp/.npm"
     printf '%s\n' "EXPOSE ${PORT}"
-    printf '%s\n' "CMD [\"sh\",\"-lc\",\"npm start\"]"
+    printf '%s\n' "CMD [\"sh\",\"-lc\",\"if [ -f dist/index.js ]; then node dist/index.js; elif [ -f server-index.js ]; then node server-index.js; elif [ -f server.js ]; then node server.js; elif [ -f index.js ]; then node index.js; else npm start; fi\"]"
   } > "$DOCKERFILE_PATH"
 fi
 

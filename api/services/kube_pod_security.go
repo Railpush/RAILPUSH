@@ -6,6 +6,18 @@ import (
 
 func boolPtr(v bool) *bool { return &v }
 
+func ensureEnvVar(c *corev1.Container, name string, value string) {
+	if c == nil || name == "" {
+		return
+	}
+	for _, ev := range c.Env {
+		if ev.Name == name {
+			return
+		}
+	}
+	c.Env = append(c.Env, corev1.EnvVar{Name: name, Value: value})
+}
+
 // Matches the uid used by distroless "nonroot" images.
 // We set this explicitly in strict mode so images that default to USER 0 don't fail
 // kubelet's runAsNonRoot check ("image will run as root") before the container starts.
@@ -109,6 +121,12 @@ func applyTenantSecurityContext(pod *corev1.PodSpec, c *corev1.Container, strict
 			Drop: []corev1.Capability{"ALL"},
 		}
 		ensureWritableTmp(pod, c)
+		// Many runtimes (npm/corepack, Python, etc) attempt to write under $HOME/.cache. In strict mode
+		// the root filesystem is read-only, so point "home-ish" dirs at our writable /tmp mount.
+		ensureEnvVar(c, "HOME", "/tmp")
+		ensureEnvVar(c, "XDG_CACHE_HOME", "/tmp/.cache")
+		ensureEnvVar(c, "COREPACK_HOME", "/tmp/.corepack")
+		ensureEnvVar(c, "NPM_CONFIG_CACHE", "/tmp/.npm")
 		return
 	}
 
