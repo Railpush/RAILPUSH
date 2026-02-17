@@ -3,7 +3,7 @@ import type {
   GitHubRepo, GitHubBranch, RegisteredDomain, DnsRecord, DomainSearchResult, Project, ProjectFolder, Environment, PreviewEnvironment, OneOffJob, AutoscalingPolicy,
   DatabaseReplica, WorkspaceMember, AuditLogEntry, SamlSSOConfig, Incident, IncidentDetail, OpsOverview, OpsUserItem, OpsWorkspaceItem, OpsServiceItem, OpsDeployItem,
   OpsEmailOutboxItem, OpsBillingCustomerItem, OpsBillingCustomerDetail, OpsTicketItem, OpsTicketDetail, OpsWorkspaceCreditItem, OpsWorkspaceCreditDetail,
-  OpsKubeSummary, OpsPerformanceSummary, OpsDatastoreItem, OpsAuditLogEntry, SupportTicket, SupportTicketMessage, BlueprintAISettings,
+  OpsKubeSummary, OpsPerformanceSummary, OpsDatastoreItem, OpsAuditLogEntry, SupportTicket, SupportTicketMessage, BlueprintAISettings, AIFixSession,
 } from '../types';
 
 const BASE = '/api/v1';
@@ -113,6 +113,12 @@ export const deploys = {
     request<Deploy>(`/services/${serviceId}/deploys`, { method: 'POST', body: JSON.stringify(data || {}) }),
   rollback: (serviceId: string, deployId: string) =>
     request<Deploy>(`/services/${serviceId}/deploys/${deployId}/rollback`, { method: 'POST' }),
+};
+
+// AI Fix
+export const aiFix = {
+  start: (serviceId: string) => request<AIFixSession>(`/services/${serviceId}/ai-fix`, { method: 'POST' }),
+  status: (serviceId: string) => request<{ active: boolean; session?: AIFixSession; status?: string; current_attempt?: number; max_attempts?: number; last_ai_summary?: string; last_deploy_status?: string }>(`/services/${serviceId}/ai-fix/status`),
 };
 
 // Env Vars

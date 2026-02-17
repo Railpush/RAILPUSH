@@ -37,7 +37,7 @@ func cleanRelPath(raw string) (string, error) {
 // MVP constraints:
 // - requires a Dockerfile to exist in the repo (no generated Dockerfiles yet)
 // - pushes to an insecure (HTTP) registry is supported via --insecure-registry
-func (k *KubeDeployer) BuildImageWithKaniko(deployID string, svc *models.Service, repoURL string, branch string, commitSHA string, dockerContext string, dockerfilePath string, destImage string, githubToken string, appendLog func(string)) error {
+func (k *KubeDeployer) BuildImageWithKaniko(deployID string, svc *models.Service, repoURL string, branch string, commitSHA string, dockerContext string, dockerfilePath string, destImage string, githubToken string, dockerfileOverride string, appendLog func(string)) error {
 	if k == nil || k.Client == nil || k.Config == nil {
 		return fmt.Errorf("kube deployer not initialized")
 	}
@@ -178,6 +178,13 @@ DOCKERFILE_PATH="${RAILPUSH_DOCKERFILE_PATH:-}"
 if [ -z "$DOCKERFILE_PATH" ]; then
   DOCKERFILE_PATH="Dockerfile"
 fi
+
+# AI Fix: if an override Dockerfile is provided, write it directly.
+if [ -n "${RAILPUSH_DOCKERFILE_CONTENT:-}" ]; then
+  echo "RailPush: using AI-fixed Dockerfile"
+  mkdir -p "$(dirname "$DOCKERFILE_PATH")" 2>/dev/null || true
+  printf '%s\n' "$RAILPUSH_DOCKERFILE_CONTENT" > "$DOCKERFILE_PATH"
+fi
 if [ "$RUNTIME" = "static" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
   echo "RailPush: generating static Dockerfile at $DOCKERFILE_PATH"
   mkdir -p "$(dirname "$DOCKERFILE_PATH")" 2>/dev/null || true
@@ -303,7 +310,7 @@ fi
 							{
 								Name:  "clone",
 								Image: "alpine/git",
-								Env:   buildGitCloneEnvWithOpts(repoURL, branch, commitSHA, secretName, runtime, dfRelFromRepo, svc.BuildCommand, svc.StaticPublishPath, port),
+								Env:   buildGitCloneEnvWithOpts(repoURL, branch, commitSHA, secretName, runtime, dfRelFromRepo, svc.BuildCommand, svc.StaticPublishPath, port, dockerfileOverride),
 								Command: []string{"sh", "-c", cloneScript},
 								VolumeMounts: []corev1.VolumeMount{
 									{Name: "workspace", MountPath: "/workspace"},
@@ -421,10 +428,10 @@ fi
 }
 
 func buildGitCloneEnv(repoURL string, branch string, commitSHA string, tokenSecretName string) []corev1.EnvVar {
-	return buildGitCloneEnvWithOpts(repoURL, branch, commitSHA, tokenSecretName, "", "", "", "", 0)
+	return buildGitCloneEnvWithOpts(repoURL, branch, commitSHA, tokenSecretName, "", "", "", "", 0, "")
 }
 
-func buildGitCloneEnvWithOpts(repoURL string, branch string, commitSHA string, tokenSecretName string, runtime string, dockerfileAbs string, buildCommand string, staticPublishPath string, port int) []corev1.EnvVar {
+func buildGitCloneEnvWithOpts(repoURL string, branch string, commitSHA string, tokenSecretName string, runtime string, dockerfileAbs string, buildCommand string, staticPublishPath string, port int, dockerfileOverride string) []corev1.EnvVar {
 	env := []corev1.EnvVar{
 		{Name: "REPO_URL", Value: strings.TrimSpace(repoURL)},
 		{Name: "BRANCH", Value: strings.TrimSpace(branch)},
@@ -461,6 +468,10 @@ func buildGitCloneEnvWithOpts(repoURL string, branch string, commitSHA string, t
 	}
 	if port > 0 {
 		env = append(env, corev1.EnvVar{Name: "RAILPUSH_PORT", Value: fmt.Sprintf("%d", port)})
+	}
+	dockerfileOverride = strings.TrimSpace(dockerfileOverride)
+	if dockerfileOverride != "" {
+		env = append(env, corev1.EnvVar{Name: "RAILPUSH_DOCKERFILE_CONTENT", Value: dockerfileOverride})
 	}
 	return env
 }

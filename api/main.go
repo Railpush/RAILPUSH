@@ -168,6 +168,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	prevH := handlers.NewPreviewEnvironmentHandler()
 	egH := handlers.NewEnvGroupHandler()
 	samlH := handlers.NewSamlSSOHandler(cfg)
+	aiFixH := handlers.NewAIFixHandler(cfg, worker)
 	regRouter := registrar.NewProviderRouter(cfg.Registrar)
 	rdH := handlers.NewRegisteredDomainHandler(cfg, regRouter)
 
@@ -274,6 +275,9 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/services/{id}/deploys", depH.ListDeploys).Methods("GET")
 	authed.HandleFunc("/services/{id}/deploys/{deployId}", depH.GetDeploy).Methods("GET")
 	authed.HandleFunc("/services/{id}/deploys/{deployId}/rollback", depH.Rollback).Methods("POST")
+
+	authed.HandleFunc("/services/{id}/ai-fix", aiFixH.StartFix).Methods("POST")
+	authed.HandleFunc("/services/{id}/ai-fix/status", aiFixH.GetStatus).Methods("GET")
 
 	authed.HandleFunc("/services/{id}/env-vars", envH.ListEnvVars).Methods("GET")
 	authed.HandleFunc("/services/{id}/env-vars", envH.BulkUpdateEnvVars).Methods("PUT")

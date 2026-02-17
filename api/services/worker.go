@@ -374,7 +374,18 @@ func (w *Worker) processJob(job DeployJob) {
 			dockerfilePath = filepath.Join(buildDir, svc.DockerfilePath)
 		}
 
-		if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
+		// AI Fix: if a Dockerfile override is provided, write it directly.
+		if strings.TrimSpace(deploy.DockerfileOverride) != "" {
+			appendLog("==> Using AI-fixed Dockerfile")
+			if dir := filepath.Dir(dockerfilePath); dir != "" {
+				os.MkdirAll(dir, 0755)
+			}
+			if err := os.WriteFile(dockerfilePath, []byte(deploy.DockerfileOverride), 0644); err != nil {
+				appendLog(fmt.Sprintf("ERROR: Failed to write AI-fixed Dockerfile: %v", err))
+				w.failDeploy(deploy, svc)
+				return
+			}
+		} else if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
 			appendLog("==> No Dockerfile found, generating one...")
 			startCmd := svc.StartCommand
 			if svc.Type == "static" && svc.StaticPublishPath != "" {
@@ -630,7 +641,7 @@ func (w *Worker) processJobKubernetes(job DeployJob, appendLog func(string)) {
 
 	if needsBuild {
 		appendLog("==> Starting Kubernetes build job...")
-		if err := kd.BuildImageWithKaniko(deploy.ID, svc, svc.RepoURL, svc.Branch, deploy.CommitSHA, svc.DockerContext, svc.DockerfilePath, imageTag, job.GitHubToken, appendLog); err != nil {
+		if err := kd.BuildImageWithKaniko(deploy.ID, svc, svc.RepoURL, svc.Branch, deploy.CommitSHA, svc.DockerContext, svc.DockerfilePath, imageTag, job.GitHubToken, deploy.DockerfileOverride, appendLog); err != nil {
 			appendLog(fmt.Sprintf("ERROR: Build failed: %v", err))
 			w.failDeploy(deploy, svc)
 			return
@@ -969,12 +980,46 @@ func (w *Worker) failDeploy(deploy *models.Deploy, svc *models.Service) {
 	models.UpdateDeployStatus(deploy.ID, "failed")
 	models.UpdateServiceStatus(svc.ID, "deploy_failed", svc.ContainerID, svc.HostPort)
 	w.notifyDeployResult(svc, deploy, false)
+
+	// Auto-retry if this deploy was triggered by an AI fix session.
+	if deploy.Trigger == "ai_fix" {
+		go w.maybeRetryAIFix(svc, deploy)
+	}
+}
+
+func (w *Worker) maybeRetryAIFix(svc *models.Service, deploy *models.Deploy) {
+	session, err := models.GetActiveAIFixSessionForService(svc.ID)
+	if err != nil || session == nil {
+		return
+	}
+	if session.CurrentAttempt >= session.MaxAttempts {
+		_ = models.UpdateAIFixSessionStatus(session.ID, "exhausted")
+		return
+	}
+	// Wait for logs to flush before retrying.
+	time.Sleep(5 * time.Second)
+	aiFixer := NewAIFixService(w.Config)
+	if err := aiFixer.AttemptFix(session, w); err != nil {
+		log.Printf("ai_fix: retry attempt failed for service %s: %v", svc.ID, err)
+		_ = models.UpdateAIFixSessionStatus(session.ID, "error")
+	}
 }
 
 func (w *Worker) notifyDeployResult(svc *models.Service, deploy *models.Deploy, ok bool) {
 	if w == nil || w.Config == nil || svc == nil || deploy == nil {
 		return
 	}
+
+	// Mark AI fix session as success when the deploy succeeds.
+	if ok && deploy.Trigger == "ai_fix" {
+		go func() {
+			session, err := models.GetActiveAIFixSessionForService(svc.ID)
+			if err == nil && session != nil {
+				_ = models.UpdateAIFixSessionStatus(session.ID, "success")
+			}
+		}()
+	}
+
 	if !w.Config.Email.Enabled() {
 		return
 	}

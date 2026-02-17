@@ -1,7 +1,7 @@
 export type ServiceType = 'web' | 'pserv' | 'worker' | 'cron' | 'static' | 'keyvalue';
 export type ServiceStatus = 'created' | 'building' | 'deploying' | 'live' | 'failed' | 'suspended' | 'deactivated';
 export type DeployStatus = 'pending' | 'building' | 'deploying' | 'live' | 'failed' | 'cancelled';
-export type DeployTrigger = 'git_push' | 'manual' | 'blueprint' | 'rollback' | 'preview' | 'autoscale' | 'github_push';
+export type DeployTrigger = 'git_push' | 'manual' | 'blueprint' | 'rollback' | 'preview' | 'autoscale' | 'github_push' | 'ai_fix';
 export type Runtime = 'docker' | 'image' | 'node' | 'python' | 'go' | 'ruby' | 'rust' | 'elixir';
 
 export interface User {
@@ -169,6 +169,7 @@ export interface BlueprintResource {
   resource_type: 'service' | 'database' | 'keyvalue';
   resource_id: string;
   resource_name: string;
+  status?: string;
 }
 
 export interface Blueprint {
@@ -183,6 +184,17 @@ export interface Blueprint {
   last_sync_status: string;
   created_at: string;
   resources?: BlueprintResource[];
+}
+
+export interface AIFixSession {
+  id: string;
+  service_id: string;
+  status: 'running' | 'success' | 'exhausted' | 'error';
+  max_attempts: number;
+  current_attempt: number;
+  last_deploy_id: string;
+  last_ai_summary: string;
+  created_at: string;
 }
 
 export interface Disk {

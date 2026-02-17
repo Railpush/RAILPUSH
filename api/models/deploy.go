@@ -10,38 +10,49 @@ import (
 )
 
 type Deploy struct {
-	ID            string     `json:"id"`
-	ServiceID     string     `json:"service_id"`
-	Trigger       string     `json:"trigger"`
-	Status        string     `json:"status"`
-	CommitSHA     string     `json:"commit_sha"`
-	CommitMessage string     `json:"commit_message"`
-	Branch        string     `json:"branch"`
-	ImageTag      string     `json:"image_tag"`
-	BuildLog      string     `json:"build_log"`
-	StartedAt     *time.Time `json:"started_at"`
-	FinishedAt    *time.Time `json:"finished_at"`
-	CreatedBy     *string    `json:"created_by"`
+	ID                 string     `json:"id"`
+	ServiceID          string     `json:"service_id"`
+	Trigger            string     `json:"trigger"`
+	Status             string     `json:"status"`
+	CommitSHA          string     `json:"commit_sha"`
+	CommitMessage      string     `json:"commit_message"`
+	Branch             string     `json:"branch"`
+	ImageTag           string     `json:"image_tag"`
+	BuildLog           string     `json:"build_log"`
+	DockerfileOverride string     `json:"dockerfile_override,omitempty"`
+	StartedAt          *time.Time `json:"started_at"`
+	FinishedAt         *time.Time `json:"finished_at"`
+	CreatedBy          *string    `json:"created_by"`
 }
 
 func CreateDeploy(d *Deploy) error {
 	status := strings.TrimSpace(d.Status)
 	if status == "" {
 		return database.DB.QueryRow(
-			"INSERT INTO deploys (service_id, trigger, commit_sha, commit_message, branch, image_tag, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, status",
-			d.ServiceID, d.Trigger, d.CommitSHA, d.CommitMessage, d.Branch, d.ImageTag, d.CreatedBy,
+			"INSERT INTO deploys (service_id, trigger, commit_sha, commit_message, branch, image_tag, dockerfile_override, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, status",
+			d.ServiceID, d.Trigger, d.CommitSHA, d.CommitMessage, d.Branch, d.ImageTag, d.DockerfileOverride, d.CreatedBy,
 		).Scan(&d.ID, &d.Status)
 	}
 	return database.DB.QueryRow(
-		"INSERT INTO deploys (service_id, trigger, status, commit_sha, commit_message, branch, image_tag, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, status",
-		d.ServiceID, d.Trigger, status, d.CommitSHA, d.CommitMessage, d.Branch, d.ImageTag, d.CreatedBy,
+		"INSERT INTO deploys (service_id, trigger, status, commit_sha, commit_message, branch, image_tag, dockerfile_override, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, status",
+		d.ServiceID, d.Trigger, status, d.CommitSHA, d.CommitMessage, d.Branch, d.ImageTag, d.DockerfileOverride, d.CreatedBy,
 	).Scan(&d.ID, &d.Status)
 }
 
 func GetDeploy(id string) (*Deploy, error) {
 	d := &Deploy{}
-	err := database.DB.QueryRow("SELECT id, service_id, COALESCE(trigger,''), COALESCE(status,'pending'), COALESCE(commit_sha,''), COALESCE(commit_message,''), COALESCE(branch,''), COALESCE(image_tag,''), COALESCE(build_log,''), started_at, finished_at, created_by FROM deploys WHERE id=$1", id).Scan(
-		&d.ID, &d.ServiceID, &d.Trigger, &d.Status, &d.CommitSHA, &d.CommitMessage, &d.Branch, &d.ImageTag, &d.BuildLog, &d.StartedAt, &d.FinishedAt, &d.CreatedBy)
+	err := database.DB.QueryRow("SELECT id, service_id, COALESCE(trigger,''), COALESCE(status,'pending'), COALESCE(commit_sha,''), COALESCE(commit_message,''), COALESCE(branch,''), COALESCE(image_tag,''), COALESCE(build_log,''), COALESCE(dockerfile_override,''), started_at, finished_at, created_by FROM deploys WHERE id=$1", id).Scan(
+		&d.ID, &d.ServiceID, &d.Trigger, &d.Status, &d.CommitSHA, &d.CommitMessage, &d.Branch, &d.ImageTag, &d.BuildLog, &d.DockerfileOverride, &d.StartedAt, &d.FinishedAt, &d.CreatedBy)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return d, err
+}
+
+func GetLastFailedDeploy(serviceID string) (*Deploy, error) {
+	d := &Deploy{}
+	err := database.DB.QueryRow("SELECT id, service_id, COALESCE(trigger,''), COALESCE(status,'pending'), COALESCE(commit_sha,''), COALESCE(commit_message,''), COALESCE(branch,''), COALESCE(image_tag,''), COALESCE(build_log,''), COALESCE(dockerfile_override,''), started_at, finished_at, created_by FROM deploys WHERE service_id=$1 AND status='failed' ORDER BY finished_at DESC NULLS LAST LIMIT 1", serviceID).Scan(
+		&d.ID, &d.ServiceID, &d.Trigger, &d.Status, &d.CommitSHA, &d.CommitMessage, &d.Branch, &d.ImageTag, &d.BuildLog, &d.DockerfileOverride, &d.StartedAt, &d.FinishedAt, &d.CreatedBy)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

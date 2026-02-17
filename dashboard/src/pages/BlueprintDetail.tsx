@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, RefreshCw, GitBranch, FileText, Database, Globe, Key, Trash2, Sparkles } from 'lucide-react';
+import { ArrowLeft, RefreshCw, GitBranch, FileText, Database, Globe, Key, Trash2, Sparkles, Wand2, Loader2 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { StatusBadge } from '../components/ui/StatusBadge';
-import { blueprints as bpApi, settings as settingsApi } from '../lib/api';
+import { blueprints as bpApi, settings as settingsApi, aiFix as aiFixApi } from '../lib/api';
 import { timeAgo } from '../lib/utils';
 import { toast } from 'sonner';
 import type { Blueprint, BlueprintResource } from '../types';
@@ -58,6 +58,14 @@ function formatSyncError(syncError: string | null): string | null {
   return syncError;
 }
 
+interface AIFixState {
+  active: boolean;
+  status?: string;
+  current_attempt?: number;
+  max_attempts?: number;
+  last_ai_summary?: string;
+}
+
 export function BlueprintDetail() {
   const { blueprintId } = useParams<{ blueprintId: string }>();
   const navigate = useNavigate();
@@ -67,6 +75,11 @@ export function BlueprintDetail() {
   const [syncing, setSyncing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [enablingAI, setEnablingAI] = useState(false);
+
+  // AI Fix state: keyed by resource_id
+  const [aiFixing, setAiFixing] = useState<Record<string, boolean>>({});
+  const [aiFixStatus, setAiFixStatus] = useState<Record<string, AIFixState>>({});
+  const aiFixPolling = useRef<Record<string, ReturnType<typeof setInterval>>>({});
 
   const load = useCallback(async () => {
     if (!blueprintId) return;
@@ -92,6 +105,62 @@ export function BlueprintDetail() {
     const interval = setInterval(load, 3000);
     return () => clearInterval(interval);
   }, [bp?.last_sync_status, load]);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      Object.values(aiFixPolling.current).forEach(clearInterval);
+    };
+  }, []);
+
+  const startAIFixPolling = useCallback((resourceId: string) => {
+    // Clear any existing polling for this resource
+    if (aiFixPolling.current[resourceId]) {
+      clearInterval(aiFixPolling.current[resourceId]);
+    }
+
+    aiFixPolling.current[resourceId] = setInterval(async () => {
+      try {
+        const result = await aiFixApi.status(resourceId);
+        setAiFixStatus((prev) => ({ ...prev, [resourceId]: result }));
+
+        if (!result.active) {
+          // Polling complete
+          clearInterval(aiFixPolling.current[resourceId]);
+          delete aiFixPolling.current[resourceId];
+          setAiFixing((prev) => ({ ...prev, [resourceId]: false }));
+
+          if (result.status === 'success') {
+            toast.success('AI fix succeeded! Service is deploying.');
+            load(); // Reload to get updated resource statuses
+          } else if (result.status === 'exhausted') {
+            toast.error("AI couldn't fix the build after 3 attempts.");
+          } else if (result.status === 'error') {
+            toast.error(`AI fix failed: ${result.last_ai_summary || 'unknown error'}`);
+          }
+        }
+      } catch {
+        // Silently retry on polling failures
+      }
+    }, 3000);
+  }, [load]);
+
+  const handleAIFix = async (resourceId: string) => {
+    setAiFixing((prev) => ({ ...prev, [resourceId]: true }));
+    try {
+      await aiFixApi.start(resourceId);
+      toast.success('AI fix started');
+      setAiFixStatus((prev) => ({
+        ...prev,
+        [resourceId]: { active: true, status: 'running', current_attempt: 0, max_attempts: 3 },
+      }));
+      startAIFixPolling(resourceId);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to start AI fix';
+      toast.error(message);
+      setAiFixing((prev) => ({ ...prev, [resourceId]: false }));
+    }
+  };
 
   const handleSync = async () => {
     if (!blueprintId) return;
@@ -282,18 +351,61 @@ export function BlueprintDetail() {
         <div className="space-y-2">
           {resources.map((r) => {
             const Icon = resourceIcons[r.resource_type] || Globe;
+            const isServiceFailed = r.resource_type === 'service' && (r.status === 'failed' || r.status === 'deploy_failed');
+            const isFixing = aiFixing[r.resource_id];
+            const fixStatus = aiFixStatus[r.resource_id];
             return (
               <Card
                 key={r.resource_id}
-                hover
-                onClick={() => navigate(resourceLink(r))}
+                hover={!isFixing}
+                onClick={() => !isFixing && navigate(resourceLink(r))}
                 padding="sm"
               >
                 <div className="flex items-center gap-3">
                   <Icon className="w-4 h-4 text-content-secondary" />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-content-primary">{r.resource_name}</div>
-                    <div className="text-xs text-content-tertiary">{resourceLabels[r.resource_type] || r.resource_type}</div>
+                    <div className="text-xs text-content-tertiary">
+                      {resourceLabels[r.resource_type] || r.resource_type}
+                      {isFixing && fixStatus?.active && (
+                        <span className="ml-2 text-brand-primary">
+                          Attempt {fixStatus.current_attempt || 1}/{fixStatus.max_attempts || 3}...
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isServiceFailed && !isFixing && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleAIFix(r.resource_id);
+                        }}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md bg-brand-primary/10 text-brand-primary hover:bg-brand-primary/20 transition-colors"
+                        title="Fix with AI"
+                      >
+                        <Wand2 className="w-3 h-3" />
+                        Fix with AI
+                      </button>
+                    )}
+                    {isFixing && (
+                      <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-brand-primary">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        Fixing...
+                      </span>
+                    )}
+                    <span
+                      className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                        r.status === 'live' || r.status === 'available'
+                          ? 'bg-status-success shadow-[0_0_6px_var(--color-status-success)]'
+                          : r.status === 'building' || r.status === 'deploying' || r.status === 'creating'
+                          ? 'bg-status-info animate-pulse'
+                          : r.status === 'failed' || r.status === 'deploy_failed'
+                          ? 'bg-status-error shadow-[0_0_6px_var(--color-status-error)]'
+                          : 'bg-content-tertiary'
+                      }`}
+                      title={r.status || 'unknown'}
+                    />
                   </div>
                 </div>
               </Card>
