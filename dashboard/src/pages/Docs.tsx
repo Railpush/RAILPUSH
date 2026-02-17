@@ -861,11 +861,12 @@ services:
               </p>
 
               <h3 className="text-lg font-semibold mb-3">Plans</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 {[
-                  { plan: 'Starter', cpu: 'Shared', ram: '512 MB', price: '$0/mo' },
+                  { plan: 'Free', cpu: '0.1 CPU', ram: '256 MB', price: '$0/mo' },
+                  { plan: 'Starter', cpu: '0.5 CPU', ram: '512 MB', price: '$7/mo' },
                   { plan: 'Standard', cpu: '1 CPU', ram: '2 GB', price: '$25/mo' },
-                  { plan: 'Pro', cpu: '4 CPU', ram: '8 GB', price: '$85/mo' },
+                  { plan: 'Pro', cpu: '2 CPU', ram: '4 GB', price: '$85/mo' },
                 ].map(p => (
                   <div key={p.plan} className="rounded-xl border border-border-default bg-surface-secondary/30 p-5">
                     <div className="text-base font-semibold mb-3">{p.plan}</div>
