@@ -454,8 +454,8 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 		return fmt.Errorf("billing update failed. please try again")
 	}
 
-	if existingSubItemID != "" {
-		// Record the resource first; then set Stripe quantity to match DB count.
+		if existingSubItemID != "" {
+			// Record the resource first; then set Stripe quantity to match DB count.
 		bi := &models.BillingItem{
 			BillingCustomerID:        bc.ID,
 			StripeSubscriptionItemID: existingSubItemID,
@@ -476,32 +476,34 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 				log.Printf("Stripe: failed to count billing items for quantity reconcile sub_item=%s err=%v", existingSubItemID, qErr)
 			}
 			return fmt.Errorf("billing update failed. please try again")
-		}
-		siParams := &stripe.SubscriptionItemParams{
-			Quantity:          stripe.Int64(int64(qty)),
-			PaymentBehavior:   stripe.String("error_if_incomplete"),
-			ProrationBehavior: stripe.String("always_invoice"),
-		}
-		if _, err := subscriptionitem.Update(existingSubItemID, siParams); err != nil {
-			log.Printf("Stripe: update quantity failed sub_item=%s qty=%d resource=%s/%s err=%v", existingSubItemID, qty, resourceType, resourceID, err)
-			_ = models.DeleteBillingItemByResource(resourceType, resourceID)
+			}
+			siParams := &stripe.SubscriptionItemParams{
+				Quantity:          stripe.Int64(int64(qty)),
+				// Avoid generating a new invoice per sync/scale operation. Using always_invoice can
+				// quickly hit Stripe's daily invoice limits for a subscription when many resources
+				// are added/updated in a short window (e.g. blueprint sync).
+				ProrationBehavior: stripe.String("create_prorations"),
+			}
+			if _, err := subscriptionitem.Update(existingSubItemID, siParams); err != nil {
+				log.Printf("Stripe: update quantity failed sub_item=%s qty=%d resource=%s/%s err=%v", existingSubItemID, qty, resourceType, resourceID, err)
+				_ = models.DeleteBillingItemByResource(resourceType, resourceID)
 			return stripeUserError(err)
 		}
 		return nil
 	}
 
-	// No existing item for this price; create one (quantity=1) then record the resource.
-	siParams := &stripe.SubscriptionItemParams{
-		Subscription:      stripe.String(bc.StripeSubscriptionID),
-		Price:             stripe.String(priceID),
-		Quantity:          stripe.Int64(1),
-		PaymentBehavior:   stripe.String("error_if_incomplete"),
-		ProrationBehavior: stripe.String("always_invoice"),
-	}
-	si, err := subscriptionitem.New(siParams)
-	if err != nil {
-		log.Printf("Stripe: add subscription item failed sub=%s price=%s resource=%s/%s err=%v", bc.StripeSubscriptionID, priceID, resourceType, resourceID, err)
-		return stripeUserError(err)
+		// No existing item for this price; create one (quantity=1) then record the resource.
+		siParams := &stripe.SubscriptionItemParams{
+			Subscription:      stripe.String(bc.StripeSubscriptionID),
+			Price:             stripe.String(priceID),
+			Quantity:          stripe.Int64(1),
+			// See note above: do not force an invoice on every item add.
+			ProrationBehavior: stripe.String("create_prorations"),
+		}
+		si, err := subscriptionitem.New(siParams)
+		if err != nil {
+			log.Printf("Stripe: add subscription item failed sub=%s price=%s resource=%s/%s err=%v", bc.StripeSubscriptionID, priceID, resourceType, resourceID, err)
+			return stripeUserError(err)
 	}
 
 	bi := &models.BillingItem{
@@ -565,17 +567,17 @@ func (s *StripeService) RemoveSubscriptionItem(resourceType, resourceID string) 
 				return stripeUserError(err)
 			}
 		}
-	} else {
-		// Still have resources on this plan: set quantity to remaining.
-		siParams := &stripe.SubscriptionItemParams{
-			Quantity:          stripe.Int64(int64(remaining)),
-			PaymentBehavior:   stripe.String("error_if_incomplete"),
-			ProrationBehavior: stripe.String("always_invoice"),
-		}
-		if _, err := subscriptionitem.Update(subItemID, siParams); err != nil {
-			var se *stripe.Error
-			if errors.As(err, &se) && se.HTTPStatusCode == 404 {
-				// Missing item means no billing; restore DB so it can be re-added later.
+		} else {
+			// Still have resources on this plan: set quantity to remaining.
+			siParams := &stripe.SubscriptionItemParams{
+				Quantity:          stripe.Int64(int64(remaining)),
+				// See note above: avoid invoice spam during frequent quantity adjustments.
+				ProrationBehavior: stripe.String("create_prorations"),
+			}
+			if _, err := subscriptionitem.Update(subItemID, siParams); err != nil {
+				var se *stripe.Error
+				if errors.As(err, &se) && se.HTTPStatusCode == 404 {
+					// Missing item means no billing; restore DB so it can be re-added later.
 				log.Printf("Stripe: subscription item missing during quantity update sub_item=%s resource=%s/%s", subItemID, resourceType, resourceID)
 				_ = models.CreateBillingItem(bi)
 				return fmt.Errorf("billing update failed. please try again")
@@ -659,7 +661,9 @@ func (s *StripeService) UpdateSubscriptionItemPlan(resourceType, resourceID, new
 
 	subParams := &stripe.SubscriptionParams{
 		PaymentBehavior:      stripe.String("error_if_incomplete"),
-		ProrationBehavior:    stripe.String("always_invoice"),
+		// Do not force immediate invoices for plan changes; it can exceed Stripe's daily
+		// invoice limits when users (or blueprints) perform many billing updates.
+		ProrationBehavior:    stripe.String("create_prorations"),
 		OffSession:           stripe.Bool(true),
 		CollectionMethod:     stripe.String(string(stripe.SubscriptionCollectionMethodChargeAutomatically)),
 		Items:                []*stripe.SubscriptionItemsParams{},
