@@ -288,7 +288,7 @@ export function Billing() {
   const creditItems = paidItems.filter((item) => item.credit_covered);
   const monthToDateCents = overview?.monthly_total ?? stripeItems.reduce((sum, item) => sum + item.monthly_cost, 0);
   const creditCoveredCents = overview?.credit_covered_total ?? creditItems.reduce((sum, item) => sum + item.monthly_cost, 0);
-  const creditBalanceCents = overview?.credit_balance_cents ?? 0;
+  const creditBalanceCents = Math.max(0, overview?.credit_balance_cents ?? 0);
 
   const projectedCents = useMemo(() => {
     const now = new Date();
@@ -297,6 +297,10 @@ export function Billing() {
     if (day <= 0 || daysInMonth <= 0) return monthToDateCents;
     return Math.round((monthToDateCents / day) * daysInMonth);
   }, [monthToDateCents]);
+
+  const projectedCreditAppliedCents = Math.min(creditBalanceCents, projectedCents);
+  const projectedToPayCents = Math.max(0, projectedCents - projectedCreditAppliedCents);
+  const projectedCreditCarryCents = Math.max(0, creditBalanceCents - projectedCreditAppliedCents);
 
   const currentPlanId = useMemo<PlanID>(() => {
     const fromApi = overview?.current_plan ? normalizePlan(overview.current_plan) : null;
@@ -475,9 +479,26 @@ export function Billing() {
           title="Unbilled Charges"
           value={formatCurrency(monthToDateCents)}
           helper={
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-content-tertiary">Projected</span>
-              <span className="font-mono text-content-secondary">{formatCurrency(projectedCents)}</span>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-content-tertiary">Projected total</span>
+                <span className="font-mono text-content-secondary">{formatCurrency(projectedCents)}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-content-tertiary">Credits</span>
+                <span className="font-mono text-emerald-300">-{formatCurrency(projectedCreditAppliedCents)}</span>
+              </div>
+              <div className="h-px bg-border-default/50" />
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-content-tertiary">Total to pay</span>
+                <span className="font-mono text-content-primary">{formatCurrency(projectedToPayCents)}</span>
+              </div>
+              {projectedCreditCarryCents > 0 && (
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-content-tertiary">Credits next month</span>
+                  <span className="font-mono text-content-secondary">{formatCurrency(projectedCreditCarryCents)}</span>
+                </div>
+              )}
             </div>
           }
           icon={<ReceiptText className="w-5 h-5" />}
@@ -510,16 +531,6 @@ export function Billing() {
           }
           icon={<CreditCard className="w-5 h-5" />}
         />
-      </div>
-
-      <div className="glass-panel px-4 py-3 rounded-xl border border-border-default/60 flex items-start gap-3">
-        <div className="mt-0.5 text-emerald-300">
-          <Wallet className="w-4 h-4" />
-        </div>
-        <p className="text-xs leading-snug text-content-secondary">
-          Credits are applied automatically when you create or upgrade paid resources. If your balance covers the full monthly
-          cost, we deduct credits; otherwise we bill your payment method.
-        </p>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_240px] gap-8">
@@ -668,23 +679,12 @@ export function Billing() {
           </SectionFrame>
 
           <SectionFrame id="billing-info" title="Billing Details">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 gap-6">
               <div className="space-y-2">
                 <p className="text-xs uppercase tracking-wider text-content-tertiary">Billing Email</p>
                 <div className="flex items-center justify-between p-3 rounded bg-surface-tertiary/20 border border-border-default/50">
                   <span className="text-sm font-medium">{billingEmail || 'Not configured'}</span>
                   <Button variant="ghost" size="sm" onClick={handleOpenBillingPortal}><PencilLine className="w-3 h-3" /></Button>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <p className="text-xs uppercase tracking-wider text-content-tertiary">Credit Balance</p>
-                <div className="flex items-center justify-between p-3 rounded bg-surface-tertiary/20 border border-border-default/50">
-                  <div className="space-y-1">
-                    <span className="text-lg font-bold text-white">{formatCurrency(creditBalanceCents)}</span>
-                    <span className="text-[10px] text-content-tertiary block">
-                      Credits are deducted automatically when they cover a resource.
-                    </span>
-                  </div>
                 </div>
               </div>
             </div>
