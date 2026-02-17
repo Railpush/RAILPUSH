@@ -32,15 +32,15 @@ function NavItem({ icon, label, path, active, collapsed, tone = 'default' }: Sid
         'w-full flex items-center gap-3 rounded-lg text-[13px] transition-all duration-200 cursor-pointer border relative overflow-hidden group',
         collapsed ? 'justify-center p-2' : 'px-3 py-2',
         active
-          ? (isOpsTone ? 'bg-status-warning-bg text-status-warning font-medium border-status-warning/30' : 'bg-brand/10 text-brand font-medium border-brand/20')
-          : (isOpsTone ? 'text-status-warning/80 hover:bg-status-warning-bg hover:text-status-warning border-transparent' : 'text-content-secondary hover:bg-surface-tertiary hover:text-content-primary border-transparent')
+          ? (isOpsTone ? 'bg-surface-tertiary/70 text-content-primary font-medium border-border-hover' : 'bg-brand/10 text-brand font-medium border-brand/20')
+          : (isOpsTone ? 'text-content-secondary hover:bg-surface-tertiary/60 hover:text-content-primary border-transparent' : 'text-content-secondary hover:bg-surface-tertiary hover:text-content-primary border-transparent')
       )}
     >
-      {active && <div className={cn("absolute left-0 top-0 bottom-0 w-0.5", isOpsTone ? "bg-status-warning" : "bg-brand")} />}
+      {active && <div className={cn("absolute left-0 top-0 bottom-0 w-0.5", isOpsTone ? "bg-content-tertiary" : "bg-brand")} />}
       <span
         className={cn(
           "w-4 h-4 flex-shrink-0 transition-transform duration-200",
-          active ? "scale-110" : (isOpsTone ? "opacity-90 group-hover:scale-110 group-hover:opacity-100" : "opacity-70 group-hover:scale-110 group-hover:opacity-100")
+          active ? "scale-110" : "opacity-70 group-hover:scale-110 group-hover:opacity-100"
         )}
       >
         {icon}
@@ -50,14 +50,42 @@ function NavItem({ icon, label, path, active, collapsed, tone = 'default' }: Sid
   );
 }
 
-function SectionLabel({ label, collapsed, tone = 'default' }: { label: string; collapsed?: boolean; tone?: 'default' | 'ops' }) {
+function SectionLabel({ label, collapsed }: { label: string; collapsed?: boolean }) {
   if (collapsed) return <div className="my-2 border-t border-border-default/50" />;
   return (
     <div className={cn(
       "px-3 pt-5 pb-2 text-[10px] font-bold uppercase tracking-widest opacity-80",
-      tone === 'ops' ? "text-status-warning" : "text-content-tertiary",
+      "text-content-tertiary",
     )}>
       {label}
+    </div>
+  );
+}
+
+function OpsPanel({ collapsed, children }: { collapsed?: boolean; children: React.ReactNode }) {
+  return (
+    <div
+      className={cn(
+        'mt-4 rounded-xl border border-border-default/70 bg-surface-primary/30 p-2 relative overflow-hidden',
+        'before:absolute before:inset-0 before:pointer-events-none before:opacity-40 before:bg-[radial-gradient(circle_at_30%_-20%,rgba(59,130,246,0.22),transparent_55%)]'
+      )}
+    >
+      <div className="relative">
+        <div className={cn('flex items-center gap-2 px-2 pt-2 pb-1', collapsed && 'justify-center px-0')}>
+          <ShieldCheck className="w-4 h-4 text-content-tertiary" />
+          {!collapsed && (
+            <>
+              <span className="text-[10px] font-bold uppercase tracking-widest text-content-tertiary">Ops Mode</span>
+              <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full border border-border-default/80 bg-surface-secondary/70 text-content-tertiary">
+                Restricted
+              </span>
+            </>
+          )}
+        </div>
+        <div className="mt-1 space-y-1">
+          {children}
+        </div>
+      </div>
     </div>
   );
 }
@@ -259,8 +287,7 @@ export function Sidebar() {
         <NavItem icon={<Globe2 className="w-4 h-4" />} label="Domains" path="/domains" active={path.startsWith('/domains')} collapsed={collapsed} />
 
         {isOps && (
-          <>
-            <SectionLabel label="Ops Mode" collapsed={collapsed} tone="ops" />
+          <OpsPanel collapsed={collapsed}>
             <NavItem icon={<ShieldCheck className="w-4 h-4" />} label="Overview" path="/ops" active={path === '/ops'} collapsed={collapsed} tone="ops" />
             <NavItem icon={<Users className="w-4 h-4" />} label="Customers" path="/ops/customers" active={path.startsWith('/ops/customers')} collapsed={collapsed} tone="ops" />
             <NavItem icon={<AppWindow className="w-4 h-4" />} label="Services" path="/ops/services" active={path.startsWith('/ops/services')} collapsed={collapsed} tone="ops" />
@@ -268,7 +295,7 @@ export function Sidebar() {
             <NavItem icon={<CreditCard className="w-4 h-4" />} label="Billing" path="/ops/billing" active={path.startsWith('/ops/billing')} collapsed={collapsed} tone="ops" />
 
             {!collapsed && (
-              <div className="pl-3 mt-1 space-y-0.5 border-l border-status-warning/20 ml-2">
+              <div className="pl-3 mt-1 space-y-0.5 border-l border-border-default/30 ml-2">
                 <NavItem icon={<LifeBuoy className="w-3.5 h-3.5" />} label="Tickets" path="/ops/tickets" active={path.startsWith('/ops/tickets')} collapsed={false} tone="ops" />
                 <NavItem icon={<Coins className="w-3.5 h-3.5" />} label="Credits" path="/ops/credits" active={path.startsWith('/ops/credits')} collapsed={false} tone="ops" />
                 <NavItem icon={<Database className="w-3.5 h-3.5" />} label="Datastores" path="/ops/datastores" active={path.startsWith('/ops/datastores')} collapsed={false} tone="ops" />
@@ -283,7 +310,7 @@ export function Sidebar() {
             {collapsed && (
               <NavItem icon={<Siren className="w-4 h-4" />} label="Incidents" path="/ops/incidents" active={path.startsWith('/ops/incidents')} collapsed={true} tone="ops" />
             )}
-          </>
+          </OpsPanel>
         )}
       </nav>
 
