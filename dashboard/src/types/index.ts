@@ -251,6 +251,7 @@ export interface BillingLineItem {
   resource_name: string;
   plan: string;
   monthly_cost: number;
+  credit_covered?: boolean;
 }
 
 export interface BillingOverview {
@@ -261,6 +262,7 @@ export interface BillingOverview {
   current_plan?: string;
   items: BillingLineItem[];
   monthly_total: number;
+  credit_covered_total?: number;
   credit_balance_cents?: number;
 }
 

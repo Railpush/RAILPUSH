@@ -47,11 +47,12 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 	}
 
 	type BillingLineItem struct {
-		ResourceType string `json:"resource_type"`
-		ResourceID   string `json:"resource_id"`
-		ResourceName string `json:"resource_name"`
-		Plan         string `json:"plan"`
-		MonthlyCost  int    `json:"monthly_cost"`
+		ResourceType  string `json:"resource_type"`
+		ResourceID    string `json:"resource_id"`
+		ResourceName  string `json:"resource_name"`
+		Plan          string `json:"plan"`
+		MonthlyCost   int    `json:"monthly_cost"`
+		CreditCovered bool   `json:"credit_covered"`
 	}
 
 	type BillingOverview struct {
@@ -62,6 +63,7 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 		CurrentPlan        string            `json:"current_plan"`
 		Items              []BillingLineItem `json:"items"`
 		MonthlyTotal       int               `json:"monthly_total"`
+		CreditCoveredTotal int               `json:"credit_covered_total"`
 		CreditBalanceCents int64             `json:"credit_balance_cents"`
 	}
 
@@ -100,14 +102,21 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 				if planRank(item.Plan) > planRank(overview.CurrentPlan) {
 					overview.CurrentPlan = item.Plan
 				}
+				// Items with empty Stripe IDs were paid for by credits — they are not unbilled.
+				creditCovered := strings.TrimSpace(item.StripeSubscriptionItemID) == "" && strings.TrimSpace(item.StripePriceID) == ""
 				overview.Items = append(overview.Items, BillingLineItem{
-					ResourceType: item.ResourceType,
-					ResourceID:   item.ResourceID,
-					ResourceName: item.ResourceName,
-					Plan:         item.Plan,
-					MonthlyCost:  cost,
+					ResourceType:  item.ResourceType,
+					ResourceID:    item.ResourceID,
+					ResourceName:  item.ResourceName,
+					Plan:          item.Plan,
+					MonthlyCost:   cost,
+					CreditCovered: creditCovered,
 				})
-				overview.MonthlyTotal += cost
+				if creditCovered {
+					overview.CreditCoveredTotal += cost
+				} else {
+					overview.MonthlyTotal += cost
+				}
 			}
 		}
 

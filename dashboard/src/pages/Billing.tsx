@@ -286,7 +286,10 @@ export function Billing() {
 
   const items = overview?.items ?? [];
   const paidItems = items.filter((item) => item.monthly_cost > 0);
-  const monthToDateCents = overview?.monthly_total ?? paidItems.reduce((sum, item) => sum + item.monthly_cost, 0);
+  const stripeItems = paidItems.filter((item) => !item.credit_covered);
+  const creditItems = paidItems.filter((item) => item.credit_covered);
+  const monthToDateCents = overview?.monthly_total ?? stripeItems.reduce((sum, item) => sum + item.monthly_cost, 0);
+  const creditCoveredCents = overview?.credit_covered_total ?? creditItems.reduce((sum, item) => sum + item.monthly_cost, 0);
 
   const projectedCents = useMemo(() => {
     const now = new Date();
@@ -315,18 +318,20 @@ export function Billing() {
   const includedUsage = includedByPlan[currentPlanId];
 
   const groupedCharges = useMemo(() => {
-    const grouped = new Map<string, { label: string; total: number; items: BillingLineItem[] }>();
+    const grouped = new Map<string, { label: string; total: number; stripeTotal: number; items: BillingLineItem[] }>();
     paidItems.forEach((item) => {
       const key = item.resource_type;
       const existing = grouped.get(key);
       if (existing) {
         existing.total += item.monthly_cost;
+        if (!item.credit_covered) existing.stripeTotal += item.monthly_cost;
         existing.items.push(item);
         return;
       }
       grouped.set(key, {
         label: resourceLabel(key),
         total: item.monthly_cost,
+        stripeTotal: item.credit_covered ? 0 : item.monthly_cost,
         items: [item],
       });
     });
@@ -458,7 +463,14 @@ export function Billing() {
         <StatCard
           title="Unbilled Charges"
           value={formatCurrency(monthToDateCents)}
-          helper={<span className="text-brand">Projected: {formatCurrency(projectedCents)}</span>}
+          helper={
+            <div className="space-y-0.5">
+              <span className="text-brand block">Projected: {formatCurrency(projectedCents)}</span>
+              {creditCoveredCents > 0 && (
+                <span className="text-emerald-400 text-xs block">{formatCurrency(creditCoveredCents)} covered by credits</span>
+              )}
+            </div>
+          }
           icon={<ReceiptText className="w-5 h-5" />}
         />
         <StatCard
@@ -584,18 +596,26 @@ export function Billing() {
                               {group.label}
                             </div>
                           </div>
-                          <span className="font-mono text-content-primary">{formatCurrency(group.total)}</span>
+                          <div className="flex items-center gap-2">
+                            {group.stripeTotal < group.total && (
+                              <span className="text-emerald-400 text-[10px]">{formatCurrency(group.total - group.stripeTotal)} credit</span>
+                            )}
+                            <span className="font-mono text-content-primary">{formatCurrency(group.stripeTotal)}</span>
+                          </div>
                         </button>
 
                         {isOpen && (
                           <div className="bg-surface-tertiary/5 border-t border-border-default/30">
                             {group.items.map((item) => (
                               <div key={`${item.resource_type}-${item.resource_id}`} className="px-4 py-2 pl-12 flex justify-between text-xs border-b border-border-default/10 last:border-0">
-                                <div>
+                                <div className="flex items-center gap-2">
                                   <span className="text-content-primary">{item.resource_name}</span>
-                                  <span className="ml-2 text-content-tertiary uppercase text-[10px]">{item.plan}</span>
+                                  <span className="text-content-tertiary uppercase text-[10px]">{item.plan}</span>
+                                  {item.credit_covered && (
+                                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-[10px] font-medium">Credit</span>
+                                  )}
                                 </div>
-                                <span className="font-mono text-content-secondary">{formatCurrency(item.monthly_cost)}</span>
+                                <span className={cn('font-mono', item.credit_covered ? 'text-emerald-400 line-through' : 'text-content-secondary')}>{formatCurrency(item.monthly_cost)}</span>
                               </div>
                             ))}
                           </div>
