@@ -18,10 +18,12 @@ interface SidebarItem {
   label: string;
   path: string;
   active?: boolean;
+  tone?: 'default' | 'ops';
 }
 
-function NavItem({ icon, label, path, active, collapsed }: SidebarItem & { active: boolean; collapsed?: boolean }) {
+function NavItem({ icon, label, path, active, collapsed, tone = 'default' }: SidebarItem & { active: boolean; collapsed?: boolean }) {
   const navigate = useNavigate();
+  const isOpsTone = tone === 'ops';
   return (
     <button
       onClick={() => navigate(path)}
@@ -30,21 +32,31 @@ function NavItem({ icon, label, path, active, collapsed }: SidebarItem & { activ
         'w-full flex items-center gap-3 rounded-lg text-[13px] transition-all duration-200 cursor-pointer border relative overflow-hidden group',
         collapsed ? 'justify-center p-2' : 'px-3 py-2',
         active
-          ? 'bg-brand/10 text-brand font-medium border-brand/20'
-          : 'text-content-secondary hover:bg-surface-tertiary hover:text-content-primary border-transparent'
+          ? (isOpsTone ? 'bg-status-warning-bg text-status-warning font-medium border-status-warning/30' : 'bg-brand/10 text-brand font-medium border-brand/20')
+          : (isOpsTone ? 'text-status-warning/80 hover:bg-status-warning-bg hover:text-status-warning border-transparent' : 'text-content-secondary hover:bg-surface-tertiary hover:text-content-primary border-transparent')
       )}
     >
-      {active && <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-brand" />}
-      <span className={cn("w-4 h-4 flex-shrink-0 transition-transform duration-200", active ? "scale-110" : "opacity-70 group-hover:scale-110 group-hover:opacity-100")}>{icon}</span>
+      {active && <div className={cn("absolute left-0 top-0 bottom-0 w-0.5", isOpsTone ? "bg-status-warning" : "bg-brand")} />}
+      <span
+        className={cn(
+          "w-4 h-4 flex-shrink-0 transition-transform duration-200",
+          active ? "scale-110" : (isOpsTone ? "opacity-90 group-hover:scale-110 group-hover:opacity-100" : "opacity-70 group-hover:scale-110 group-hover:opacity-100")
+        )}
+      >
+        {icon}
+      </span>
       {!collapsed && <span className="truncate">{label}</span>}
     </button>
   );
 }
 
-function SectionLabel({ label, collapsed }: { label: string; collapsed?: boolean }) {
+function SectionLabel({ label, collapsed, tone = 'default' }: { label: string; collapsed?: boolean; tone?: 'default' | 'ops' }) {
   if (collapsed) return <div className="my-2 border-t border-border-default/50" />;
   return (
-    <div className="px-3 pt-5 pb-2 text-[10px] font-bold uppercase tracking-widest text-content-tertiary opacity-80">
+    <div className={cn(
+      "px-3 pt-5 pb-2 text-[10px] font-bold uppercase tracking-widest opacity-80",
+      tone === 'ops' ? "text-status-warning" : "text-content-tertiary",
+    )}>
       {label}
     </div>
   );
@@ -248,28 +260,28 @@ export function Sidebar() {
 
         {isOps && (
           <>
-            <SectionLabel label="Ops Mode" collapsed={collapsed} />
-            <NavItem icon={<ShieldCheck className="w-4 h-4" />} label="Overview" path="/ops" active={path === '/ops'} collapsed={collapsed} />
-            <NavItem icon={<Users className="w-4 h-4" />} label="Customers" path="/ops/customers" active={path.startsWith('/ops/customers')} collapsed={collapsed} />
-            <NavItem icon={<AppWindow className="w-4 h-4" />} label="Services" path="/ops/services" active={path.startsWith('/ops/services')} collapsed={collapsed} />
-            <NavItem icon={<TrendingUp className="w-4 h-4" />} label="Deployments" path="/ops/deployments" active={path.startsWith('/ops/deployments')} collapsed={collapsed} />
-            <NavItem icon={<CreditCard className="w-4 h-4" />} label="Billing" path="/ops/billing" active={path.startsWith('/ops/billing')} collapsed={collapsed} />
+            <SectionLabel label="Ops Mode" collapsed={collapsed} tone="ops" />
+            <NavItem icon={<ShieldCheck className="w-4 h-4" />} label="Overview" path="/ops" active={path === '/ops'} collapsed={collapsed} tone="ops" />
+            <NavItem icon={<Users className="w-4 h-4" />} label="Customers" path="/ops/customers" active={path.startsWith('/ops/customers')} collapsed={collapsed} tone="ops" />
+            <NavItem icon={<AppWindow className="w-4 h-4" />} label="Services" path="/ops/services" active={path.startsWith('/ops/services')} collapsed={collapsed} tone="ops" />
+            <NavItem icon={<TrendingUp className="w-4 h-4" />} label="Deployments" path="/ops/deployments" active={path.startsWith('/ops/deployments')} collapsed={collapsed} tone="ops" />
+            <NavItem icon={<CreditCard className="w-4 h-4" />} label="Billing" path="/ops/billing" active={path.startsWith('/ops/billing')} collapsed={collapsed} tone="ops" />
 
             {!collapsed && (
-              <div className="pl-3 mt-1 space-y-0.5 border-l border-border-subtle ml-2">
-                <NavItem icon={<LifeBuoy className="w-3.5 h-3.5" />} label="Tickets" path="/ops/tickets" active={path.startsWith('/ops/tickets')} collapsed={false} />
-                <NavItem icon={<Coins className="w-3.5 h-3.5" />} label="Credits" path="/ops/credits" active={path.startsWith('/ops/credits')} collapsed={false} />
-                <NavItem icon={<Database className="w-3.5 h-3.5" />} label="Datastores" path="/ops/datastores" active={path.startsWith('/ops/datastores')} collapsed={false} />
-                <NavItem icon={<ScrollText className="w-3.5 h-3.5" />} label="Audit Log" path="/ops/audit" active={path.startsWith('/ops/audit')} collapsed={false} />
-                <NavItem icon={<Server className="w-3.5 h-3.5" />} label="Technical" path="/ops/technical" active={path.startsWith('/ops/technical')} collapsed={false} />
-                <NavItem icon={<BarChart3 className="w-3.5 h-3.5" />} label="Performance" path="/ops/performance" active={path.startsWith('/ops/performance')} collapsed={false} />
-                <NavItem icon={<Mail className="w-3.5 h-3.5" />} label="Email" path="/ops/email" active={path.startsWith('/ops/email')} collapsed={false} />
-                <NavItem icon={<Settings className="w-3.5 h-3.5" />} label="Settings" path="/ops/settings" active={path.startsWith('/ops/settings')} collapsed={false} />
-                <NavItem icon={<Siren className="w-3.5 h-3.5" />} label="Incidents" path="/ops/incidents" active={path.startsWith('/ops/incidents')} collapsed={false} />
+              <div className="pl-3 mt-1 space-y-0.5 border-l border-status-warning/20 ml-2">
+                <NavItem icon={<LifeBuoy className="w-3.5 h-3.5" />} label="Tickets" path="/ops/tickets" active={path.startsWith('/ops/tickets')} collapsed={false} tone="ops" />
+                <NavItem icon={<Coins className="w-3.5 h-3.5" />} label="Credits" path="/ops/credits" active={path.startsWith('/ops/credits')} collapsed={false} tone="ops" />
+                <NavItem icon={<Database className="w-3.5 h-3.5" />} label="Datastores" path="/ops/datastores" active={path.startsWith('/ops/datastores')} collapsed={false} tone="ops" />
+                <NavItem icon={<ScrollText className="w-3.5 h-3.5" />} label="Audit Log" path="/ops/audit" active={path.startsWith('/ops/audit')} collapsed={false} tone="ops" />
+                <NavItem icon={<Server className="w-3.5 h-3.5" />} label="Technical" path="/ops/technical" active={path.startsWith('/ops/technical')} collapsed={false} tone="ops" />
+                <NavItem icon={<BarChart3 className="w-3.5 h-3.5" />} label="Performance" path="/ops/performance" active={path.startsWith('/ops/performance')} collapsed={false} tone="ops" />
+                <NavItem icon={<Mail className="w-3.5 h-3.5" />} label="Email" path="/ops/email" active={path.startsWith('/ops/email')} collapsed={false} tone="ops" />
+                <NavItem icon={<Settings className="w-3.5 h-3.5" />} label="Settings" path="/ops/settings" active={path.startsWith('/ops/settings')} collapsed={false} tone="ops" />
+                <NavItem icon={<Siren className="w-3.5 h-3.5" />} label="Incidents" path="/ops/incidents" active={path.startsWith('/ops/incidents')} collapsed={false} tone="ops" />
               </div>
             )}
             {collapsed && (
-              <NavItem icon={<Siren className="w-4 h-4" />} label="Incidents" path="/ops/incidents" active={path.startsWith('/ops/incidents')} collapsed={true} />
+              <NavItem icon={<Siren className="w-4 h-4" />} label="Incidents" path="/ops/incidents" active={path.startsWith('/ops/incidents')} collapsed={true} tone="ops" />
             )}
           </>
         )}
