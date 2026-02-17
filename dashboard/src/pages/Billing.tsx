@@ -12,6 +12,7 @@ import {
   Key,
   PencilLine,
   ReceiptText,
+  Wallet,
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
@@ -35,12 +36,9 @@ type Section = {
 
 const sections: Section[] = [
   { id: 'plan', label: 'Plan' },
-  { id: 'payment-method', label: 'Payment Method' },
-  { id: 'billing-information', label: 'Billing Information' },
   { id: 'included-usage', label: 'Included Usage' },
   { id: 'unbilled-charges', label: 'Unbilled Charges' },
-  { id: 'credit-balance', label: 'Credit Balance' },
-  { id: 'invoice-history', label: 'Invoice History' },
+  { id: 'billing-info', label: 'Billing Details' },
 ];
 
 const planRank: Record<PlanID, number> = {
@@ -290,6 +288,7 @@ export function Billing() {
   const creditItems = paidItems.filter((item) => item.credit_covered);
   const monthToDateCents = overview?.monthly_total ?? stripeItems.reduce((sum, item) => sum + item.monthly_cost, 0);
   const creditCoveredCents = overview?.credit_covered_total ?? creditItems.reduce((sum, item) => sum + item.monthly_cost, 0);
+  const creditBalanceCents = overview?.credit_balance_cents ?? 0;
 
   const projectedCents = useMemo(() => {
     const now = new Date();
@@ -448,7 +447,27 @@ export function Billing() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <StatCard
+          title="Credit Balance"
+          value={formatCurrency(creditBalanceCents)}
+          helper={
+            <div className="space-y-0.5">
+              <span className="text-emerald-400 text-xs block">
+                Credits are auto-applied to paid resources
+              </span>
+              <span className="text-content-tertiary text-xs block">
+                When used, we deduct from this balance before charging your card.
+              </span>
+              {creditCoveredCents > 0 && (
+                <span className="text-emerald-400 text-[10px] block">
+                  {formatCurrency(creditCoveredCents)} currently covered by credits
+                </span>
+              )}
+            </div>
+          }
+          icon={<Wallet className="w-5 h-5 text-emerald-400" />}
+        />
         <StatCard
           title="Current Plan"
           value={currentPlan.name}
@@ -467,7 +486,14 @@ export function Billing() {
             <div className="space-y-0.5">
               <span className="text-brand block">Projected: {formatCurrency(projectedCents)}</span>
               {creditCoveredCents > 0 && (
-                <span className="text-emerald-400 text-xs block">{formatCurrency(creditCoveredCents)} covered by credits</span>
+                <span className="text-emerald-400 text-xs block">
+                  Credits applied: -{formatCurrency(creditCoveredCents)} (deducted from balance)
+                </span>
+              )}
+              {creditCoveredCents === 0 && creditBalanceCents > 0 && (
+                <span className="text-emerald-400 text-xs block">
+                  Credits will be used first (from your {formatCurrency(creditBalanceCents)} balance)
+                </span>
               )}
             </div>
           }
@@ -649,7 +675,12 @@ export function Billing() {
               <div className="space-y-2">
                 <p className="text-xs uppercase tracking-wider text-content-tertiary">Credit Balance</p>
                 <div className="flex items-center justify-between p-3 rounded bg-surface-tertiary/20 border border-border-default/50">
-                  <span className="text-lg font-bold text-white">{formatCurrency(overview?.credit_balance_cents ?? 0)}</span>
+                  <div className="space-y-1">
+                    <span className="text-lg font-bold text-white">{formatCurrency(creditBalanceCents)}</span>
+                    <span className="text-[10px] text-content-tertiary block">
+                      Credits are deducted automatically when they cover a resource.
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
