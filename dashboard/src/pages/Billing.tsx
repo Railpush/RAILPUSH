@@ -186,7 +186,7 @@ function StatCard({
         <div className="flex-1">
           <p className="text-xs uppercase tracking-wider text-content-tertiary font-semibold">{title}</p>
           <p className="text-2xl font-bold text-content-primary mt-1 tracking-tight">{value}</p>
-          {helper && <div className="text-sm text-content-secondary mt-1">{helper}</div>}
+          {helper && <div className="mt-2 text-xs leading-snug text-content-secondary">{helper}</div>}
         </div>
       </div>
     </div>
@@ -452,52 +452,46 @@ export function Billing() {
           title="Credit Balance"
           value={formatCurrency(creditBalanceCents)}
           helper={
-            <div className="space-y-0.5">
-              <span className="text-emerald-400 text-xs block">
-                Credits are auto-applied to paid resources
-              </span>
-              <span className="text-content-tertiary text-xs block">
-                When used, we deduct from this balance before charging your card.
-              </span>
-              {creditCoveredCents > 0 && (
-                <span className="text-emerald-400 text-[10px] block">
-                  {formatCurrency(creditCoveredCents)} currently covered by credits
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 text-[10px] font-medium border border-emerald-500/20">
+                  Auto-applied
                 </span>
+                <span className="text-content-tertiary">
+                  Deducted from your balance before billing
+                </span>
+              </div>
+              {creditCoveredCents > 0 && (
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-content-tertiary">Covered</span>
+                  <span className="font-mono text-emerald-300">{formatCurrency(creditCoveredCents)}</span>
+                </div>
               )}
             </div>
           }
-          icon={<Wallet className="w-5 h-5 text-emerald-400" />}
-        />
-        <StatCard
-          title="Current Plan"
-          value={currentPlan.name}
-          helper={
-            <div className="flex items-center gap-2 mt-1">
-              <StatusPill status={overview?.subscription_status} />
-              <span className="text-xs text-content-tertiary">{PLAN_BY_ID[currentPlanId].priceLabel}</span>
-            </div>
-          }
-          icon={<CircleDollarSign className="w-5 h-5" />}
+          icon={<Wallet className="w-5 h-5" />}
         />
         <StatCard
           title="Unbilled Charges"
           value={formatCurrency(monthToDateCents)}
           helper={
-            <div className="space-y-0.5">
-              <span className="text-brand block">Projected: {formatCurrency(projectedCents)}</span>
-              {creditCoveredCents > 0 && (
-                <span className="text-emerald-400 text-xs block">
-                  Credits applied: -{formatCurrency(creditCoveredCents)} (deducted from balance)
-                </span>
-              )}
-              {creditCoveredCents === 0 && creditBalanceCents > 0 && (
-                <span className="text-emerald-400 text-xs block">
-                  Credits will be used first (from your {formatCurrency(creditBalanceCents)} balance)
-                </span>
-              )}
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-content-tertiary">Projected</span>
+              <span className="font-mono text-content-secondary">{formatCurrency(projectedCents)}</span>
             </div>
           }
           icon={<ReceiptText className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Current Plan"
+          value={currentPlan.name}
+          helper={
+            <div className="flex items-center gap-2">
+              <StatusPill status={overview?.subscription_status} />
+              <span className="text-content-tertiary">{PLAN_BY_ID[currentPlanId].priceLabel}</span>
+            </div>
+          }
+          icon={<CircleDollarSign className="w-5 h-5" />}
         />
         <StatCard
           title="Payment Method"
@@ -516,6 +510,16 @@ export function Billing() {
           }
           icon={<CreditCard className="w-5 h-5" />}
         />
+      </div>
+
+      <div className="glass-panel px-4 py-3 rounded-xl border border-border-default/60 flex items-start gap-3">
+        <div className="mt-0.5 text-emerald-300">
+          <Wallet className="w-4 h-4" />
+        </div>
+        <p className="text-xs leading-snug text-content-secondary">
+          Credits are applied automatically when you create or upgrade paid resources. If your balance covers the full monthly
+          cost, we deduct credits; otherwise we bill your payment method.
+        </p>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_240px] gap-8">
