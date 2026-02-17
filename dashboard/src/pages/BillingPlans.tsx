@@ -8,7 +8,7 @@ import { ApiError, billing, blueprints, databases, keyvalue, services as service
 import { PLAN_SPECS, type PlanID } from '../lib/plans';
 import { cn } from '../lib/utils';
 import { toast } from 'sonner';
-import type { BillingOverview, ManagedDatabase, ManagedKeyValue, Service } from '../types';
+import type { BillingOverview, Blueprint, BlueprintResource, ManagedDatabase, ManagedKeyValue, Service } from '../types';
 
 function normalizePlan(plan: string): PlanID {
   const p = (plan || '').trim().toLowerCase();
@@ -45,6 +45,7 @@ export function BillingPlans() {
 
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState<BillingOverview | null>(null);
+  const [blueprint, setBlueprint] = useState<(Blueprint & { resources: BlueprintResource[] }) | null>(null);
   const [svcs, setSvcs] = useState<Service[]>([]);
   const [dbs, setDbs] = useState<ManagedDatabase[]>([]);
   const [kvs, setKvs] = useState<ManagedKeyValue[]>([]);
@@ -60,6 +61,28 @@ export function BillingPlans() {
   const returnTo = safeReturnTo(searchParams.get('return_to') || '');
   const backHref = returnTo || '/billing';
   const backLabel = returnTo?.startsWith('/blueprints/') ? 'Back to Blueprint' : 'Back';
+
+  function formatBlueprintSyncError(syncError: string | null): string | null {
+    if (!syncError) return null;
+    const lower = syncError.toLowerCase();
+
+    if (lower.startsWith('billing error')) {
+      // Prefer showing backend-provided details if present: "billing error: <detail>"
+      const idx = syncError.indexOf(':');
+      if (idx !== -1 && idx < syncError.length - 1) {
+        const detail = syncError.slice(idx + 1).trim();
+        if (detail) return detail;
+      }
+      return 'Billing error. Please update your payment method (or contact support) and retry sync.';
+    }
+    if (lower.includes('payment method required')) {
+      return 'Payment method required. Add or update a payment method, then retry sync.';
+    }
+    if (lower.includes('stripe') && lower.includes('price')) {
+      return 'Paid plan billing is not configured on this server. Please contact support.';
+    }
+    return syncError;
+  }
 
   useEffect(() => {
     let alive = true;
@@ -87,6 +110,25 @@ export function BillingPlans() {
       });
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    let alive = true;
+    if (source !== 'blueprint' || !blueprintId) {
+      setBlueprint(null);
+      return () => { alive = false; };
+    }
+    blueprints
+      .get(blueprintId)
+      .then((bp) => {
+        if (!alive) return;
+        setBlueprint(bp);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setBlueprint(null);
+      });
+    return () => { alive = false; };
+  }, [source, blueprintId]);
 
   const rows = useMemo<ResourceRow[]>(() => {
     const out: ResourceRow[] = [];
@@ -301,6 +343,12 @@ export function BillingPlans() {
     );
   }
 
+  const bpIsFailed = (blueprint?.last_sync_status || '').startsWith('failed');
+  const bpSyncError = bpIsFailed && (blueprint?.last_sync_status || '').includes(': ')
+    ? (blueprint?.last_sync_status || '').slice((blueprint?.last_sync_status || '').indexOf(': ') + 2)
+    : null;
+  const bpSyncErrorDisplay = formatBlueprintSyncError(bpSyncError);
+
   return (
     <div className="space-y-6 pb-10">
       <div className="flex items-start justify-between gap-4">
@@ -336,6 +384,17 @@ export function BillingPlans() {
               <div className="text-xs text-content-secondary mt-1">
                 Plans apply per resource. If your blueprint failed before resources were created, add/update your payment method and then retry sync.
               </div>
+              {blueprint && (
+                <div className="text-xs text-content-tertiary mt-2">
+                  Blueprint: <span className="font-mono">{blueprint.name}</span>
+                  {blueprint.last_sync_status ? ` · Status: ${blueprint.last_sync_status}` : ''}
+                </div>
+              )}
+              {bpSyncErrorDisplay && (
+                <div className="text-xs text-status-error mt-2 break-words">
+                  {bpSyncErrorDisplay}
+                </div>
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {blueprintId && (
@@ -403,10 +462,26 @@ export function BillingPlans() {
         <Card>
           <div className="py-10 text-center space-y-4">
             <div className="text-sm font-semibold text-content-primary">No resources found</div>
-            <div className="text-sm text-content-secondary max-w-[60ch] mx-auto">
-              Plans are applied per resource. Create a service, database, or key value store, then come back here to upgrade it.
-            </div>
+            {source === 'blueprint' ? (
+              <div className="text-sm text-content-secondary max-w-[70ch] mx-auto">
+                This page lists existing resources so you can change their plans. Your blueprint sync failed before resources were created, so there’s nothing to upgrade yet.
+                Fix the sync error above, then click <span className="font-semibold">Retry Sync</span>.
+              </div>
+            ) : (
+              <div className="text-sm text-content-secondary max-w-[60ch] mx-auto">
+                Plans are applied per resource. Create a service, database, or key value store, then come back here to upgrade it.
+              </div>
+            )}
             <div className="flex flex-wrap items-center justify-center gap-2">
+              {source === 'blueprint' && blueprintId && (
+                <Button
+                  onClick={handleRetryBlueprintSync}
+                  disabled={busyKey === `retry-blueprint:${blueprintId}`}
+                  loading={busyKey === `retry-blueprint:${blueprintId}`}
+                >
+                  Retry Sync
+                </Button>
+              )}
               <Button onClick={() => navigate('/new')}>Create Service</Button>
               <Button variant="secondary" onClick={() => navigate('/new/postgres')}>Create Database</Button>
               <Button variant="secondary" onClick={() => navigate('/new/keyvalue')}>Create Key Value</Button>

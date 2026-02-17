@@ -36,6 +36,12 @@ function formatSyncError(syncError: string | null): string | null {
     return 'Payment method required. Add a payment method in Billing, then try syncing again.';
   }
   if (lower.startsWith('billing error')) {
+    // If the backend included details (e.g. "billing error: <detail>") show them.
+    const idx = syncError.indexOf(':');
+    if (idx !== -1 && idx < syncError.length - 1) {
+      const detail = syncError.slice(idx + 1).trim();
+      if (detail) return detail;
+    }
     return 'Billing error. Open Billing > Plans and try syncing again.';
   }
 

@@ -509,7 +509,21 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		if err != nil {
 			log.Printf("Blueprint sync billing error blueprint=%s err=%v", bp.ID, err)
 		}
-		fail("billing error. please open Billing > Plans and try again.")
+		// Surface a safe, actionable message to users. Stripe errors should already be sanitized
+		// by the Stripe service; we still normalize whitespace and bound the length.
+		msg := "billing error"
+		if err != nil {
+			detail := strings.TrimSpace(err.Error())
+			detail = strings.ReplaceAll(detail, "\n", " ")
+			detail = strings.Join(strings.Fields(detail), " ")
+			if len(detail) > 280 {
+				detail = detail[:280] + "…"
+			}
+			if detail != "" {
+				msg = "billing error: " + detail
+			}
+		}
+		fail(msg)
 	}
 
 	// Stripe billing: blueprint sync can create paid resources, so we must bill (or block) here too.
