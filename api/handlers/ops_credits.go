@@ -18,10 +18,11 @@ import (
 
 type OpsCreditsHandler struct {
 	Config *config.Config
+	Stripe *services.StripeService
 }
 
-func NewOpsCreditsHandler(cfg *config.Config) *OpsCreditsHandler {
-	return &OpsCreditsHandler{Config: cfg}
+func NewOpsCreditsHandler(cfg *config.Config, stripeService *services.StripeService) *OpsCreditsHandler {
+	return &OpsCreditsHandler{Config: cfg, Stripe: stripeService}
 }
 
 func (h *OpsCreditsHandler) ensureOps(w http.ResponseWriter, r *http.Request) bool {
@@ -134,6 +135,42 @@ func (h *OpsCreditsHandler) Grant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If Stripe billing is enabled, keep Stripe customer balance in sync with credits so
+	// future invoices reflect the workspace's credit balance.
+	var stripeCustomerID string
+	if h.Stripe != nil && h.Stripe.Enabled() {
+		ws, err := models.GetWorkspace(workspaceID)
+		if err != nil || ws == nil || strings.TrimSpace(ws.OwnerID) == "" {
+			utils.RespondError(w, http.StatusBadRequest, "workspace not found")
+			return
+		}
+		owner, err := models.GetUserByID(ws.OwnerID)
+		if err != nil || owner == nil {
+			utils.RespondError(w, http.StatusBadRequest, "workspace owner not found")
+			return
+		}
+		bc, err := h.Stripe.EnsureCustomer(ws.OwnerID, owner.Email)
+		if err != nil || bc == nil {
+			log.Printf("ops credits: failed to ensure stripe customer workspace=%s owner=%s err=%v", workspaceID, ws.OwnerID, err)
+			utils.RespondError(w, http.StatusInternalServerError, "failed to sync credits to stripe")
+			return
+		}
+		stripeCustomerID = bc.StripeCustomerID
+
+		// One-time migration of any existing credits for this workspace.
+		if err := h.Stripe.EnsureWorkspaceCreditsMigrated(bc, workspaceID); err != nil {
+			log.Printf("ops credits: credit migration failed workspace=%s customer=%s err=%v", workspaceID, stripeCustomerID, err)
+			utils.RespondError(w, http.StatusInternalServerError, "failed to sync credits to stripe")
+			return
+		}
+
+		if err := h.Stripe.ApplyWorkspaceCreditDelta(stripeCustomerID, workspaceID, int64(req.AmountCents), req.Reason); err != nil {
+			log.Printf("ops credits: stripe balance transaction failed workspace=%s customer=%s amount_cents=%d err=%v", workspaceID, stripeCustomerID, req.AmountCents, err)
+			utils.RespondError(w, http.StatusInternalServerError, "failed to sync credits to stripe")
+			return
+		}
+	}
+
 	entry := &models.WorkspaceCreditLedgerEntry{
 		WorkspaceID: workspaceID,
 		AmountCents: req.AmountCents,
@@ -141,6 +178,10 @@ func (h *OpsCreditsHandler) Grant(w http.ResponseWriter, r *http.Request) {
 		CreatedBy:   userID,
 	}
 	if err := models.CreateWorkspaceCreditEntry(entry); err != nil {
+		// Best-effort rollback in Stripe if we already created the balance transaction.
+		if stripeCustomerID != "" && h.Stripe != nil && h.Stripe.Enabled() {
+			_ = h.Stripe.ApplyWorkspaceCreditDelta(stripeCustomerID, workspaceID, -int64(req.AmountCents), "rollback: ledger write failed")
+		}
 		log.Printf("ops credits: grant failed user=%s workspace=%s amount_cents=%d err=%v", userID, workspaceID, req.AmountCents, err)
 		utils.RespondError(w, http.StatusInternalServerError, "failed to grant credit")
 		return

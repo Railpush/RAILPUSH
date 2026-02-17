@@ -285,22 +285,22 @@ export function Billing() {
   const items = overview?.items ?? [];
   const paidItems = items.filter((item) => item.monthly_cost > 0);
   const stripeItems = paidItems.filter((item) => !item.credit_covered);
-  const creditItems = paidItems.filter((item) => item.credit_covered);
   const monthToDateCents = overview?.monthly_total ?? stripeItems.reduce((sum, item) => sum + item.monthly_cost, 0);
-  const creditCoveredCents = overview?.credit_covered_total ?? creditItems.reduce((sum, item) => sum + item.monthly_cost, 0);
   const creditBalanceCents = Math.max(0, overview?.credit_balance_cents ?? 0);
 
-  const projectedCents = useMemo(() => {
-    const now = new Date();
-    const day = now.getDate();
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    if (day <= 0 || daysInMonth <= 0) return monthToDateCents;
-    return Math.round((monthToDateCents / day) * daysInMonth);
-  }, [monthToDateCents]);
-
-  const projectedCreditAppliedCents = Math.min(creditBalanceCents, projectedCents);
-  const projectedToPayCents = Math.max(0, projectedCents - projectedCreditAppliedCents);
-  const projectedCreditCarryCents = Math.max(0, creditBalanceCents - projectedCreditAppliedCents);
+  const nextInvoiceTotalCents = Math.max(0, overview?.next_invoice_total_cents ?? monthToDateCents);
+  const nextInvoiceCreditAppliedCents = Math.max(
+    0,
+    overview?.next_invoice_credit_applied_cents ?? Math.min(creditBalanceCents, nextInvoiceTotalCents),
+  );
+  const nextInvoiceAmountDueCents = Math.max(
+    0,
+    overview?.next_invoice_amount_due_cents ?? (nextInvoiceTotalCents - nextInvoiceCreditAppliedCents),
+  );
+  const nextInvoiceCreditCarryCents = Math.max(
+    0,
+    overview?.next_invoice_credit_carry_cents ?? (creditBalanceCents - nextInvoiceCreditAppliedCents),
+  );
 
   const currentPlanId = useMemo<PlanID>(() => {
     const fromApi = overview?.current_plan ? normalizePlan(overview.current_plan) : null;
@@ -465,10 +465,10 @@ export function Billing() {
                   Deducted from your balance before billing
                 </span>
               </div>
-              {creditCoveredCents > 0 && (
+              {nextInvoiceCreditAppliedCents > 0 && (
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-content-tertiary">Covered</span>
-                  <span className="font-mono text-emerald-300">{formatCurrency(creditCoveredCents)}</span>
+                  <span className="text-content-tertiary">Applied next invoice</span>
+                  <span className="font-mono text-emerald-300">-{formatCurrency(nextInvoiceCreditAppliedCents)}</span>
                 </div>
               )}
             </div>
@@ -477,26 +477,22 @@ export function Billing() {
         />
         <StatCard
           title="Unbilled Charges"
-          value={formatCurrency(monthToDateCents)}
+          value={formatCurrency(nextInvoiceTotalCents)}
           helper={
             <div className="space-y-1.5">
               <div className="flex items-center justify-between gap-3">
-                <span className="text-content-tertiary">Projected total</span>
-                <span className="font-mono text-content-secondary">{formatCurrency(projectedCents)}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
                 <span className="text-content-tertiary">Credits</span>
-                <span className="font-mono text-emerald-300">-{formatCurrency(projectedCreditAppliedCents)}</span>
+                <span className="font-mono text-emerald-300">-{formatCurrency(nextInvoiceCreditAppliedCents)}</span>
               </div>
               <div className="h-px bg-border-default/50" />
               <div className="flex items-center justify-between gap-3">
-                <span className="text-content-tertiary">Total to pay</span>
-                <span className="font-mono text-content-primary">{formatCurrency(projectedToPayCents)}</span>
+                <span className="text-content-tertiary">Stripe will charge</span>
+                <span className="font-mono text-content-primary">{formatCurrency(nextInvoiceAmountDueCents)}</span>
               </div>
-              {projectedCreditCarryCents > 0 && (
+              {nextInvoiceCreditCarryCents > 0 && (
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-content-tertiary">Credits next month</span>
-                  <span className="font-mono text-content-secondary">{formatCurrency(projectedCreditCarryCents)}</span>
+                  <span className="font-mono text-content-secondary">{formatCurrency(nextInvoiceCreditCarryCents)}</span>
                 </div>
               )}
             </div>

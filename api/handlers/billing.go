@@ -65,6 +65,10 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 		MonthlyTotal       int               `json:"monthly_total"`
 		CreditCoveredTotal int               `json:"credit_covered_total"`
 		CreditBalanceCents int64             `json:"credit_balance_cents"`
+		NextInvoiceTotalCents         int64 `json:"next_invoice_total_cents"`
+		NextInvoiceAmountDueCents     int64 `json:"next_invoice_amount_due_cents"`
+		NextInvoiceCreditAppliedCents int64 `json:"next_invoice_credit_applied_cents"`
+		NextInvoiceCreditCarryCents   int64 `json:"next_invoice_credit_carry_cents"`
 	}
 
 	overview := BillingOverview{
@@ -73,7 +77,9 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 
 	var stripeSub *stripe.Subscription
 
+	workspaceID := ""
 	if ws, _ := models.GetWorkspaceByOwner(userID); ws != nil && strings.TrimSpace(ws.ID) != "" {
+		workspaceID = ws.ID
 		if bal, err := models.GetWorkspaceCreditBalanceCents(ws.ID); err != nil {
 			log.Printf("Warning: failed to load workspace credit balance: ws=%s err=%v", ws.ID, err)
 		} else {
@@ -83,10 +89,42 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 
 	if bc != nil {
 		if h.Stripe != nil && h.Stripe.Enabled() {
+			// One-time migration so existing workspace credits become Stripe customer balance.
+			if workspaceID != "" {
+				if err := h.Stripe.EnsureWorkspaceCreditsMigrated(bc, workspaceID); err != nil {
+					log.Printf("Warning: failed to migrate workspace credits to Stripe: %v", err)
+				}
+			}
+
 			if sub, syncErr := h.Stripe.SyncBillingCustomer(bc); syncErr != nil {
 				log.Printf("Warning: failed to sync billing customer from Stripe: %v", syncErr)
 			} else {
 				stripeSub = sub
+			}
+
+			// Use Stripe as source of truth for invoice credits and the next charge amount.
+			if credit, err := h.Stripe.CreditBalanceCents(bc.StripeCustomerID); err != nil {
+				log.Printf("Warning: failed to fetch Stripe credit balance: %v", err)
+			} else {
+				overview.CreditBalanceCents = credit
+			}
+			if overview.CreditBalanceCents < 0 {
+				overview.CreditBalanceCents = 0
+			}
+
+			if inv, err := h.Stripe.UpcomingInvoice(bc.StripeCustomerID, bc.StripeSubscriptionID); err != nil {
+				log.Printf("Warning: failed to fetch Stripe upcoming invoice: %v", err)
+			} else if inv != nil {
+				overview.NextInvoiceTotalCents = inv.Total
+				overview.NextInvoiceAmountDueCents = inv.AmountDue
+				if inv.Total > inv.AmountDue {
+					overview.NextInvoiceCreditAppliedCents = inv.Total - inv.AmountDue
+				}
+				if overview.CreditBalanceCents > 0 && overview.NextInvoiceCreditAppliedCents > 0 {
+					if overview.CreditBalanceCents > overview.NextInvoiceCreditAppliedCents {
+						overview.NextInvoiceCreditCarryCents = overview.CreditBalanceCents - overview.NextInvoiceCreditAppliedCents
+					}
+				}
 			}
 		}
 

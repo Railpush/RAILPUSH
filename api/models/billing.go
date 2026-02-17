@@ -15,6 +15,7 @@ type BillingCustomer struct {
 	PaymentMethodLast4   string    `json:"payment_method_last4"`
 	PaymentMethodBrand   string    `json:"payment_method_brand"`
 	SubscriptionStatus   string    `json:"subscription_status"`
+	CreditsMigrated      bool      `json:"credits_migrated"`
 	CreatedAt            time.Time `json:"created_at"`
 	UpdatedAt            time.Time `json:"updated_at"`
 }
@@ -42,9 +43,9 @@ func CreateBillingCustomer(bc *BillingCustomer) error {
 func GetBillingCustomerByUserID(userID string) (*BillingCustomer, error) {
 	bc := &BillingCustomer{}
 	err := database.DB.QueryRow(
-		"SELECT id, user_id, stripe_customer_id, COALESCE(stripe_subscription_id,''), COALESCE(payment_method_last4,''), COALESCE(payment_method_brand,''), COALESCE(subscription_status,'incomplete'), created_at, updated_at FROM billing_customers WHERE user_id=$1",
+		"SELECT id, user_id, stripe_customer_id, COALESCE(stripe_subscription_id,''), COALESCE(payment_method_last4,''), COALESCE(payment_method_brand,''), COALESCE(subscription_status,'incomplete'), COALESCE(credits_migrated,false), created_at, updated_at FROM billing_customers WHERE user_id=$1",
 		userID,
-	).Scan(&bc.ID, &bc.UserID, &bc.StripeCustomerID, &bc.StripeSubscriptionID, &bc.PaymentMethodLast4, &bc.PaymentMethodBrand, &bc.SubscriptionStatus, &bc.CreatedAt, &bc.UpdatedAt)
+	).Scan(&bc.ID, &bc.UserID, &bc.StripeCustomerID, &bc.StripeSubscriptionID, &bc.PaymentMethodLast4, &bc.PaymentMethodBrand, &bc.SubscriptionStatus, &bc.CreditsMigrated, &bc.CreatedAt, &bc.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -54,9 +55,9 @@ func GetBillingCustomerByUserID(userID string) (*BillingCustomer, error) {
 func GetBillingCustomerByStripeID(stripeCustomerID string) (*BillingCustomer, error) {
 	bc := &BillingCustomer{}
 	err := database.DB.QueryRow(
-		"SELECT id, user_id, stripe_customer_id, COALESCE(stripe_subscription_id,''), COALESCE(payment_method_last4,''), COALESCE(payment_method_brand,''), COALESCE(subscription_status,'incomplete'), created_at, updated_at FROM billing_customers WHERE stripe_customer_id=$1",
+		"SELECT id, user_id, stripe_customer_id, COALESCE(stripe_subscription_id,''), COALESCE(payment_method_last4,''), COALESCE(payment_method_brand,''), COALESCE(subscription_status,'incomplete'), COALESCE(credits_migrated,false), created_at, updated_at FROM billing_customers WHERE stripe_customer_id=$1",
 		stripeCustomerID,
-	).Scan(&bc.ID, &bc.UserID, &bc.StripeCustomerID, &bc.StripeSubscriptionID, &bc.PaymentMethodLast4, &bc.PaymentMethodBrand, &bc.SubscriptionStatus, &bc.CreatedAt, &bc.UpdatedAt)
+	).Scan(&bc.ID, &bc.UserID, &bc.StripeCustomerID, &bc.StripeSubscriptionID, &bc.PaymentMethodLast4, &bc.PaymentMethodBrand, &bc.SubscriptionStatus, &bc.CreditsMigrated, &bc.CreatedAt, &bc.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -66,9 +67,9 @@ func GetBillingCustomerByStripeID(stripeCustomerID string) (*BillingCustomer, er
 func GetBillingCustomerByID(id string) (*BillingCustomer, error) {
 	bc := &BillingCustomer{}
 	err := database.DB.QueryRow(
-		"SELECT id, user_id, stripe_customer_id, COALESCE(stripe_subscription_id,''), COALESCE(payment_method_last4,''), COALESCE(payment_method_brand,''), COALESCE(subscription_status,'incomplete'), created_at, updated_at FROM billing_customers WHERE id=$1",
+		"SELECT id, user_id, stripe_customer_id, COALESCE(stripe_subscription_id,''), COALESCE(payment_method_last4,''), COALESCE(payment_method_brand,''), COALESCE(subscription_status,'incomplete'), COALESCE(credits_migrated,false), created_at, updated_at FROM billing_customers WHERE id=$1",
 		id,
-	).Scan(&bc.ID, &bc.UserID, &bc.StripeCustomerID, &bc.StripeSubscriptionID, &bc.PaymentMethodLast4, &bc.PaymentMethodBrand, &bc.SubscriptionStatus, &bc.CreatedAt, &bc.UpdatedAt)
+	).Scan(&bc.ID, &bc.UserID, &bc.StripeCustomerID, &bc.StripeSubscriptionID, &bc.PaymentMethodLast4, &bc.PaymentMethodBrand, &bc.SubscriptionStatus, &bc.CreditsMigrated, &bc.CreatedAt, &bc.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -77,8 +78,8 @@ func GetBillingCustomerByID(id string) (*BillingCustomer, error) {
 
 func UpdateBillingCustomer(bc *BillingCustomer) error {
 	_, err := database.DB.Exec(
-		"UPDATE billing_customers SET stripe_subscription_id=$1, payment_method_last4=$2, payment_method_brand=$3, subscription_status=$4, updated_at=NOW() WHERE id=$5",
-		bc.StripeSubscriptionID, bc.PaymentMethodLast4, bc.PaymentMethodBrand, bc.SubscriptionStatus, bc.ID,
+		"UPDATE billing_customers SET stripe_subscription_id=$1, payment_method_last4=$2, payment_method_brand=$3, subscription_status=$4, credits_migrated=$5, updated_at=NOW() WHERE id=$6",
+		bc.StripeSubscriptionID, bc.PaymentMethodLast4, bc.PaymentMethodBrand, bc.SubscriptionStatus, bc.CreditsMigrated, bc.ID,
 	)
 	return err
 }

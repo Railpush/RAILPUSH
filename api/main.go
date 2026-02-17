@@ -236,7 +236,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/ops/tickets/{id}", opsTicketsH.UpdateTicket).Methods("PATCH")
 	authed.HandleFunc("/ops/tickets/{id}/messages", opsTicketsH.CreateMessage).Methods("POST")
 
-	opsCreditsH := handlers.NewOpsCreditsHandler(cfg)
+	opsCreditsH := handlers.NewOpsCreditsHandler(cfg, stripeService)
 	authed.HandleFunc("/ops/credits/workspaces", opsCreditsH.ListWorkspaces).Methods("GET")
 	authed.HandleFunc("/ops/credits/workspaces/{id}", opsCreditsH.GetWorkspace).Methods("GET")
 	authed.HandleFunc("/ops/credits/workspaces/{id}/grant", opsCreditsH.Grant).Methods("POST")

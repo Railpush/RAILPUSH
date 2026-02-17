@@ -264,6 +264,10 @@ export interface BillingOverview {
   monthly_total: number;
   credit_covered_total?: number;
   credit_balance_cents?: number;
+  next_invoice_total_cents?: number;
+  next_invoice_amount_due_cents?: number;
+  next_invoice_credit_applied_cents?: number;
+  next_invoice_credit_carry_cents?: number;
 }
 
 export interface GitHubRepo {

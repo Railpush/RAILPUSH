@@ -15,7 +15,9 @@ import (
 	"github.com/stripe/stripe-go/v81"
 	billingportalsession "github.com/stripe/stripe-go/v81/billingportal/session"
 	"github.com/stripe/stripe-go/v81/checkout/session"
+	customerbalancetransaction "github.com/stripe/stripe-go/v81/customerbalancetransaction"
 	"github.com/stripe/stripe-go/v81/customer"
+	"github.com/stripe/stripe-go/v81/invoice"
 	"github.com/stripe/stripe-go/v81/paymentmethod"
 	"github.com/stripe/stripe-go/v81/setupintent"
 	"github.com/stripe/stripe-go/v81/subscription"
@@ -104,11 +106,27 @@ func stripeUserError(err error) error {
 	}
 	var se *stripe.Error
 	if errors.As(err, &se) {
+		// Normalize common "missing card" Stripe errors into a consistent sentinel so
+		// the UI can show the upgrade/payment-method flow.
+		raw := strings.ToLower(strings.TrimSpace(se.Msg))
+		if raw != "" {
+			if strings.Contains(raw, "no attached payment source") ||
+				strings.Contains(raw, "no payment method") ||
+				strings.Contains(raw, "default payment method") ||
+				strings.Contains(raw, "payment method is required") ||
+				strings.Contains(raw, "cannot charge a customer that has no active card") {
+				return ErrNoDefaultPaymentMethod
+			}
+		}
 		if msg := sanitizeStripeMessage(se.Msg); msg != "" {
 			return fmt.Errorf("%s", msg)
 		}
 	}
 	if msg := sanitizeStripeMessage(err.Error()); msg != "" {
+		raw := strings.ToLower(msg)
+		if strings.Contains(raw, "no attached payment source") || strings.Contains(raw, "payment method") && strings.Contains(raw, "required") {
+			return ErrNoDefaultPaymentMethod
+		}
 		return fmt.Errorf("%s", msg)
 	}
 	return fmt.Errorf("billing update failed. please try again or contact support")
@@ -320,71 +338,169 @@ func (s *StripeService) getDefaultPaymentMethod(bc *models.BillingCustomer) (str
 	return pm.ID, nil
 }
 
+func (s *StripeService) createCustomerBalanceTransaction(stripeCustomerID string, amountCents int64, description string, metadata map[string]string) error {
+	if s == nil || !s.Enabled() {
+		return nil
+	}
+	stripeCustomerID = strings.TrimSpace(stripeCustomerID)
+	if stripeCustomerID == "" || amountCents == 0 {
+		return nil
+	}
+
+	params := &stripe.CustomerBalanceTransactionParams{
+		Amount:   stripe.Int64(amountCents),
+		Currency: stripe.String("usd"),
+	}
+	if desc := strings.TrimSpace(description); desc != "" {
+		params.Description = stripe.String(desc)
+	}
+	for k, v := range metadata {
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if k == "" || v == "" {
+			continue
+		}
+		params.AddMetadata(k, v)
+	}
+
+	_, err := customerbalancetransaction.New(stripeCustomerID, params)
+	return err
+}
+
+// ApplyWorkspaceCreditDelta mirrors a workspace credit ledger adjustment into Stripe customer balance.
+//
+// Convention: workspace credits are stored as positive cents. Stripe customer balance uses negative
+// values to represent credits applied to future invoices, so we invert the sign.
+func (s *StripeService) ApplyWorkspaceCreditDelta(stripeCustomerID, workspaceID string, amountCents int64, reason string) error {
+	if s == nil || !s.Enabled() {
+		return nil
+	}
+	stripeCustomerID = strings.TrimSpace(stripeCustomerID)
+	workspaceID = strings.TrimSpace(workspaceID)
+	if stripeCustomerID == "" || workspaceID == "" || amountCents == 0 {
+		return nil
+	}
+	desc := "RailPush workspace credits"
+	if r := strings.TrimSpace(reason); r != "" {
+		desc = "RailPush credits: " + r
+	}
+	meta := map[string]string{"workspace_id": workspaceID, "source": "workspace_credit_ledger"}
+	return s.createCustomerBalanceTransaction(stripeCustomerID, -amountCents, desc, meta)
+}
+
+// migrateWorkspaceCreditsToStripeIfNeeded performs a one-time migration of existing
+// workspace credits into Stripe customer balance, so Stripe invoices can use them.
+//
+// After this runs successfully we rely on Ops credit grants to add new credits directly
+// to Stripe and keep `credits_migrated=true` so we don't double-credit.
+func (s *StripeService) migrateWorkspaceCreditsToStripeIfNeeded(bc *models.BillingCustomer, workspaceID string) error {
+	if s == nil || !s.Enabled() || bc == nil {
+		return nil
+	}
+	if bc.CreditsMigrated {
+		return nil
+	}
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return nil
+	}
+
+	credits, err := models.GetWorkspaceCreditBalanceCents(workspaceID)
+	if err != nil {
+		log.Printf("Stripe: failed to load workspace credit balance ws=%s err=%v", workspaceID, err)
+		return nil
+	}
+	if credits <= 0 {
+		bc.CreditsMigrated = true
+		_ = models.UpdateBillingCustomer(bc)
+		return nil
+	}
+
+	// Stripe customer balance: negative amounts are credits applied to future invoices.
+	meta := map[string]string{"workspace_id": workspaceID, "source": "workspace_credit_ledger_migration"}
+	if err := s.createCustomerBalanceTransaction(bc.StripeCustomerID, -credits, "RailPush workspace credits", meta); err != nil {
+		log.Printf("Stripe: failed to migrate credits to Stripe customer=%s ws=%s err=%v", bc.StripeCustomerID, workspaceID, err)
+		return stripeUserError(err)
+	}
+
+	bc.CreditsMigrated = true
+	if err := models.UpdateBillingCustomer(bc); err != nil {
+		log.Printf("Stripe: credits migrated but failed to persist billing customer flag customer=%s ws=%s err=%v", bc.ID, workspaceID, err)
+		return fmt.Errorf("billing update failed. please try again")
+	}
+	return nil
+}
+
+func (s *StripeService) EnsureWorkspaceCreditsMigrated(bc *models.BillingCustomer, workspaceID string) error {
+	return s.migrateWorkspaceCreditsToStripeIfNeeded(bc, workspaceID)
+}
+
+func (s *StripeService) CreditBalanceCents(stripeCustomerID string) (int64, error) {
+	if s == nil || !s.Enabled() {
+		return 0, nil
+	}
+	stripeCustomerID = strings.TrimSpace(stripeCustomerID)
+	if stripeCustomerID == "" {
+		return 0, nil
+	}
+	cust, err := customer.Get(stripeCustomerID, &stripe.CustomerParams{})
+	if err != nil || cust == nil {
+		return 0, err
+	}
+	if cust.Balance >= 0 {
+		return 0, nil
+	}
+	return -cust.Balance, nil
+}
+
+func (s *StripeService) UpcomingInvoice(stripeCustomerID, stripeSubscriptionID string) (*stripe.Invoice, error) {
+	if s == nil || !s.Enabled() {
+		return nil, nil
+	}
+	stripeCustomerID = strings.TrimSpace(stripeCustomerID)
+	if stripeCustomerID == "" {
+		return nil, nil
+	}
+	params := &stripe.InvoiceUpcomingParams{
+		Customer: stripe.String(stripeCustomerID),
+	}
+	if strings.TrimSpace(stripeSubscriptionID) != "" {
+		params.Subscription = stripe.String(stripeSubscriptionID)
+	}
+	return invoice.Upcoming(params)
+}
+
 // AddSubscriptionItem adds a resource to the user's subscription. Creates a subscription if one doesn't exist.
-// If the workspace has sufficient credits, credits are spent instead of modifying Stripe.
 func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspaceID, resourceType, resourceID, name, plan string) error {
 	if bc == nil || strings.TrimSpace(bc.ID) == "" {
 		return fmt.Errorf("billing customer not found")
 	}
-	// Idempotency: don't double-bill the same resource if a request is retried.
-	if existing, err := models.GetBillingItemByResource(resourceType, resourceID); err != nil {
-		log.Printf("Stripe: failed to query existing billing item resource=%s/%s err=%v", resourceType, resourceID, err)
-		return fmt.Errorf("billing update failed. please try again")
-	} else if existing != nil {
-		if strings.TrimSpace(existing.Plan) != strings.TrimSpace(plan) {
-			// Credit-billed items have no Stripe linkage; update plan using credits if possible.
-			if strings.TrimSpace(existing.StripeSubscriptionItemID) == "" || strings.TrimSpace(existing.StripePriceID) == "" {
-				oldCost := planMonthlyCostCents(existing.Plan)
-				newCost := planMonthlyCostCents(plan)
-				delta := newCost - oldCost
-				if delta > 0 {
-					reason := fmt.Sprintf("billing: %s %s (%s) plan=%s", strings.TrimSpace(resourceType), strings.TrimSpace(name), strings.TrimSpace(resourceID), strings.TrimSpace(plan))
-					spent, _, err := models.TrySpendWorkspaceCredits(workspaceID, delta, reason, bc.UserID)
-					if err != nil {
-						log.Printf("Stripe: failed to spend workspace credits ws=%s resource=%s/%s err=%v", workspaceID, resourceType, resourceID, err)
-						return fmt.Errorf("billing update failed. please try again")
-					}
-					if !spent {
-						return ErrNoDefaultPaymentMethod
-					}
-				}
-				// Persist plan change locally (Stripe IDs remain blank).
-				existing.Plan = plan
-				if err := models.UpdateBillingItem(existing); err != nil {
-					log.Printf("Stripe: failed to update credit billing item resource=%s/%s err=%v", resourceType, resourceID, err)
-					return fmt.Errorf("billing update failed. please try again")
-				}
-				return nil
-			}
-			return s.UpdateSubscriptionItemPlan(resourceType, resourceID, plan)
-		}
-		return nil
+
+	// One-time migration: mirror existing workspace credits into Stripe customer balance so
+	// they can reduce invoices (and allow deployments without a card when credits cover it).
+	if err := s.migrateWorkspaceCreditsToStripeIfNeeded(bc, workspaceID); err != nil {
+		return err
 	}
 
-	// Credits: if the workspace has enough balance, spend credits and record the billing item locally.
-	if strings.TrimSpace(workspaceID) != "" {
-		cost := planMonthlyCostCents(plan)
-		if cost > 0 {
-			reason := fmt.Sprintf("billing: %s %s (%s) plan=%s", strings.TrimSpace(resourceType), strings.TrimSpace(name), strings.TrimSpace(resourceID), strings.TrimSpace(plan))
-			if spent, _, err := models.TrySpendWorkspaceCredits(workspaceID, cost, reason, bc.UserID); err != nil {
-				log.Printf("Stripe: failed to spend workspace credits ws=%s resource=%s/%s err=%v", workspaceID, resourceType, resourceID, err)
+	// Idempotency: don't double-bill the same resource if a request is retried.
+	existing, err := models.GetBillingItemByResource(resourceType, resourceID)
+	if err != nil {
+		log.Printf("Stripe: failed to query existing billing item resource=%s/%s err=%v", resourceType, resourceID, err)
+		return fmt.Errorf("billing update failed. please try again")
+	}
+	if existing != nil {
+		// Legacy credit-billed items have no Stripe linkage. Delete and re-add so they
+		// become part of the Stripe subscription moving forward.
+		if strings.TrimSpace(existing.StripeSubscriptionItemID) == "" || strings.TrimSpace(existing.StripePriceID) == "" {
+			if err := models.DeleteBillingItemByResource(resourceType, resourceID); err != nil {
+				log.Printf("Stripe: failed to delete legacy billing item resource=%s/%s err=%v", resourceType, resourceID, err)
 				return fmt.Errorf("billing update failed. please try again")
-			} else if spent {
-				bi := &models.BillingItem{
-					BillingCustomerID:        bc.ID,
-					StripeSubscriptionItemID: "",
-					StripePriceID:            "",
-					ResourceType:             resourceType,
-					ResourceID:               resourceID,
-					ResourceName:             name,
-					Plan:                     plan,
-				}
-				if err := models.CreateBillingItem(bi); err != nil {
-					log.Printf("Stripe: failed to save credit billing item resource=%s/%s err=%v", resourceType, resourceID, err)
-					return fmt.Errorf("billing update failed. please try again")
-				}
-				return nil
 			}
+		} else {
+			if strings.TrimSpace(existing.Plan) != strings.TrimSpace(plan) {
+				return s.UpdateSubscriptionItemPlan(resourceType, resourceID, plan)
+			}
+			return nil
 		}
 	}
 
@@ -393,14 +509,9 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 		return fmt.Errorf("paid plan pricing isn't configured yet. please contact support")
 	}
 
-	defaultPMID, err := s.getDefaultPaymentMethod(bc)
-	if err != nil {
-		log.Printf("Stripe: failed to fetch default payment method customer=%s err=%v", bc.StripeCustomerID, err)
-		return stripeUserError(err)
-	}
-	if defaultPMID == "" {
-		return ErrNoDefaultPaymentMethod
-	}
+	// Best-effort: include default payment method when present, but allow credits-only
+	// subscriptions when invoice amount_due is 0 (Stripe customer balance covers it).
+	defaultPMID, _ := s.getDefaultPaymentMethod(bc)
 
 	// If no subscription exists, create one
 	if bc.StripeSubscriptionID == "" {
@@ -409,10 +520,12 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 			Items: []*stripe.SubscriptionItemsParams{
 				{Price: stripe.String(priceID), Quantity: stripe.Int64(1)},
 			},
-			CollectionMethod:     stripe.String(string(stripe.SubscriptionCollectionMethodChargeAutomatically)),
-			DefaultPaymentMethod: stripe.String(defaultPMID),
-			PaymentBehavior:      stripe.String("error_if_incomplete"),
-			OffSession:           stripe.Bool(true),
+			CollectionMethod:  stripe.String(string(stripe.SubscriptionCollectionMethodChargeAutomatically)),
+			PaymentBehavior:   stripe.String("error_if_incomplete"),
+			OffSession:        stripe.Bool(true),
+		}
+		if strings.TrimSpace(defaultPMID) != "" {
+			subParams.DefaultPaymentMethod = stripe.String(defaultPMID)
 		}
 		subParams.AddExpand("items")
 		sub, err := subscription.New(subParams)
@@ -454,8 +567,8 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 		return fmt.Errorf("billing update failed. please try again")
 	}
 
-		if existingSubItemID != "" {
-			// Record the resource first; then set Stripe quantity to match DB count.
+	if existingSubItemID != "" {
+		// Record the resource first; then set Stripe quantity to match DB count.
 		bi := &models.BillingItem{
 			BillingCustomerID:        bc.ID,
 			StripeSubscriptionItemID: existingSubItemID,
@@ -476,34 +589,34 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 				log.Printf("Stripe: failed to count billing items for quantity reconcile sub_item=%s err=%v", existingSubItemID, qErr)
 			}
 			return fmt.Errorf("billing update failed. please try again")
-			}
-			siParams := &stripe.SubscriptionItemParams{
-				Quantity:          stripe.Int64(int64(qty)),
-				// Avoid generating a new invoice per sync/scale operation. Using always_invoice can
-				// quickly hit Stripe's daily invoice limits for a subscription when many resources
-				// are added/updated in a short window (e.g. blueprint sync).
-				ProrationBehavior: stripe.String("create_prorations"),
-			}
-			if _, err := subscriptionitem.Update(existingSubItemID, siParams); err != nil {
-				log.Printf("Stripe: update quantity failed sub_item=%s qty=%d resource=%s/%s err=%v", existingSubItemID, qty, resourceType, resourceID, err)
-				_ = models.DeleteBillingItemByResource(resourceType, resourceID)
+		}
+		siParams := &stripe.SubscriptionItemParams{
+			Quantity: stripe.Int64(int64(qty)),
+			// Avoid generating a new invoice per sync/scale operation. Using always_invoice can
+			// quickly hit Stripe's daily invoice limits for a subscription when many resources
+			// are added/updated in a short window (e.g. blueprint sync).
+			ProrationBehavior: stripe.String("create_prorations"),
+		}
+		if _, err := subscriptionitem.Update(existingSubItemID, siParams); err != nil {
+			log.Printf("Stripe: update quantity failed sub_item=%s qty=%d resource=%s/%s err=%v", existingSubItemID, qty, resourceType, resourceID, err)
+			_ = models.DeleteBillingItemByResource(resourceType, resourceID)
 			return stripeUserError(err)
 		}
 		return nil
 	}
 
-		// No existing item for this price; create one (quantity=1) then record the resource.
-		siParams := &stripe.SubscriptionItemParams{
-			Subscription:      stripe.String(bc.StripeSubscriptionID),
-			Price:             stripe.String(priceID),
-			Quantity:          stripe.Int64(1),
-			// See note above: do not force an invoice on every item add.
-			ProrationBehavior: stripe.String("create_prorations"),
-		}
-		si, err := subscriptionitem.New(siParams)
-		if err != nil {
-			log.Printf("Stripe: add subscription item failed sub=%s price=%s resource=%s/%s err=%v", bc.StripeSubscriptionID, priceID, resourceType, resourceID, err)
-			return stripeUserError(err)
+	// No existing item for this price; create one (quantity=1) then record the resource.
+	siParams := &stripe.SubscriptionItemParams{
+		Subscription: stripe.String(bc.StripeSubscriptionID),
+		Price:        stripe.String(priceID),
+		Quantity:     stripe.Int64(1),
+		// See note above: do not force an invoice on every item add.
+		ProrationBehavior: stripe.String("create_prorations"),
+	}
+	si, err := subscriptionitem.New(siParams)
+	if err != nil {
+		log.Printf("Stripe: add subscription item failed sub=%s price=%s resource=%s/%s err=%v", bc.StripeSubscriptionID, priceID, resourceType, resourceID, err)
+		return stripeUserError(err)
 	}
 
 	bi := &models.BillingItem{
@@ -632,6 +745,14 @@ func (s *StripeService) UpdateSubscriptionItemPlan(resourceType, resourceID, new
 	if err != nil || bc == nil || strings.TrimSpace(bc.StripeSubscriptionID) == "" {
 		log.Printf("Stripe: billing subscription not found customer_id=%s err=%v", bi.BillingCustomerID, err)
 		return fmt.Errorf("billing update failed. please try again")
+	}
+
+	// Credits migration (see AddSubscriptionItem): ensure legacy workspace credits are
+	// available as Stripe customer balance before making billing changes.
+	if ws, _ := models.GetWorkspaceByOwner(bc.UserID); ws != nil && strings.TrimSpace(ws.ID) != "" {
+		if err := s.migrateWorkspaceCreditsToStripeIfNeeded(bc, ws.ID); err != nil {
+			return err
+		}
 	}
 
 	// Stripe enforces one item per price. A plan change moves this resource between price items by adjusting quantities.
