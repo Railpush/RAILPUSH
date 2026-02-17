@@ -2,7 +2,13 @@ package services
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
@@ -15,6 +21,45 @@ import (
 
 	"github.com/railpush/api/models"
 )
+
+func generateSelfSignedCertPEM(commonName string, dnsNames []string) (crtPEM []byte, keyPEM []byte, _ error) {
+	commonName = strings.TrimSpace(commonName)
+	if commonName == "" {
+		commonName = "postgres"
+	}
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	serial, err := rand.Int(rand.Reader, big.NewInt(1<<62))
+	if err != nil {
+		return nil, nil, err
+	}
+	now := time.Now()
+	template := x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			CommonName: commonName,
+		},
+		NotBefore:             now.Add(-10 * time.Minute),
+		NotAfter:              now.Add(3650 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              dnsNames,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	crtPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	return crtPEM, keyPEM, nil
+}
 
 func kubeIDPrefix(id string) string {
 	id = strings.ToLower(strings.TrimSpace(id))
@@ -166,6 +211,48 @@ func (k *KubeDeployer) EnsureManagedDatabase(db *models.ManagedDatabase, passwor
 		return "", fmt.Errorf("get db secret: %w", err)
 	}
 
+	// 1b) Secret (TLS) - make Postgres accept SSL connections (Render-compatible).
+	//
+	// Many apps assume SSL in production (e.g. Render, Heroku). Enabling SSL on the server side
+	// keeps us compatible even when clients don't explicitly add sslmode params.
+	tlsSecName := name + "-tls"
+	if existing, err := k.Client.CoreV1().Secrets(ns).Get(ctx, tlsSecName, metav1.GetOptions{}); err == nil && existing != nil {
+		// Do not rotate certs automatically; just ensure the secret exists.
+	} else if apierrors.IsNotFound(err) {
+		dns := []string{
+			name,
+			fmt.Sprintf("%s.%s", name, ns),
+			fmt.Sprintf("%s.%s.svc", name, ns),
+			fmt.Sprintf("%s.%s.svc.cluster.local", name, ns),
+			// Headless service DNS (useful for direct pod connections / debugging).
+			headlessSvcName,
+			fmt.Sprintf("%s.%s", headlessSvcName, ns),
+			fmt.Sprintf("%s.%s.svc", headlessSvcName, ns),
+			fmt.Sprintf("%s.%s.svc.cluster.local", headlessSvcName, ns),
+		}
+		crt, key, genErr := generateSelfSignedCertPEM(name, dns)
+		if genErr != nil {
+			return "", fmt.Errorf("generate db tls cert: %w", genErr)
+		}
+		tlsSec := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tlsSecName,
+				Namespace: ns,
+				Labels:    labels,
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"server.crt": crt,
+				"server.key": key,
+			},
+		}
+		if _, err := k.Client.CoreV1().Secrets(ns).Create(ctx, tlsSec, metav1.CreateOptions{}); err != nil {
+			return "", fmt.Errorf("create db tls secret: %w", err)
+		}
+	} else if err != nil {
+		return "", fmt.Errorf("get db tls secret: %w", err)
+	}
+
 	// 2) Services: one ClusterIP for clients, one headless for the StatefulSet.
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -233,12 +320,13 @@ func (k *KubeDeployer) EnsureManagedDatabase(db *models.ManagedDatabase, passwor
 		return "", fmt.Errorf("get db headless service: %w", err)
 	}
 
-	// 3) StatefulSet
-	replicas := int32(1)
-	requests, limits := kubeResourcesForPlan(db.Plan)
-	fsg := int64(70)
+		// 3) StatefulSet
+		replicas := int32(1)
+		requests, limits := kubeResourcesForPlan(db.Plan)
+		fsg := int64(70)
+		rootUID := int64(0)
 
-	ss := &appsv1.StatefulSet{
+		ss := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
@@ -257,6 +345,26 @@ func (k *KubeDeployer) EnsureManagedDatabase(db *models.ManagedDatabase, passwor
 					SecurityContext: &corev1.PodSecurityContext{
 						FSGroup:      &fsg,
 					},
+						InitContainers: []corev1.Container{
+							{
+								Name:            "init-postgres-tls",
+								Image:           "busybox:1.36.1",
+								ImagePullPolicy: corev1.PullIfNotPresent,
+								Command: []string{
+									"sh",
+									"-lc",
+									"set -e; cp /tls-src/server.crt /tls/server.crt; cp /tls-src/server.key /tls/server.key; chown 70:70 /tls/server.key /tls/server.crt; chmod 600 /tls/server.key; chmod 644 /tls/server.crt",
+								},
+								SecurityContext: &corev1.SecurityContext{
+									RunAsUser:  &rootUID,
+									RunAsGroup: &rootUID,
+								},
+								VolumeMounts: []corev1.VolumeMount{
+									{Name: "tls-src", MountPath: "/tls-src", ReadOnly: true},
+									{Name: "tls", MountPath: "/tls"},
+								},
+						},
+					},
 					Containers: []corev1.Container{
 						{
 							Name:            "postgres",
@@ -272,8 +380,15 @@ func (k *KubeDeployer) EnsureManagedDatabase(db *models.ManagedDatabase, passwor
 							EnvFrom: []corev1.EnvFromSource{
 								{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: secName}}},
 							},
+							Args: []string{
+								"postgres",
+								"-c", "ssl=on",
+								"-c", "ssl_cert_file=/etc/postgres-ssl/server.crt",
+								"-c", "ssl_key_file=/etc/postgres-ssl/server.key",
+							},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "data", MountPath: "/var/lib/postgresql/data"},
+								{Name: "tls", MountPath: "/etc/postgres-ssl", ReadOnly: true},
 							},
 							Resources: corev1.ResourceRequirements{
 								Requests: requests,
@@ -297,6 +412,23 @@ func (k *KubeDeployer) EnsureManagedDatabase(db *models.ManagedDatabase, passwor
 								TimeoutSeconds:      3,
 								FailureThreshold:    3,
 								InitialDelaySeconds: 10,
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "tls-src",
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{
+									SecretName:  tlsSecName,
+									DefaultMode: func() *int32 { m := int32(0644); return &m }(),
+								},
+							},
+						},
+						{
+							Name: "tls",
+							VolumeSource: corev1.VolumeSource{
+								EmptyDir: &corev1.EmptyDirVolumeSource{},
 							},
 						},
 					},

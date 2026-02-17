@@ -779,7 +779,68 @@ func (w *Worker) reconcileManagedDatabases() {
 	}
 	for _, d := range dbs {
 		status := strings.ToLower(strings.TrimSpace(d.Status))
-		if status == "available" {
+		name := kubeManagedDatabaseName(d.ID)
+		tlsSecName := name + "-tls"
+		shouldEnsure := status != "available"
+		if !shouldEnsure {
+			// Existing databases created before TLS support (or during partial rollouts)
+			// may be "available" but still reject SSL connections. Detect drift and re-ensure.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_, secErr := kd.Client.CoreV1().Secrets(kd.namespace()).Get(ctx, tlsSecName, metav1.GetOptions{})
+			cancel()
+			if secErr != nil {
+				shouldEnsure = true
+			} else {
+				ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+				ss, ssErr := kd.Client.AppsV1().StatefulSets(kd.namespace()).Get(ctx, name, metav1.GetOptions{})
+				cancel()
+				if ssErr != nil || ss == nil {
+					shouldEnsure = true
+				} else {
+					hasInit := false
+					for _, c := range ss.Spec.Template.Spec.InitContainers {
+						if c.Name == "init-postgres-tls" {
+							hasInit = true
+							break
+						}
+					}
+					hasTLSVol := false
+					hasTLSSrcVol := false
+					for _, v := range ss.Spec.Template.Spec.Volumes {
+						if v.Name == "tls" {
+							hasTLSVol = true
+						}
+						if v.Name == "tls-src" {
+							hasTLSSrcVol = true
+						}
+					}
+					hasSSLOpt := false
+					hasTLSMount := false
+					for _, c := range ss.Spec.Template.Spec.Containers {
+						if c.Name != "postgres" {
+							continue
+						}
+						for _, a := range c.Args {
+							if a == "ssl=on" {
+								hasSSLOpt = true
+								break
+							}
+						}
+						for _, m := range c.VolumeMounts {
+							if m.Name == "tls" {
+								hasTLSMount = true
+								break
+							}
+						}
+						break
+					}
+					if !(hasInit && hasTLSVol && hasTLSSrcVol && hasTLSMount && hasSSLOpt) {
+						shouldEnsure = true
+					}
+				}
+			}
+		}
+		if !shouldEnsure {
 			continue
 		}
 
@@ -792,7 +853,7 @@ func (w *Worker) reconcileManagedDatabases() {
 			continue
 		}
 
-		name, err := kd.EnsureManagedDatabase(full, pw)
+		name, err = kd.EnsureManagedDatabase(full, pw)
 		if err != nil {
 			log.Printf("worker: reconcile databases: ensure %s failed: %v", full.ID, err)
 			continue
