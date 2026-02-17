@@ -773,6 +773,9 @@ func (k *KubeDeployer) WaitForServiceReady(deploymentName string, svc *models.Se
 									if strings.HasPrefix(s, "Node.js v") {
 										return true
 									}
+									if strings.HasPrefix(s, "Exit status ") {
+										return true
+									}
 									if s == "}" || s == "{" || s == ")" || s == "(" {
 										return true
 									}
@@ -785,6 +788,15 @@ func (k *KubeDeployer) WaitForServiceReady(deploymentName string, svc *models.Se
 								looksLikeError := func(s string) bool {
 									l := strings.ToLower(s)
 									if strings.HasPrefix(s, "Error:") {
+										return true
+									}
+									if strings.Contains(l, "err_pnpm") {
+										return true
+									}
+									if strings.Contains(l, "failed to start server") {
+										return true
+									}
+									if strings.Contains(l, "\"level\":\"error\"") && strings.Contains(l, "\"msg\"") {
 										return true
 									}
 									if strings.Contains(l, "cannot find module") {
@@ -811,6 +823,37 @@ func (k *KubeDeployer) WaitForServiceReady(deploymentName string, svc *models.Se
 									t := strings.TrimSpace(ln)
 									if t == "" || isNoise(t) {
 										continue
+									}
+									// Many apps log as JSON. Prefer extracting a clean message from {"level":"error",...}.
+									if strings.HasPrefix(t, "{") && strings.HasSuffix(t, "}") && strings.Contains(t, "\"level\"") {
+										var obj map[string]any
+										if err := json.Unmarshal([]byte(t), &obj); err == nil {
+											lvl, _ := obj["level"].(string)
+											msg, _ := obj["msg"].(string)
+											if msg != "" && strings.EqualFold(strings.TrimSpace(lvl), "error") {
+												// Try to include errno-ish details if present.
+												if em, ok := obj["error"].(map[string]any); ok {
+													code, _ := em["code"].(string)
+													syscall, _ := em["syscall"].(string)
+													pth, _ := em["path"].(string)
+													parts := []string{}
+													if code != "" {
+														parts = append(parts, code)
+													}
+													if syscall != "" {
+														parts = append(parts, syscall)
+													}
+													if pth != "" {
+														parts = append(parts, pth)
+													}
+													if len(parts) > 0 {
+														msg = msg + ": " + strings.Join(parts, " ")
+													}
+												}
+												candidates = append(candidates, strings.TrimSpace(msg))
+												continue
+											}
+										}
 									}
 									if looksLikeError(t) {
 										candidates = append(candidates, t)
