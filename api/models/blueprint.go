@@ -14,6 +14,9 @@ type Blueprint struct {
 	RepoURL        string     `json:"repo_url"`
 	Branch         string     `json:"branch"`
 	FilePath       string     `json:"file_path"`
+	// GeneratedYAML stores an AI-generated blueprint (e.g. when render.yaml is missing in the repo).
+	// It is intentionally not returned in the public API by default to avoid large payloads.
+	GeneratedYAML  string     `json:"-"`
 	AIIgnoreRepoYAML bool     `json:"ai_ignore_repo_yaml"`
 	LastSyncedAt   *time.Time `json:"last_synced_at"`
 	LastSyncStatus string     `json:"last_sync_status"`
@@ -35,11 +38,12 @@ func CreateBlueprint(b *Blueprint) error {
 }
 
 const blueprintSelectCols = `id, workspace_id, name, COALESCE(repo_url,''), COALESCE(branch,'main'), COALESCE(file_path,'render.yaml'), COALESCE(ai_ignore_repo_yaml,false), last_synced_at, COALESCE(last_sync_status,''), created_at`
+const blueprintSelectColsWithGenerated = blueprintSelectCols + `, COALESCE(generated_yaml,'')`
 
 func GetBlueprint(id string) (*Blueprint, error) {
 	b := &Blueprint{}
-	err := database.DB.QueryRow("SELECT "+blueprintSelectCols+" FROM blueprints WHERE id=$1", id).Scan(
-		&b.ID, &b.WorkspaceID, &b.Name, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.CreatedAt)
+	err := database.DB.QueryRow("SELECT "+blueprintSelectColsWithGenerated+" FROM blueprints WHERE id=$1", id).Scan(
+		&b.ID, &b.WorkspaceID, &b.Name, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.CreatedAt, &b.GeneratedYAML)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -87,6 +91,11 @@ func DeleteBlueprint(id string) error {
 
 func UpdateBlueprintSync(id, status string) error {
 	_, err := database.DB.Exec("UPDATE blueprints SET last_synced_at=NOW(), last_sync_status=$1 WHERE id=$2", status, id)
+	return err
+}
+
+func UpdateBlueprintGeneratedYAML(id string, generatedYAML string) error {
+	_, err := database.DB.Exec("UPDATE blueprints SET generated_yaml=$1 WHERE id=$2", generatedYAML, id)
 	return err
 }
 

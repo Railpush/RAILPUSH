@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, RefreshCw, GitBranch, FileText, Database, Globe, Key, Trash2, Sparkles, Wand2, Loader2 } from 'lucide-react';
+import { ArrowLeft, RefreshCw, GitBranch, FileText, Database, Globe, Key, Trash2, Wand2, Loader2 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { StatusBadge } from '../components/ui/StatusBadge';
-import { blueprints as bpApi, settings as settingsApi, aiFix as aiFixApi } from '../lib/api';
+import { blueprints as bpApi, aiFix as aiFixApi } from '../lib/api';
 import { timeAgo } from '../lib/utils';
 import { toast } from 'sonner';
 import type { Blueprint, BlueprintResource } from '../types';
@@ -46,7 +46,11 @@ function formatSyncError(syncError: string | null): string | null {
   }
 
   if (lower === 'yaml_missing_ai_disabled') {
-    return 'No render.yaml found in the repository. Enable Blueprint AI to automatically generate one.';
+    // Legacy status: older servers required users to explicitly enable Blueprint AI.
+    return 'No render.yaml found in the repository. RailPush can auto-generate one, but this server must be configured with OpenRouter (Blueprint AI) first.';
+  }
+  if (lower.includes('not found in repository') && (lower.includes('blueprint ai is not configured') || lower.includes('automatic blueprint generation'))) {
+    return 'No render.yaml found in the repository, and automatic blueprint generation is not configured on this server. Ask your admin to configure OpenRouter (Blueprint AI) and retry sync.';
   }
 
   // Legacy format: sometimes we stored a JSON-encoded Stripe error blob.
@@ -74,7 +78,6 @@ export function BlueprintDetail() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [enablingAI, setEnablingAI] = useState(false);
 
   // AI Fix state: keyed by resource_id
   const [aiFixing, setAiFixing] = useState<Record<string, boolean>>({});
@@ -195,26 +198,6 @@ export function BlueprintDetail() {
     }
   };
 
-  const handleEnableAIAndSync = async () => {
-    if (!blueprintId) return;
-    setEnablingAI(true);
-    try {
-      const aiStatus = await settingsApi.getBlueprintAI();
-      if (!aiStatus.available) {
-        toast.error('Blueprint AI is not available — OpenRouter is not configured on this server.');
-        return;
-      }
-      await settingsApi.updateBlueprintAI(true);
-      await bpApi.sync(blueprintId);
-      toast.success('Blueprint AI enabled — sync started');
-      setBp((prev) => prev ? { ...prev, last_sync_status: 'syncing' } : prev);
-    } catch {
-      toast.error('Failed to enable Blueprint AI');
-    } finally {
-      setEnablingAI(false);
-    }
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20 text-sm text-content-tertiary">
@@ -323,12 +306,6 @@ export function BlueprintDetail() {
                 }}
               >
                 Upgrade
-              </Button>
-            )}
-            {syncError === 'yaml_missing_ai_disabled' && (
-              <Button size="sm" onClick={handleEnableAIAndSync} loading={enablingAI}>
-                <Sparkles className="w-3.5 h-3.5" />
-                Enable Blueprint AI
               </Button>
             )}
           </div>

@@ -895,29 +895,41 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		return
 	}
 
-	// Read render.yaml (or generate it from repository source using OpenRouter when enabled).
+	// Read render.yaml.
+	// If it's missing, use the stored generated YAML if present, otherwise auto-generate it from the repo
+	// via OpenRouter (when configured).
 	yamlPath := filepath.Join(tmpDir, bp.FilePath)
 	data, err := os.ReadFile(yamlPath)
 	repoFileExists := err == nil
 	specGeneratedByAI := false
-	aiEnabled := h.blueprintAIAutogenEnabled(bp.WorkspaceID)
-	if !repoFileExists && !aiEnabled {
-		fail("yaml_missing_ai_disabled")
-		return
+
+	// Prefer the stored generated blueprint when the repo has no yaml.
+	if !repoFileExists && len(data) == 0 && strings.TrimSpace(bp.GeneratedYAML) != "" {
+		data = []byte(bp.GeneratedYAML)
+		specGeneratedByAI = true
 	}
-	aiShouldGenerate := aiEnabled && (!repoFileExists || bp.AIIgnoreRepoYAML)
+
+	aiEnabled := h.blueprintAIAutogenEnabled(bp.WorkspaceID)
+	aiShouldGenerate := false
+	// Automatic mode: if the repo doesn't have a blueprint file, try to generate one.
+	if !repoFileExists && len(data) == 0 {
+		aiShouldGenerate = true
+	} else if aiEnabled && bp.AIIgnoreRepoYAML {
+		// Opt-in: allow users to ignore repo YAML and regenerate from source.
+		aiShouldGenerate = true
+	}
 	if aiShouldGenerate {
 		ai := services.NewBlueprintAIGenerator(h.Config)
 		if !ai.Available() {
-			if !repoFileExists {
-				fail(bp.FilePath + " not found in repository (and Blueprint AI is not configured)")
+			if !repoFileExists && len(data) == 0 {
+				fail(bp.FilePath + " not found in repository (and automatic blueprint generation isn't configured)")
 				return
 			}
 		} else {
 			generated, genErr := ai.GenerateRenderYAMLFromRepo(tmpDir, bp.RepoURL, bp.Branch)
 			if genErr != nil {
 				log.Printf("Blueprint sync: OpenRouter generation failed blueprint=%s err=%v", bp.ID, genErr)
-				if !repoFileExists {
+				if !repoFileExists && len(data) == 0 {
 					fail("failed to generate " + bp.FilePath + " with Blueprint AI")
 					return
 				}
@@ -925,13 +937,13 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				var candidate RenderYAML
 				if parseErr := yaml.Unmarshal([]byte(generated), &candidate); parseErr != nil {
 					log.Printf("Blueprint sync: OpenRouter returned invalid YAML blueprint=%s err=%v", bp.ID, parseErr)
-					if !repoFileExists {
+					if !repoFileExists && len(data) == 0 {
 						fail("Blueprint AI generated invalid YAML")
 						return
 					}
 				} else if len(candidate.Services) == 0 && len(candidate.Databases) == 0 && len(candidate.KeyValues) == 0 && len(candidate.EnvVarGroups) == 0 {
 					log.Printf("Blueprint sync: OpenRouter returned empty blueprint=%s", bp.ID)
-					if !repoFileExists {
+					if !repoFileExists && len(data) == 0 {
 						fail("Blueprint AI generated an empty blueprint")
 						return
 					}
@@ -940,6 +952,12 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 					specGeneratedByAI = true
 					if mkErr := os.MkdirAll(filepath.Dir(yamlPath), 0o755); mkErr == nil {
 						_ = os.WriteFile(yamlPath, data, 0o644)
+					}
+					// Persist generated YAML so future syncs don't depend on another AI call.
+					if err := models.UpdateBlueprintGeneratedYAML(bp.ID, generated); err != nil {
+						log.Printf("Blueprint sync: failed to persist generated yaml blueprint=%s err=%v", bp.ID, err)
+					} else {
+						bp.GeneratedYAML = generated
 					}
 					log.Printf("Blueprint sync: generated %s via OpenRouter for blueprint=%s", bp.FilePath, bp.ID)
 				}
