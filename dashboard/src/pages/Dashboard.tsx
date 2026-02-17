@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Search, Server, Database, Key, Activity, ArrowUpRight, Zap, FolderKanban } from 'lucide-react';
+import { Plus, Search, Server, Database, Key, Activity, ArrowUpRight, Zap, FolderKanban, Check, Minus, AlertTriangle } from 'lucide-react';
 import { ServiceIcon } from '../components/ui/ServiceIcon';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { EmptyState } from '../components/ui/EmptyState';
@@ -326,24 +326,22 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
 	                </Button>
 	              </div>
 
-	              {projectCards.length === 0 ? (
-	                <Card className="py-10 text-center text-sm text-content-secondary">
-	                  No projects match your search.
-	                </Card>
-	              ) : (
-	                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-	                  {projectCards.map(({ project, services, servicesForDisplay, lastTouchedAt }) => (
-	                    <ProjectCard
-	                      key={project.id}
-	                      project={project}
-	                      services={services}
-	                      servicesForDisplay={servicesForDisplay}
-	                      lastTouchedAt={lastTouchedAt}
-	                      onClick={() => navigate(`/projects/${project.id}`)}
-	                    />
-	                  ))}
-	                </div>
-	              )}
+		              {projectCards.length === 0 ? (
+		                <Card className="py-10 text-center text-sm text-content-secondary">
+		                  No projects match your search.
+		                </Card>
+		              ) : (
+		                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+		                  {projectCards.map(({ project, services }) => (
+		                    <ProjectCard
+		                      key={project.id}
+		                      project={project}
+		                      services={services}
+		                      onClick={() => navigate(`/projects/${project.id}`)}
+		                    />
+		                  ))}
+		                </div>
+		              )}
 	            </div>
 	          )}
 
@@ -502,93 +500,71 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
 type ProjectCardProps = {
   project: Project;
   services: Service[];
-  servicesForDisplay: Service[];
-  lastTouchedAt?: string;
   onClick?: () => void;
 };
 
-function ProjectCard({ project, services, servicesForDisplay, lastTouchedAt, onClick }: ProjectCardProps) {
+function ProjectCard({ project, services, onClick }: ProjectCardProps) {
   const total = services.length;
-  const suspended = services.filter((svc) => isSuspendedService(svc)).length;
   const active = services.filter((svc) => !isSuspendedService(svc) && svc.status !== 'deactivated').length;
   const live = services.filter((svc) => !isSuspendedService(svc) && svc.status === 'live').length;
 
   const health = (() => {
-    if (total === 0) {
-      return { label: 'Empty', className: 'text-content-tertiary bg-surface-tertiary/40 border-border-default/50' };
+    if (active <= 0) {
+      const label = total <= 0 ? 'No services yet' : 'No active services';
+      return {
+        label,
+        className: 'text-content-tertiary bg-surface-tertiary/40 border-border-default/50',
+        icon: <Minus className="w-3.5 h-3.5" />,
+      };
     }
-    if (active === 0) {
-      return { label: 'Paused', className: 'text-status-warning bg-status-warning/10 border-status-warning/20' };
+    if (live >= active) {
+      return {
+        label: 'All services are up and running',
+        className: 'text-status-success bg-status-success/10 border-status-success/20',
+        icon: <Check className="w-3.5 h-3.5" />,
+      };
     }
-    if (live === active) {
-      return { label: 'Healthy', className: 'text-status-success bg-status-success/10 border-status-success/20' };
+    if (live <= 0) {
+      return {
+        label: 'No services are live',
+        className: 'text-status-error bg-status-error/10 border-status-error/20',
+        icon: <AlertTriangle className="w-3.5 h-3.5" />,
+      };
     }
-    if (live === 0) {
-      return { label: 'Down', className: 'text-status-error bg-status-error/10 border-status-error/20' };
-    }
-    return { label: `${live}/${active} live`, className: 'text-status-warning bg-status-warning/10 border-status-warning/20' };
+    return {
+      label: `${live}/${active} services are live`,
+      className: 'text-status-warning bg-status-warning/10 border-status-warning/20',
+      icon: <AlertTriangle className="w-3.5 h-3.5" />,
+    };
   })();
 
-  const visible = servicesForDisplay.slice(0, 3);
-  const remaining = Math.max(0, servicesForDisplay.length - visible.length);
-
   return (
-    <Card hover onClick={onClick} className="relative group">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="p-2.5 rounded-lg bg-surface-tertiary ring-1 ring-border-default group-hover:ring-brand/30 transition-all">
-            <FolderKanban className="w-5 h-5 text-brand" />
+    <Card hover onClick={onClick} className="relative group min-h-[140px]">
+      <div className="h-full flex flex-col justify-between gap-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="p-2 rounded-lg bg-surface-tertiary ring-1 ring-border-default group-hover:ring-brand/30 transition-all">
+              <FolderKanban className="w-4 h-4 text-brand" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="font-semibold text-content-primary group-hover:text-brand transition-colors truncate">
+                {project.name || 'Untitled Project'}
+              </h3>
+              <p className="text-xs text-content-tertiary mt-0.5">
+                {total === 1 ? '1 service' : `${total} services`}
+              </p>
+            </div>
           </div>
-          <div className="min-w-0">
-            <h3 className="font-semibold text-content-primary group-hover:text-brand transition-colors truncate">
-              {project.name || 'Untitled Project'}
-            </h3>
-            <p className="text-xs text-content-tertiary mt-0.5">
-              {total === 0 ? 'No services yet' : `${active} active \u00b7 ${suspended} suspended`}
-            </p>
-          </div>
+
+          <ArrowUpRight className="w-4 h-4 text-content-tertiary group-hover:text-content-primary transition-colors shrink-0" />
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
-          <span className={`text-[11px] px-2 py-0.5 rounded-full border ${health.className}`}>
+        <div className="flex items-center">
+          <span className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs font-semibold ${health.className}`}>
+            {health.icon}
             {health.label}
           </span>
-          <ArrowUpRight className="w-4 h-4 text-content-tertiary group-hover:text-content-primary transition-colors" />
         </div>
-      </div>
-
-      <div className="mt-4 space-y-2">
-        {total === 0 ? (
-          <div className="text-xs text-content-tertiary">
-            Create a service in this project to get started.
-          </div>
-        ) : (
-          visible.map((svc) => (
-            <div key={svc.id} className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2 min-w-0">
-                <ServiceIcon type={svc.type} size="sm" />
-                <div className="min-w-0">
-                  <div className="text-[13px] font-semibold text-content-primary truncate">{svc.name}</div>
-                  <div className="text-[11px] text-content-tertiary">{serviceTypeLabel(svc.type)}</div>
-                </div>
-              </div>
-              <StatusBadge status={effectiveServiceStatus(svc)} size="sm" pulse={false} />
-            </div>
-          ))
-        )}
-
-        {remaining > 0 && (
-          <div className="text-xs text-content-tertiary pl-1">+{remaining} more</div>
-        )}
-      </div>
-
-      <div className="mt-4 pt-3 border-t border-border-default/50 flex items-center justify-between text-xs">
-        <span className="text-content-tertiary">
-          {lastTouchedAt ? `Updated ${timeAgo(lastTouchedAt)}` : `Created ${timeAgo(project.created_at)}`}
-        </span>
-        <span className="text-content-tertiary group-hover:text-content-primary transition-colors">
-          Open project &rarr;
-        </span>
       </div>
     </Card>
   );
