@@ -391,6 +391,10 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 	}
 
 	startCmd := strings.TrimSpace(svc.StartCommand)
+	// Static sites are served by the image (nginx) and must not override the container command.
+	if serviceType == "static" {
+		startCmd = ""
+	}
 	terminationGrace := int64(svc.MaxShutdownDelay)
 	if terminationGrace < 0 {
 		terminationGrace = 0
@@ -928,7 +932,12 @@ func (k *KubeDeployer) UpdateServiceDeploymentResources(svc *models.Service) err
 		Limits:   limits,
 	}
 
+	serviceType := strings.ToLower(strings.TrimSpace(svc.Type))
 	startCmd := strings.TrimSpace(svc.StartCommand)
+	// Static sites are served by the image (nginx) and must not override the container command.
+	if serviceType == "static" {
+		startCmd = ""
+	}
 	if startCmd != "" {
 		// Note: this requires the image to contain `sh`.
 		dep.Spec.Template.Spec.Containers[idx].Command = []string{"sh", "-lc", startCmd}

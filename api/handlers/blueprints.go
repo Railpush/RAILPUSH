@@ -160,6 +160,158 @@ func blueprintResourceStatus(r models.BlueprintResource) string {
 	return "unknown"
 }
 
+func blueprintIDSuffix(id string) string {
+	// Keep it deterministic and short for readable service names.
+	id = strings.ToLower(strings.TrimSpace(id))
+	id = strings.ReplaceAll(id, "-", "")
+	if len(id) > 6 {
+		id = id[:6]
+	}
+	return id
+}
+
+func applyRenderServiceNameRenames(spec *RenderYAML, renames map[string]string) {
+	if spec == nil || len(renames) == 0 {
+		return
+	}
+	for si := range spec.Services {
+		for ei := range spec.Services[si].EnvVars {
+			fs := spec.Services[si].EnvVars[ei].FromService
+			if fs == nil {
+				continue
+			}
+			k := strings.ToLower(strings.TrimSpace(fs.Name))
+			if k == "" {
+				continue
+			}
+			if newName, ok := renames[k]; ok {
+				spec.Services[si].EnvVars[ei].FromService.Name = newName
+			}
+		}
+	}
+}
+
+func rewriteAIGeneratedServiceNamesForWorkspace(bp *models.Blueprint, spec *RenderYAML) error {
+	if bp == nil || spec == nil {
+		return nil
+	}
+
+	// Normalize static services. AI sometimes includes startCommand for static sites, which breaks
+	// k8s deployments by overriding the container command.
+	for i := range spec.Services {
+		if strings.ToLower(strings.TrimSpace(spec.Services[i].Type)) != "static" {
+			continue
+		}
+		spec.Services[i].StartCommand = ""
+		if strings.TrimSpace(spec.Services[i].StaticPublishPath) == "" {
+			spec.Services[i].StaticPublishPath = "dist"
+		}
+		if strings.TrimSpace(spec.Services[i].BuildCommand) == "" {
+			spec.Services[i].BuildCommand = "npm run build"
+		}
+	}
+
+	existing, err := models.ListServices(bp.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	existingByLower := map[string]models.Service{} // lower(name) -> service
+	for _, svc := range existing {
+		k := strings.ToLower(strings.TrimSpace(svc.Name))
+		if k == "" {
+			continue
+		}
+		existingByLower[k] = svc
+	}
+
+	used := map[string]struct{}{} // names already present in the generated spec
+	for _, s := range spec.Services {
+		k := strings.ToLower(strings.TrimSpace(s.Name))
+		if k == "" {
+			continue
+		}
+		used[k] = struct{}{}
+	}
+
+	suffix := blueprintIDSuffix(bp.ID)
+	if suffix == "" {
+		suffix = "bp"
+	}
+
+	renames := map[string]string{} // lower(old) -> new
+	for i := range spec.Services {
+		name := strings.TrimSpace(spec.Services[i].Name)
+		if name == "" {
+			continue
+		}
+		lower := strings.ToLower(name)
+		existingSvc, ok := existingByLower[lower]
+		if !ok {
+			continue
+		}
+
+		desiredRepo := strings.TrimSpace(spec.Services[i].Repo)
+		if desiredRepo == "" {
+			desiredRepo = strings.TrimSpace(bp.RepoURL)
+		}
+		desiredType := strings.TrimSpace(spec.Services[i].Type)
+
+		mismatchRepo := desiredRepo != "" && strings.TrimSpace(existingSvc.RepoURL) != "" && strings.TrimSpace(existingSvc.RepoURL) != desiredRepo
+		mismatchType := desiredType != "" && strings.TrimSpace(existingSvc.Type) != "" && strings.TrimSpace(existingSvc.Type) != desiredType
+		if !(mismatchRepo || mismatchType) {
+			continue
+		}
+
+		baseName := strings.Trim(fmt.Sprintf("%s-%s", name, suffix), "-")
+		if baseName == "" {
+			baseName = fmt.Sprintf("service-%s", suffix)
+		}
+
+		candidate := baseName
+		for n := 1; n < 1000; n++ {
+			candLower := strings.ToLower(strings.TrimSpace(candidate))
+			if candLower == "" {
+				candidate = fmt.Sprintf("service-%s", suffix)
+				candLower = strings.ToLower(candidate)
+			}
+
+			// Avoid collisions within the AI spec itself.
+			if _, taken := used[candLower]; taken {
+				// If the name is unchanged, no rewrite needed.
+				if candLower == lower {
+					break
+				}
+				candidate = fmt.Sprintf("%s-%d", baseName, n)
+				continue
+			}
+
+			// If the candidate exists already, only accept it when it matches the desired repo/type.
+			if ex2, ok2 := existingByLower[candLower]; ok2 {
+				mismatchRepo2 := desiredRepo != "" && strings.TrimSpace(ex2.RepoURL) != "" && strings.TrimSpace(ex2.RepoURL) != desiredRepo
+				mismatchType2 := desiredType != "" && strings.TrimSpace(ex2.Type) != "" && strings.TrimSpace(ex2.Type) != desiredType
+				if mismatchRepo2 || mismatchType2 {
+					candidate = fmt.Sprintf("%s-%d", baseName, n)
+					continue
+				}
+			}
+			break
+		}
+
+		if strings.TrimSpace(candidate) == "" || strings.ToLower(candidate) == lower {
+			continue
+		}
+
+		renames[lower] = candidate
+		used[strings.ToLower(candidate)] = struct{}{}
+		spec.Services[i].Name = candidate
+	}
+
+	if len(renames) > 0 {
+		applyRenderServiceNameRenames(spec, renames)
+	}
+	return nil
+}
+
 // SyncBlueprint clones the repo, parses render.yaml, and creates/updates services
 func (h *BlueprintHandler) SyncBlueprint(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
@@ -747,6 +899,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	yamlPath := filepath.Join(tmpDir, bp.FilePath)
 	data, err := os.ReadFile(yamlPath)
 	repoFileExists := err == nil
+	specGeneratedByAI := false
 	aiEnabled := h.blueprintAIAutogenEnabled(bp.WorkspaceID)
 	if !repoFileExists && !aiEnabled {
 		fail("yaml_missing_ai_disabled")
@@ -784,6 +937,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 					}
 				} else {
 					data = []byte(generated)
+					specGeneratedByAI = true
 					if mkErr := os.MkdirAll(filepath.Dir(yamlPath), 0o755); mkErr == nil {
 						_ = os.WriteFile(yamlPath, data, 0o644)
 					}
@@ -805,6 +959,16 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	if err := yaml.Unmarshal(data, &spec); err != nil {
 		fail("invalid YAML syntax in " + bp.FilePath)
 		return
+	}
+
+	// AI-generated specs can clash with existing workspace service names. When we autogenerate YAML,
+	// rewrite conflicting service names deterministically so the sync can proceed without mutating
+	// existing services in this workspace.
+	if specGeneratedByAI {
+		if err := rewriteAIGeneratedServiceNamesForWorkspace(bp, &spec); err != nil {
+			log.Printf("Blueprint sync: failed to rewrite AI service names blueprint=%s err=%v", bp.ID, err)
+			// Best-effort only. We'll still proceed with the original spec; preflight may fail with a clear message.
+		}
 	}
 
 	if len(spec.Services) == 0 && len(spec.Databases) == 0 && len(spec.KeyValues) == 0 {
@@ -891,12 +1055,16 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			return
 		}
 		if svc != nil {
-			if strings.TrimSpace(svc.RepoURL) != "" && strings.TrimSpace(sdef.Repo) != "" && strings.TrimSpace(svc.RepoURL) != strings.TrimSpace(sdef.Repo) {
-				fail("service name already exists with a different repo: " + name)
+			desiredRepo := strings.TrimSpace(sdef.Repo)
+			if desiredRepo == "" {
+				desiredRepo = strings.TrimSpace(bp.RepoURL)
+			}
+			if strings.TrimSpace(svc.RepoURL) != "" && desiredRepo != "" && strings.TrimSpace(svc.RepoURL) != desiredRepo {
+				fail(fmt.Sprintf("service name conflict: %q already exists in this workspace (repo=%q). Blueprint wants repo=%q. Rename the service in %s or rename/delete the existing service.", name, strings.TrimSpace(svc.RepoURL), desiredRepo, bp.FilePath))
 				return
 			}
 			if strings.TrimSpace(svc.Type) != "" && strings.TrimSpace(desiredType) != "" && strings.TrimSpace(svc.Type) != strings.TrimSpace(desiredType) {
-				fail("service name already exists with a different type: " + name)
+				fail(fmt.Sprintf("service name conflict: %q already exists in this workspace (type=%q). Blueprint wants type=%q. Rename the service in %s or rename/delete the existing service.", name, strings.TrimSpace(svc.Type), strings.TrimSpace(desiredType), bp.FilePath))
 				return
 			}
 			// Disk conflicts for adopted services (no updates supported yet; fail early).
@@ -1144,6 +1312,11 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		if desiredType == "" {
 			desiredType = "web"
 		}
+		startCommand := sdef.StartCommand
+		if strings.ToLower(strings.TrimSpace(desiredType)) == "static" {
+			// Static sites are served by the built image; startCommand is not applicable.
+			startCommand = ""
+		}
 
 		// If a service already exists with this name, adopt it instead of creating a duplicate.
 		svc, _ := models.GetServiceByWorkspaceAndName(bp.WorkspaceID, serviceName)
@@ -1155,7 +1328,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			svc = &models.Service{
 				WorkspaceID: bp.WorkspaceID, Name: serviceName, Type: desiredType,
 				Runtime: sdef.Runtime, RepoURL: sdef.Repo, Branch: sdef.Branch,
-				BuildCommand: sdef.BuildCommand, StartCommand: sdef.StartCommand,
+				BuildCommand: sdef.BuildCommand, StartCommand: startCommand,
 				Port: sdef.Port, AutoDeploy: autoDeploy, Plan: sdef.Plan,
 				HealthCheckPath: sdef.HealthCheckPath, PreDeployCommand: sdef.PreDeployCmd,
 				DockerfilePath: sdef.DockerfilePath, DockerContext: dockerCtx,
@@ -1228,7 +1401,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				svc.Branch = bp.Branch
 			}
 			svc.BuildCommand = sdef.BuildCommand
-			svc.StartCommand = sdef.StartCommand
+			svc.StartCommand = startCommand
 			if sdef.DockerCommand != "" {
 				svc.StartCommand = sdef.DockerCommand
 			}

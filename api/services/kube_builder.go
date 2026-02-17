@@ -113,7 +113,13 @@ func (k *KubeDeployer) BuildImageWithKaniko(deployID string, svc *models.Service
 	}
 	dfAbs := repoRoot + "/" + dfRelFromRepo
 
+	serviceType := strings.ToLower(strings.TrimSpace(svc.Type))
 	runtime := strings.ToLower(strings.TrimSpace(svc.Runtime))
+	// Match the non-Kubernetes deploy behavior: static sites always use the static build pipeline,
+	// regardless of what the service "runtime" field says.
+	if serviceType == "static" {
+		runtime = "static"
+	}
 	port := svc.Port
 	if port <= 0 {
 		port = 10000
@@ -252,6 +258,8 @@ if [ "$RUNTIME" = "node" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
       printf '%s\n' "RUN $BUILD_COMMAND"
     fi
     printf '%s\n' "ENV NODE_ENV=production"
+    # In strict tenant security mode the root filesystem is read-only; keep npm cache/logs under /tmp.
+    printf '%s\n' "ENV NPM_CONFIG_CACHE=/tmp/.npm"
     printf '%s\n' "EXPOSE ${PORT}"
     printf '%s\n' "CMD [\"sh\",\"-lc\",\"npm start\"]"
   } > "$DOCKERFILE_PATH"

@@ -164,6 +164,7 @@ RUN npm install --production=false
 COPY . .
 RUN %s
 ENV PORT=%d
+ENV NPM_CONFIG_CACHE=/tmp/.npm
 EXPOSE %d
 CMD ["/bin/sh", "-c", "%s"]
 `, bc, port, port, sc)

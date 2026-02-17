@@ -134,7 +134,7 @@ Full schema:
 services:
   - name: <required string>
     type: web|worker|cron|static|pserv
-    runtime: docker|node|python|go|ruby|rust|elixir|image
+    runtime: docker|node|python|go|ruby|rust|elixir|static|image
     repo: <repo-url>
     branch: <branch>
     buildCommand: <optional string>
@@ -212,6 +212,7 @@ Rules:
 - Use preDeployCommand for migration commands when detected (e.g. "npx prisma migrate deploy", "python manage.py migrate", "bundle exec rake db:migrate").
 - For monorepos with multiple apps, set rootDir for each service.
 - For static sites (React, Vue, Svelte, Next.js export), use type=static with the correct staticPublishPath.
+- For type=static, omit startCommand (static sites are served by the built image).
 - For cron jobs, use type=cron with a valid cron schedule expression.
 - Keep values conservative and production-safe.`
 
