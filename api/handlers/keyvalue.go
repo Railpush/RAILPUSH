@@ -354,6 +354,8 @@ func (h *KeyValueHandler) DeleteKeyValue(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// Remove any blueprint links to this key-value store to avoid stale resources in blueprint UIs.
+	_ = models.DeleteBlueprintResourcesByResource("keyvalue", id)
 	if err := models.DeleteManagedKeyValue(id); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to delete key-value store")
 		return

@@ -2,6 +2,7 @@ package models
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/railpush/api/database"
@@ -96,6 +97,16 @@ func UpdateBlueprintSync(id, status string) error {
 
 func UpdateBlueprintGeneratedYAML(id string, generatedYAML string) error {
 	_, err := database.DB.Exec("UPDATE blueprints SET generated_yaml=$1 WHERE id=$2", generatedYAML, id)
+	return err
+}
+
+func DeleteBlueprintResourcesByResource(resourceType string, resourceID string) error {
+	resourceType = strings.TrimSpace(resourceType)
+	resourceID = strings.TrimSpace(resourceID)
+	if resourceType == "" || resourceID == "" {
+		return nil
+	}
+	_, err := database.DB.Exec("DELETE FROM blueprint_resources WHERE resource_type=$1 AND resource_id=$2", resourceType, resourceID)
 	return err
 }
 

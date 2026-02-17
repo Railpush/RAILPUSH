@@ -543,6 +543,8 @@ func (h *ServiceHandler) DeleteService(w http.ResponseWriter, r *http.Request) {
 			h.Worker.Router.RemoveRoute(domain)
 		}
 	}
+	// Remove any blueprint links to this service to avoid stale resources in blueprint UIs.
+	_ = models.DeleteBlueprintResourcesByResource("service", id)
 	if err := models.DeleteService(id); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to delete service")
 		return

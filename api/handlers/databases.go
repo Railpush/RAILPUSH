@@ -366,6 +366,8 @@ func (h *DatabaseHandler) DeleteDatabase(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// Remove any blueprint links to this database to avoid stale resources in blueprint UIs.
+	_ = models.DeleteBlueprintResourcesByResource("database", id)
 	if err := models.DeleteManagedDatabase(id); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to delete database")
 		return

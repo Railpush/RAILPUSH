@@ -3,22 +3,28 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
 	"github.com/gorilla/mux"
+	"github.com/railpush/api/config"
 	"github.com/railpush/api/middleware"
 	"github.com/railpush/api/models"
 	"github.com/railpush/api/services"
 	"github.com/railpush/api/utils"
 )
 
-type ProjectHandler struct{}
+type ProjectHandler struct {
+	Config *config.Config
+	Worker *services.Worker
+	Stripe *services.StripeService
+}
 
 var errProjectFolderNotFound = errors.New("project folder not found")
 
-func NewProjectHandler() *ProjectHandler {
-	return &ProjectHandler{}
+func NewProjectHandler(cfg *config.Config, worker *services.Worker, stripe *services.StripeService) *ProjectHandler {
+	return &ProjectHandler{Config: cfg, Worker: worker, Stripe: stripe}
 }
 
 func resolveWorkspaceID(r *http.Request, requested string) (string, error) {
@@ -291,13 +297,87 @@ func (h *ProjectHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Delete services belonging to this project first (both project_id services and services in project environments).
+	svcs, err := models.ListServicesByProject(projectID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to load project services")
+		return
+	}
+	var failures []string
+	for i := range svcs {
+		svc := &svcs[i]
+		if svc == nil || strings.TrimSpace(svc.ID) == "" {
+			continue
+		}
+
+		// Best-effort: remove billing mapping first so deleted services don't continue to accrue charges.
+		if strings.TrimSpace(svc.Plan) != "" && strings.ToLower(strings.TrimSpace(svc.Plan)) != services.PlanFree {
+			if h != nil && h.Stripe != nil && h.Stripe.Enabled() {
+				if err := h.Stripe.RemoveSubscriptionItem("service", svc.ID); err != nil {
+					log.Printf("Warning: failed to remove billing for service %s during project delete: %v", svc.ID, err)
+				}
+			}
+		}
+
+		// Best-effort: remove runtime resources.
+		if h != nil && h.Config != nil && h.Config.Kubernetes.Enabled {
+			var kd *services.KubeDeployer
+			if h.Worker != nil {
+				if k, err := h.Worker.GetKubeDeployer(); err == nil {
+					kd = k
+				}
+			}
+			if kd == nil {
+				if k, err := services.NewKubeDeployer(h.Config); err == nil {
+					kd = k
+				}
+			}
+			if kd != nil {
+				_ = kd.DeleteServiceResources(svc)
+			}
+		} else if h != nil && h.Worker != nil {
+			if svc.ContainerID != "" {
+				h.Worker.Deployer.RemoveContainer(svc.ContainerID)
+			}
+			if instances, err := models.ListServiceInstances(svc.ID); err == nil {
+				for _, inst := range instances {
+					if inst.ContainerID != "" {
+						_ = h.Worker.Deployer.RemoveContainer(inst.ContainerID)
+					}
+				}
+			}
+			_ = models.DeleteServiceInstancesByService(svc.ID)
+			if h.Config != nil && h.Worker.Router != nil && h.Config.Deploy.Domain != "" && h.Config.Deploy.Domain != "localhost" && !h.Config.Deploy.DisableRouter {
+				domain := utils.ServiceHostLabel(svc.Name, svc.Subdomain) + "." + h.Config.Deploy.Domain
+				h.Worker.Router.RemoveRoute(domain)
+			}
+		}
+
+		// Remove any blueprint links to this service to avoid stale resources in blueprint UIs.
+		_ = models.DeleteBlueprintResourcesByResource("service", svc.ID)
+		if err := models.DeleteService(svc.ID); err != nil {
+			failures = append(failures, strings.TrimSpace(svc.Name))
+		} else {
+			services.Audit(svc.WorkspaceID, userID, "service.deleted", "service", svc.ID, map[string]interface{}{
+				"name":       svc.Name,
+				"project_id": projectID,
+				"source":     "project.delete",
+			})
+		}
+	}
+	if len(failures) > 0 {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to delete one or more services in this project")
+		return
+	}
+
 	if err := models.DeleteProject(projectID); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to delete project")
 		return
 	}
 
 	services.Audit(p.WorkspaceID, userID, "project.deleted", "project", projectID, map[string]interface{}{
-		"name": p.Name,
+		"name":            p.Name,
+		"deleted_services": len(svcs),
 	})
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }

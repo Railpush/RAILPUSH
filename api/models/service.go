@@ -83,6 +83,40 @@ func ListServices(workspaceID string) ([]Service, error) {
 	return svcs, nil
 }
 
+// ListServicesByProject returns services directly assigned to a project (project_id)
+// plus services assigned to any environments within that project.
+func ListServicesByProject(projectID string) ([]Service, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return []Service{}, nil
+	}
+
+	rows, err := database.DB.Query(
+		"SELECT "+serviceSelectCols+" FROM services WHERE project_id=$1 OR environment_id IN (SELECT id FROM environments WHERE project_id=$1) ORDER BY created_at DESC",
+		projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var svcs []Service
+	for rows.Next() {
+		var s Service
+		var pid, eid string
+		if err := rows.Scan(&s.ID, &s.WorkspaceID, &pid, &eid, &s.Name, &s.Subdomain, &s.Type, &s.Runtime, &s.RepoURL, &s.Branch, &s.BuildCommand, &s.StartCommand, &s.DockerfilePath, &s.DockerContext, &s.ImageURL, &s.HealthCheckPath, &s.Port, &s.AutoDeploy, &s.IsSuspended, &s.MaxShutdownDelay, &s.PreDeployCommand, &s.StaticPublishPath, &s.Schedule, &s.Plan, &s.Instances, &s.Status, &s.ContainerID, &s.HostPort, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, err
+		}
+		s.ProjectID = serviceStrPtrOrNil(pid)
+		s.EnvironmentID = serviceStrPtrOrNil(eid)
+		svcs = append(svcs, s)
+	}
+	if svcs == nil {
+		svcs = []Service{}
+	}
+	return svcs, nil
+}
+
 func GetServiceByWorkspaceAndName(workspaceID string, name string) (*Service, error) {
 	workspaceID = strings.TrimSpace(workspaceID)
 	name = strings.TrimSpace(name)

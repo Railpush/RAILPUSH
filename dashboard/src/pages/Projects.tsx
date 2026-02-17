@@ -870,8 +870,10 @@ export function Projects() {
         }
       >
         <p className="text-sm text-content-secondary">
-          Delete <span className="text-content-primary font-medium">{deletingProjectCard?.name}</span>? Services will remain,
-          but they will be removed from this project.
+          Delete <span className="text-content-primary font-medium">{deletingProjectCard?.name}</span>?
+          {typeof deletingProjectCard?.services?.length === 'number' && deletingProjectCard.services.length > 0
+            ? ` This will delete ${deletingProjectCard.services.length} service${deletingProjectCard.services.length === 1 ? '' : 's'} in this project.`
+            : ' This will delete all services in this project.'}
         </p>
       </Modal>
 

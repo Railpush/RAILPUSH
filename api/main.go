@@ -161,7 +161,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	whH := handlers.NewWebhookHandler(cfg, worker)
 	metH := handlers.NewMetricsHandler(cfg)
 	billH := handlers.NewBillingHandler(cfg, stripeService)
-	projH := handlers.NewProjectHandler()
+	projH := handlers.NewProjectHandler(cfg, worker, stripeService)
 	workH := handlers.NewWorkspaceHandler()
 	autoH := handlers.NewAutoscalingHandler()
 	jobH := handlers.NewOneOffJobHandler(worker)
