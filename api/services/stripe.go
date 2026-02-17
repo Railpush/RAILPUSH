@@ -348,6 +348,7 @@ func (s *StripeService) createCustomerBalanceTransaction(stripeCustomerID string
 	}
 
 	params := &stripe.CustomerBalanceTransactionParams{
+		Customer: stripe.String(stripeCustomerID),
 		Amount:   stripe.Int64(amountCents),
 		Currency: stripe.String("usd"),
 	}
@@ -363,7 +364,7 @@ func (s *StripeService) createCustomerBalanceTransaction(stripeCustomerID string
 		params.AddMetadata(k, v)
 	}
 
-	_, err := customerbalancetransaction.New(stripeCustomerID, params)
+	_, err := customerbalancetransaction.New(params)
 	return err
 }
 
