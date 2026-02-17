@@ -688,6 +688,20 @@ func (k *KubeDeployer) WaitForServiceReady(deploymentName string, svc *models.Se
 			return nil
 		}
 
+		// Only treat a failing pod as fatal when it's running the desired image for this rollout.
+		// During a rollout, old pods may still be CrashLooping (the whole reason we're redeploying);
+		// failing fast on those old pods makes "fixing a crashloop" impossible.
+		desiredImage := ""
+		for _, c := range dep.Spec.Template.Spec.Containers {
+			if c.Name == "service" {
+				desiredImage = strings.TrimSpace(c.Image)
+				break
+			}
+		}
+		if desiredImage == "" && len(dep.Spec.Template.Spec.Containers) > 0 {
+			desiredImage = strings.TrimSpace(dep.Spec.Template.Spec.Containers[0].Image)
+		}
+
 		// Best-effort diagnostics: detect crashloops / image pull failures and return a clearer error.
 		if svc != nil && strings.TrimSpace(svc.ID) != "" && replicas > 0 {
 			dctx, dcancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -697,6 +711,22 @@ func (k *KubeDeployer) WaitForServiceReady(deploymentName string, svc *models.Se
 			dcancel()
 			if perr == nil {
 				for _, pod := range pods.Items {
+					// Ignore old/terminating pods.
+					if pod.DeletionTimestamp != nil {
+						continue
+					}
+					if desiredImage != "" {
+						podImage := ""
+						for _, pc := range pod.Spec.Containers {
+							if pc.Name == "service" {
+								podImage = strings.TrimSpace(pc.Image)
+								break
+							}
+						}
+						if podImage != "" && podImage != desiredImage {
+							continue
+						}
+					}
 					for _, st := range pod.Status.ContainerStatuses {
 						// Only inspect the primary service container.
 						if st.Name != "service" {
