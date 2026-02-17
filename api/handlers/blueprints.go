@@ -102,9 +102,14 @@ func (h *BlueprintHandler) CreateBlueprint(w http.ResponseWriter, r *http.Reques
 	utils.RespondJSON(w, http.StatusCreated, bp)
 }
 
+type blueprintResourceResponse struct {
+	models.BlueprintResource
+	Status string `json:"status"`
+}
+
 type blueprintDetailResponse struct {
 	models.Blueprint
-	Resources []models.BlueprintResource `json:"resources"`
+	Resources []blueprintResourceResponse `json:"resources"`
 }
 
 func (h *BlueprintHandler) GetBlueprint(w http.ResponseWriter, r *http.Request) {
@@ -130,7 +135,29 @@ func (h *BlueprintHandler) GetBlueprint(w http.ResponseWriter, r *http.Request) 
 	if resources == nil {
 		resources = []models.BlueprintResource{}
 	}
-	utils.RespondJSON(w, http.StatusOK, blueprintDetailResponse{Blueprint: *bp, Resources: resources})
+	enriched := make([]blueprintResourceResponse, len(resources))
+	for i, r := range resources {
+		enriched[i] = blueprintResourceResponse{BlueprintResource: r, Status: blueprintResourceStatus(r)}
+	}
+	utils.RespondJSON(w, http.StatusOK, blueprintDetailResponse{Blueprint: *bp, Resources: enriched})
+}
+
+func blueprintResourceStatus(r models.BlueprintResource) string {
+	switch r.ResourceType {
+	case "service":
+		if svc, err := models.GetService(r.ResourceID); err == nil && svc != nil {
+			return svc.Status
+		}
+	case "database":
+		if db, err := models.GetManagedDatabase(r.ResourceID); err == nil && db != nil {
+			return db.Status
+		}
+	case "keyvalue":
+		if kv, err := models.GetManagedKeyValue(r.ResourceID); err == nil && kv != nil {
+			return kv.Status
+		}
+	}
+	return "unknown"
 }
 
 // SyncBlueprint clones the repo, parses render.yaml, and creates/updates services
