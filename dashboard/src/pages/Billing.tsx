@@ -29,18 +29,6 @@ type UsageEnvelope = {
   bandwidthGb: number;
 };
 
-type Section = {
-  id: string;
-  label: string;
-};
-
-const sections: Section[] = [
-  { id: 'plan', label: 'Plan' },
-  { id: 'included-usage', label: 'Included Usage' },
-  { id: 'unbilled-charges', label: 'Unbilled Charges' },
-  { id: 'billing-info', label: 'Billing Details' },
-];
-
 const planRank: Record<PlanID, number> = {
   free: 0,
   starter: 1,
@@ -230,7 +218,6 @@ export function Billing() {
   const [overview, setOverview] = useState<BillingOverview | null>(null);
   const [billingEmail, setBillingEmail] = useState('');
   const [loading, setLoading] = useState(true);
-  const [activeSection, setActiveSection] = useState<string>(sections[0].id);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [promoCode, setPromoCode] = useState('');
 
@@ -256,31 +243,6 @@ export function Billing() {
     load();
     return () => { mounted = false; };
   }, []);
-
-  useEffect(() => {
-    if (loading) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const firstVisible = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
-        if (firstVisible?.target?.id) {
-          setActiveSection(firstVisible.target.id);
-        }
-      },
-      {
-        threshold: [0.2, 0.6],
-        rootMargin: '-20% 0px -65% 0px',
-      }
-    );
-
-    sections.forEach((section) => {
-      const el = document.getElementById(section.id);
-      if (el) observer.observe(el);
-    });
-
-    return () => observer.disconnect();
-  }, [loading]);
 
   const items = overview?.items ?? [];
   const paidItems = items.filter((item) => item.monthly_cost > 0);
@@ -529,9 +491,8 @@ export function Billing() {
         />
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_240px] gap-8">
-        <div className="space-y-8">
-          <SectionFrame id="plan" title="Plan Overview">
+      <div className="space-y-8">
+        <SectionFrame id="plan" title="Plan Overview">
             <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-6">
               <div className="space-y-4">
                 <div className="flex items-start justify-between gap-3">
@@ -563,9 +524,9 @@ export function Billing() {
                 </Button>
               </div>
             </div>
-          </SectionFrame>
+        </SectionFrame>
 
-          <SectionFrame id="included-usage" title="Resource Usage">
+        <SectionFrame id="included-usage" title="Resource Usage">
             <div className="space-y-6">
               <p className="text-sm text-content-secondary">
                 Usage metrics for your current billing cycle. Quotas recharge monthly.
@@ -592,9 +553,9 @@ export function Billing() {
                 />
               </div>
             </div>
-          </SectionFrame>
+        </SectionFrame>
 
-          <SectionFrame id="unbilled-charges" title="Unbilled Line Items">
+        <SectionFrame id="unbilled-charges" title="Unbilled Line Items">
             <div className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border-default/50 pb-4">
                 <p className="text-sm text-content-secondary">Charges accrued this month, to be invoiced next cycle.</p>
@@ -672,9 +633,9 @@ export function Billing() {
                 </div>
               )}
             </div>
-          </SectionFrame>
+        </SectionFrame>
 
-          <SectionFrame id="billing-info" title="Billing Details">
+        <SectionFrame id="billing-info" title="Billing Details">
             <div className="grid grid-cols-1 gap-6">
               <div className="space-y-2">
                 <p className="text-xs uppercase tracking-wider text-content-tertiary">Billing Email</p>
@@ -697,24 +658,7 @@ export function Billing() {
                 <Button variant="secondary" onClick={handlePromoApply} disabled={!promoCode.trim()}>Apply</Button>
               </div>
             </div>
-          </SectionFrame>
-        </div>
-
-        {/* Floating Outline/Nav (Desktop) */}
-        <div className="hidden xl:block">
-          <div className="sticky top-24 space-y-1">
-            <p className="px-3 text-xs uppercase tracking-wider text-content-tertiary font-semibold mb-2">On this page</p>
-            {sections.map(s => (
-              <a
-                key={s.id}
-                href={`#${s.id}`}
-                className={`block px-3 py-1.5 text-sm rounded transition-colors ${activeSection === s.id ? 'bg-brand/10 text-brand font-medium' : 'text-content-secondary hover:text-content-primary'}`}
-              >
-                {s.label}
-              </a>
-            ))}
-          </div>
-        </div>
+        </SectionFrame>
       </div>
     </div>
   );
