@@ -185,6 +185,50 @@ if [ -z "$DOCKERFILE_PATH" ]; then
   DOCKERFILE_PATH="Dockerfile"
 fi
 
+# Auto-detect runtime from repo contents when not explicitly set.
+RAILPUSH_SUBDIR=""
+if [ -z "$RUNTIME" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
+  if [ -f "package.json" ]; then
+    RUNTIME="node"
+    echo "RailPush: auto-detected runtime=node (found package.json)"
+  elif [ -f "requirements.txt" ] || [ -f "Pipfile" ] || [ -f "pyproject.toml" ]; then
+    RUNTIME="python"
+    echo "RailPush: auto-detected runtime=python"
+  elif [ -f "go.mod" ]; then
+    RUNTIME="go"
+    echo "RailPush: auto-detected runtime=go (found go.mod)"
+  elif [ -f "Gemfile" ]; then
+    RUNTIME="ruby"
+    echo "RailPush: auto-detected runtime=ruby (found Gemfile)"
+  elif [ -f "Cargo.toml" ]; then
+    RUNTIME="rust"
+    echo "RailPush: auto-detected runtime=rust (found Cargo.toml)"
+  else
+    # Check common subdirectories for monorepo layouts.
+    for subdir in backend server api app src; do
+      if [ -d "$subdir" ]; then
+        if [ -f "$subdir/Dockerfile" ]; then
+          echo "RailPush: found Dockerfile in $subdir/, copying to repo root"
+          cp "$subdir/Dockerfile" "$DOCKERFILE_PATH"
+          break
+        elif [ -f "$subdir/package.json" ]; then
+          RUNTIME="node"; RAILPUSH_SUBDIR="$subdir"
+          echo "RailPush: auto-detected runtime=node in $subdir/"
+          break
+        elif [ -f "$subdir/requirements.txt" ] || [ -f "$subdir/Pipfile" ] || [ -f "$subdir/pyproject.toml" ]; then
+          RUNTIME="python"; RAILPUSH_SUBDIR="$subdir"
+          echo "RailPush: auto-detected runtime=python in $subdir/"
+          break
+        elif [ -f "$subdir/go.mod" ]; then
+          RUNTIME="go"; RAILPUSH_SUBDIR="$subdir"
+          echo "RailPush: auto-detected runtime=go in $subdir/"
+          break
+        fi
+      fi
+    done
+  fi
+fi
+
 # AI Fix: if an override Dockerfile is provided, write it directly.
 if [ -n "${RAILPUSH_DOCKERFILE_CONTENT:-}" ]; then
   echo "RailPush: using AI-fixed Dockerfile"
@@ -275,8 +319,12 @@ if [ "$RUNTIME" = "node" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
   {
     printf '%s\n' "FROM node:20-alpine"
     printf '%s\n' "WORKDIR /app"
-    printf '%s\n' "COPY . ."
-    printf '%s\n' "RUN rm -rf .git"
+    if [ -n "$RAILPUSH_SUBDIR" ]; then
+      printf 'COPY %s/ .\n' "$RAILPUSH_SUBDIR"
+    else
+      printf '%s\n' "COPY . ."
+      printf '%s\n' "RUN rm -rf .git"
+    fi
     if [ "$NEEDS_COREPACK" = "1" ]; then
       printf '%s\n' "RUN corepack enable"
     fi
@@ -298,9 +346,92 @@ if [ "$RUNTIME" = "node" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
   } > "$DOCKERFILE_PATH"
 fi
 
+if [ "$RUNTIME" = "python" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
+  echo "RailPush: generating python Dockerfile at $DOCKERFILE_PATH"
+  mkdir -p "$(dirname "$DOCKERFILE_PATH")" 2>/dev/null || true
+
+  PORT="${RAILPUSH_PORT:-10000}"
+  BUILD_COMMAND="${RAILPUSH_BUILD_COMMAND:-}"
+  COPY_FROM="."
+  CHECK_DIR="."
+  if [ -n "$RAILPUSH_SUBDIR" ]; then
+    COPY_FROM="$RAILPUSH_SUBDIR/"
+    CHECK_DIR="$RAILPUSH_SUBDIR"
+  fi
+
+  # Detect the best start command from deps or common entry points.
+  START_CMD=""
+  if grep -q "gunicorn" "$CHECK_DIR/requirements.txt" 2>/dev/null; then
+    # Try to find the WSGI module: look for wsgi.py or app.py with app/application object.
+    if [ -f "$CHECK_DIR/wsgi.py" ]; then
+      START_CMD="gunicorn --bind 0.0.0.0:\${PORT} wsgi:application"
+    else
+      START_CMD="gunicorn --bind 0.0.0.0:\${PORT} app:app"
+    fi
+  elif grep -q "uvicorn" "$CHECK_DIR/requirements.txt" 2>/dev/null; then
+    START_CMD="uvicorn app:app --host 0.0.0.0 --port \${PORT}"
+  elif [ -f "$CHECK_DIR/manage.py" ]; then
+    START_CMD="python manage.py runserver 0.0.0.0:\${PORT}"
+  elif [ -f "$CHECK_DIR/app.py" ]; then
+    START_CMD="python app.py"
+  elif [ -f "$CHECK_DIR/main.py" ]; then
+    START_CMD="python main.py"
+  else
+    START_CMD="python -m http.server \${PORT}"
+  fi
+
+  {
+    printf '%s\n' "FROM python:3.12-slim"
+    printf '%s\n' "WORKDIR /app"
+    printf 'COPY %s .\n' "$COPY_FROM"
+    if [ -z "$RAILPUSH_SUBDIR" ]; then
+      printf '%s\n' "RUN rm -rf .git"
+    fi
+    printf '%s\n' "RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; elif [ -f Pipfile ]; then pip install --no-cache-dir pipenv && pipenv install --deploy --system; elif [ -f pyproject.toml ]; then pip install --no-cache-dir .; fi"
+    if [ -n "$BUILD_COMMAND" ]; then
+      printf 'RUN %s\n' "$BUILD_COMMAND"
+    fi
+    printf 'ENV PORT=%s\n' "${PORT}"
+    printf '%s\n' "EXPOSE ${PORT}"
+    printf 'CMD ["sh", "-c", "%s"]\n' "$START_CMD"
+  } > "$DOCKERFILE_PATH"
+fi
+
+if [ "$RUNTIME" = "go" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
+  echo "RailPush: generating go Dockerfile at $DOCKERFILE_PATH"
+  mkdir -p "$(dirname "$DOCKERFILE_PATH")" 2>/dev/null || true
+
+  PORT="${RAILPUSH_PORT:-10000}"
+  BUILD_COMMAND="${RAILPUSH_BUILD_COMMAND:-}"
+  COPY_FROM="."
+  if [ -n "$RAILPUSH_SUBDIR" ]; then
+    COPY_FROM="$RAILPUSH_SUBDIR/"
+  fi
+
+  {
+    printf '%s\n' "FROM golang:1.24-alpine AS build"
+    printf '%s\n' "WORKDIR /src"
+    printf '%s\n' "RUN apk add --no-cache git ca-certificates"
+    printf 'COPY %s .\n' "$COPY_FROM"
+    printf '%s\n' "RUN go mod download"
+    if [ -n "$BUILD_COMMAND" ]; then
+      printf 'RUN %s\n' "$BUILD_COMMAND"
+    fi
+    printf '%s\n' "RUN CGO_ENABLED=0 go build -o /out/server ."
+    printf '\n'
+    printf '%s\n' "FROM alpine:3.20"
+    printf '%s\n' "RUN apk add --no-cache ca-certificates"
+    printf '%s\n' "WORKDIR /app"
+    printf '%s\n' "COPY --from=build /out/server ."
+    printf 'ENV PORT=%s\n' "${PORT}"
+    printf '%s\n' "EXPOSE ${PORT}"
+    printf '%s\n' 'CMD ["./server"]'
+  } > "$DOCKERFILE_PATH"
+fi
+
 if [ ! -f "$DOCKERFILE_PATH" ]; then
   echo "RailPush: Dockerfile not found at $DOCKERFILE_PATH (runtime=$RUNTIME)"
-  echo "RailPush: add a Dockerfile to your repo or set the Dockerfile path in RailPush."
+  echo "RailPush: add a Dockerfile to your repo, set a runtime (node/python/go), or set the Dockerfile path."
   echo "RailPush: repo root:"
   ls -la | sed -n '1,120p' || true
   exit 2

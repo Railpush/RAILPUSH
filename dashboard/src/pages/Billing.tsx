@@ -269,7 +269,7 @@ export function Billing() {
   );
   const nextChargeAt = overview?.next_charge_at ? new Date(overview.next_charge_at) : null;
   const nextChargeAtLabel = nextChargeAt
-    ? nextChargeAt.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    ? nextChargeAt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
     : null;
 
   const currentPlanId = useMemo<PlanID>(() => {
@@ -494,7 +494,7 @@ export function Billing() {
               </div>
               <div className="h-px bg-border-default/50" />
               <div className="flex items-center justify-between gap-3">
-                <span className="text-content-tertiary">Stripe will charge</span>
+                <span className="text-content-tertiary">Amount due</span>
                 <span className="font-mono text-content-primary">{formatCurrency(nextInvoiceAmountDueCents)}</span>
               </div>
               {nextChargeAtLabel && (
