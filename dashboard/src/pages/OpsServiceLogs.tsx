@@ -218,17 +218,17 @@ export function OpsServiceLogsPage() {
                           {entry.level === 'error' ? 'ERR' : entry.level === 'warn' ? 'WRN' : entry.level === 'debug' ? 'DBG' : 'INF'}
                         </span>
                       </td>
-                      {http.method && (
-                        <td className="py-1.5 px-1 align-top whitespace-nowrap w-[52px]">
-                          <span className="inline-flex items-center px-1.5 py-0 rounded border border-violet-500/25 bg-violet-500/15 text-violet-400 text-[10px] font-semibold leading-relaxed">{http.method}</span>
-                        </td>
-                      )}
-                      {http.status && (
-                        <td className="py-1.5 px-1 align-top whitespace-nowrap w-[40px]">
-                          <span className={`inline-flex items-center px-1.5 py-0 rounded border text-[10px] font-semibold tabular-nums leading-relaxed ${httpStatusCls(http.status)}`}>{http.status}</span>
-                        </td>
-                      )}
-                      <td className={`py-1.5 px-2 ${levelCls(entry.level)} break-all leading-relaxed align-top`}>{entry.message}</td>
+                      <td className={`py-1.5 px-2 ${levelCls(entry.level)} leading-relaxed align-top`}>
+                        <span className="inline-flex flex-wrap items-baseline gap-1.5">
+                          {http.method && (
+                            <span className="inline-flex items-center px-1.5 py-0 rounded border border-violet-500/25 bg-violet-500/15 text-violet-400 text-[10px] font-semibold leading-relaxed flex-shrink-0">{http.method}</span>
+                          )}
+                          {http.status && (
+                            <span className={`inline-flex items-center px-1.5 py-0 rounded border text-[10px] font-semibold tabular-nums leading-relaxed flex-shrink-0 ${httpStatusCls(http.status)}`}>{http.status}</span>
+                          )}
+                          <span className="break-all">{entry.message}</span>
+                        </span>
+                      </td>
                       <td className="py-1.5 pr-2 align-top w-[24px]">
                         <LineCopy text={`${formatTs(entry.timestamp)} [${entry.level.toUpperCase()}] ${entry.message}`} />
                       </td>
