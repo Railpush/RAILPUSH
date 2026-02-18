@@ -208,8 +208,12 @@ if [ -z "$RUNTIME" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
     for subdir in backend server api app src; do
       if [ -d "$subdir" ]; then
         if [ -f "$subdir/Dockerfile" ]; then
-          echo "RailPush: found Dockerfile in $subdir/, copying to repo root"
-          cp "$subdir/Dockerfile" "$DOCKERFILE_PATH"
+          echo "RailPush: found Dockerfile in $subdir/, promoting to build root"
+          # Promote subdir to repo root so Dockerfile COPY paths resolve correctly.
+          cp -a "$subdir" /workspace/_promote
+          find . -maxdepth 1 ! -name . ! -name .. -exec rm -rf {} +
+          cp -a /workspace/_promote/. .
+          rm -rf /workspace/_promote
           break
         elif [ -f "$subdir/package.json" ]; then
           RUNTIME="node"; RAILPUSH_SUBDIR="$subdir"
