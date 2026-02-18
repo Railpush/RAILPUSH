@@ -235,6 +235,9 @@ if [ "$RUNTIME" = "static" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
     printf '%s\n' "COPY --from=build /app/$PUBLISH_PATH /usr/share/nginx/html"
     printf '%s\n' "RUN printf 'worker_processes auto;\\nerror_log /dev/stderr notice;\\npid /tmp/nginx.pid;\\n\\nevents {\\n  worker_connections 1024;\\n}\\n\\nhttp {\\n  include /etc/nginx/mime.types;\\n  default_type application/octet-stream;\\n\\n  access_log /dev/stdout;\\n  sendfile on;\\n  keepalive_timeout 65;\\n\\n  # Nginx does not create intermediate directories; keep temp paths directly under /tmp.\\n  client_body_temp_path /tmp/client_temp 1 2;\\n  proxy_temp_path       /tmp/proxy_temp 1 2;\\n  fastcgi_temp_path     /tmp/fastcgi_temp 1 2;\\n  uwsgi_temp_path       /tmp/uwsgi_temp 1 2;\\n  scgi_temp_path        /tmp/scgi_temp 1 2;\\n\\n  include /etc/nginx/conf.d/*.conf;\\n}\\n' > /etc/nginx/nginx.conf"
     printf '%s\n' "RUN printf 'server {\\n  listen ${PORT};\\n  server_name _;\\n  root /usr/share/nginx/html;\\n  index index.html;\\n\\n  location = /healthz {\\n    add_header Content-Type text/plain;\\n    return 200 ok;\\n  }\\n\\n  location / {\\n    try_files \$uri \$uri/ /index.html;\\n  }\\n}\\n' > /etc/nginx/conf.d/default.conf"
+    printf '%s\n' "ENV HOME=/tmp"
+    printf '%s\n' "RUN addgroup -g 65532 -S nonroot && adduser -u 65532 -S -G nonroot -h /tmp nonroot"
+    printf '%s\n' "USER 65532"
     printf '%s\n' "EXPOSE ${PORT}"
     printf '%s\n' 'ENTRYPOINT ["nginx"]'
     printf '%s\n' 'CMD ["-g", "daemon off;"]'
@@ -285,6 +288,11 @@ if [ "$RUNTIME" = "node" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
     printf '%s\n' "ENV PORT=${PORT}"
     # In strict tenant security mode the root filesystem is read-only; keep npm cache/logs under /tmp.
     printf '%s\n' "ENV NPM_CONFIG_CACHE=/tmp/.npm"
+    printf '%s\n' "ENV HOME=/tmp"
+    printf '%s\n' "ENV XDG_CACHE_HOME=/tmp/.cache"
+    printf '%s\n' "ENV COREPACK_HOME=/tmp/.corepack"
+    printf '%s\n' "RUN addgroup -g 65532 -S nonroot && adduser -u 65532 -S -G nonroot -h /tmp nonroot"
+    printf '%s\n' "USER 65532"
     printf '%s\n' "EXPOSE ${PORT}"
     printf '%s\n' "CMD [\"sh\",\"-lc\",\"if [ -f dist/index.js ]; then node dist/index.js; elif [ -f server-index.js ]; then node server-index.js; elif [ -f server.js ]; then node server.js; elif [ -f index.js ]; then node index.js; else npm start; fi\"]"
   } > "$DOCKERFILE_PATH"

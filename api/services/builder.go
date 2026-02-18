@@ -184,6 +184,8 @@ ENV HOME=/tmp
 ENV XDG_CACHE_HOME=/tmp/.cache
 ENV COREPACK_HOME=/tmp/.corepack
 ENV NPM_CONFIG_CACHE=/tmp/.npm
+RUN addgroup -g 65532 -S nonroot && adduser -u 65532 -S -G nonroot -h /tmp nonroot
+USER 65532
 EXPOSE %d
 CMD ["sh","-lc","%s"]
 `, corepackLine, bc, port, port, sc)
@@ -203,6 +205,10 @@ COPY requirements.txt* ./
 RUN pip install --no-cache-dir -r requirements.txt 2>/dev/null || true
 COPY . .
 RUN %s
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV HOME=/tmp
+RUN groupadd -g 65532 nonroot && useradd -u 65532 -g nonroot -d /tmp -s /usr/sbin/nologin nonroot
+USER 65532
 EXPOSE %d
 CMD ["/bin/sh", "-c", "%s"]
 `, bc, port, sc)
@@ -222,6 +228,9 @@ COPY go.* ./
 RUN go mod download
 COPY . .
 RUN %s
+ENV HOME=/tmp
+RUN addgroup -g 65532 -S nonroot && adduser -u 65532 -S -G nonroot -h /tmp nonroot
+USER 65532
 EXPOSE %d
 CMD ["/bin/sh", "-c", "%s"]
 `, bc, port, sc)
@@ -240,6 +249,9 @@ WORKDIR /app
 COPY Gemfile* ./
 RUN %s
 COPY . .
+ENV HOME=/tmp
+RUN groupadd -g 65532 nonroot && useradd -u 65532 -g nonroot -d /tmp -s /usr/sbin/nologin nonroot
+USER 65532
 EXPOSE %d
 CMD ["/bin/sh", "-c", "%s"]
 `, bc, port, sc)
@@ -257,6 +269,9 @@ CMD ["/bin/sh", "-c", "%s"]
 WORKDIR /app
 COPY . .
 RUN %s
+ENV HOME=/tmp
+RUN groupadd -g 65532 nonroot && useradd -u 65532 -g nonroot -d /tmp -s /usr/sbin/nologin nonroot
+USER 65532
 EXPOSE %d
 CMD ["/bin/sh", "-c", "%s"]
 `, bc, port, sc)
@@ -279,9 +294,14 @@ RUN %s
 
 FROM nginx:alpine
 COPY --from=build %s /usr/share/nginx/html
-RUN printf 'server {\n    listen %d;\n    location / {\n        root /usr/share/nginx/html;\n        try_files $uri $uri/ /index.html;\n    }\n}\n' > /etc/nginx/conf.d/default.conf
+RUN printf 'worker_processes auto;\nerror_log /dev/stderr notice;\npid /tmp/nginx.pid;\n\nevents {\n  worker_connections 1024;\n}\n\nhttp {\n  include /etc/nginx/mime.types;\n  default_type application/octet-stream;\n\n  access_log /dev/stdout;\n  sendfile on;\n  keepalive_timeout 65;\n\n  client_body_temp_path /tmp/client_temp 1 2;\n  proxy_temp_path       /tmp/proxy_temp 1 2;\n  fastcgi_temp_path     /tmp/fastcgi_temp 1 2;\n  uwsgi_temp_path       /tmp/uwsgi_temp 1 2;\n  scgi_temp_path        /tmp/scgi_temp 1 2;\n\n  include /etc/nginx/conf.d/*.conf;\n}\n' > /etc/nginx/nginx.conf
+RUN printf 'server {\n  listen %d;\n  server_name _;\n  root /usr/share/nginx/html;\n  index index.html;\n\n  location = /healthz {\n    add_header Content-Type text/plain;\n    return 200 ok;\n  }\n\n  location / {\n    try_files $uri $uri/ /index.html;\n  }\n}\n' > /etc/nginx/conf.d/default.conf
+ENV HOME=/tmp
+RUN addgroup -g 65532 -S nonroot && adduser -u 65532 -S -G nonroot -h /tmp nonroot
+USER 65532
 EXPOSE %d
-CMD ["nginx", "-g", "daemon off;"]
+ENTRYPOINT ["nginx"]
+CMD ["-g", "daemon off;"]
 `, bc, publishPath, port, port)
 
 	case "elixir":
@@ -298,6 +318,9 @@ WORKDIR /app
 COPY mix.exs mix.lock ./
 RUN %s
 COPY . .
+ENV HOME=/tmp
+RUN addgroup -g 65532 -S nonroot && adduser -u 65532 -S -G nonroot -h /tmp nonroot
+USER 65532
 EXPOSE %d
 CMD ["/bin/sh", "-c", "%s"]
 `, bc, port, sc)
@@ -315,6 +338,9 @@ CMD ["/bin/sh", "-c", "%s"]
 WORKDIR /app
 COPY . .
 RUN %s
+ENV HOME=/tmp
+RUN addgroup -g 65532 -S nonroot && adduser -u 65532 -S -G nonroot -h /tmp nonroot
+USER 65532
 EXPOSE %d
 CMD ["/bin/sh", "-c", "%s"]
 `, bc, port, sc)
@@ -332,6 +358,9 @@ CMD ["/bin/sh", "-c", "%s"]
 WORKDIR /app
 COPY . .
 RUN %s
+ENV HOME=/tmp
+RUN groupadd -g 65532 nonroot && useradd -u 65532 -g nonroot -d /tmp -s /usr/sbin/nologin nonroot
+USER 65532
 EXPOSE %d
 CMD ["/bin/sh", "-c", "%s"]
 `, bc, port, sc)
