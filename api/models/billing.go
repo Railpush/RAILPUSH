@@ -41,6 +41,29 @@ func CreateBillingCustomer(bc *BillingCustomer) error {
 	).Scan(&bc.ID, &bc.CreatedAt, &bc.UpdatedAt)
 }
 
+// UpsertBillingCustomer atomically inserts or retrieves a billing customer.
+// If a concurrent request already inserted a row for this user_id, the ON CONFLICT
+// clause returns the existing row instead of failing with a UNIQUE violation.
+func UpsertBillingCustomer(userID, stripeCustomerID string) (*BillingCustomer, error) {
+	bc := &BillingCustomer{}
+	err := database.DB.QueryRow(
+		`INSERT INTO billing_customers (user_id, stripe_customer_id, subscription_status)
+		 VALUES ($1, $2, 'incomplete')
+		 ON CONFLICT (user_id) DO UPDATE SET updated_at = NOW()
+		 RETURNING id, user_id, stripe_customer_id, COALESCE(stripe_subscription_id,''),
+		           COALESCE(payment_method_last4,''), COALESCE(payment_method_brand,''),
+		           COALESCE(subscription_status,'incomplete'), COALESCE(credits_migrated,false),
+		           created_at, updated_at`,
+		userID, stripeCustomerID,
+	).Scan(&bc.ID, &bc.UserID, &bc.StripeCustomerID, &bc.StripeSubscriptionID,
+		&bc.PaymentMethodLast4, &bc.PaymentMethodBrand, &bc.SubscriptionStatus,
+		&bc.CreditsMigrated, &bc.CreatedAt, &bc.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return bc, nil
+}
+
 func GetBillingCustomerByUserID(userID string) (*BillingCustomer, error) {
 	bc := &BillingCustomer{}
 	var lastSync sql.NullTime
@@ -143,6 +166,19 @@ func CountBillingItemsBySubscriptionItemID(stripeSubscriptionItemID string) (int
 	var n int
 	if err := database.DB.QueryRow(
 		"SELECT COUNT(*) FROM billing_items WHERE stripe_subscription_item_id=$1",
+		stripeSubscriptionItemID,
+	).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// CountBillingItemsBySubscriptionItemIDForUpdate counts billing items while holding
+// a row-level lock (FOR UPDATE) to prevent concurrent quantity race conditions.
+func CountBillingItemsBySubscriptionItemIDForUpdate(tx *sql.Tx, stripeSubscriptionItemID string) (int, error) {
+	var n int
+	if err := tx.QueryRow(
+		"SELECT COUNT(*) FROM billing_items WHERE stripe_subscription_item_id=$1 FOR UPDATE",
 		stripeSubscriptionItemID,
 	).Scan(&n); err != nil {
 		return 0, err

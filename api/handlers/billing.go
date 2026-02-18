@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"hash/fnv"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -492,7 +493,10 @@ func (h *BillingHandler) CreateCheckoutSession(w http.ResponseWriter, r *http.Re
 	var body struct {
 		ReturnURL string `json:"return_url"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
 	if body.ReturnURL == "" {
 		body.ReturnURL = "https://" + h.Config.ControlPlane.Domain + "/billing"
 	}
@@ -546,7 +550,10 @@ func (h *BillingHandler) CreatePortalSession(w http.ResponseWriter, r *http.Requ
 	var body struct {
 		ReturnURL string `json:"return_url"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
 	if body.ReturnURL == "" {
 		body.ReturnURL = "https://" + h.Config.ControlPlane.Domain + "/billing"
 	}

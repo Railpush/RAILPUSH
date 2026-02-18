@@ -49,7 +49,32 @@ type InvoicePreview struct {
 
 func NewStripeService(cfg *config.Config) *StripeService {
 	stripe.Key = cfg.Stripe.SecretKey
-	return &StripeService{Config: cfg}
+	svc := &StripeService{Config: cfg}
+	svc.validateConfig()
+	return svc
+}
+
+// validateConfig logs warnings on startup if Stripe is enabled but price IDs are missing.
+func (s *StripeService) validateConfig() {
+	if !s.Enabled() {
+		return
+	}
+	missing := []string{}
+	if strings.TrimSpace(s.Config.Stripe.PriceStarter) == "" {
+		missing = append(missing, "STRIPE_PRICE_STARTER")
+	}
+	if strings.TrimSpace(s.Config.Stripe.PriceStandard) == "" {
+		missing = append(missing, "STRIPE_PRICE_STANDARD")
+	}
+	if strings.TrimSpace(s.Config.Stripe.PricePro) == "" {
+		missing = append(missing, "STRIPE_PRICE_PRO")
+	}
+	if len(missing) > 0 {
+		log.Printf("WARNING: Stripe is enabled but missing price IDs: %s — paid plan upgrades will fail", strings.Join(missing, ", "))
+	}
+	if strings.TrimSpace(s.Config.Stripe.WebhookSecret) == "" {
+		log.Printf("WARNING: Stripe is enabled but STRIPE_WEBHOOK_SECRET is not set — webhooks will be rejected")
+	}
 }
 
 func (s *StripeService) Enabled() bool {
@@ -145,6 +170,7 @@ func stripeUserError(err error) error {
 }
 
 // EnsureCustomer creates or retrieves a Stripe customer for the given user.
+// Uses ON CONFLICT to safely handle concurrent requests for the same user.
 func (s *StripeService) EnsureCustomer(userID, email string) (*models.BillingCustomer, error) {
 	bc, err := models.GetBillingCustomerByUserID(userID)
 	if err != nil {
@@ -165,12 +191,8 @@ func (s *StripeService) EnsureCustomer(userID, email string) (*models.BillingCus
 		return nil, stripeUserError(err)
 	}
 
-	bc = &models.BillingCustomer{
-		UserID:             userID,
-		StripeCustomerID:   cust.ID,
-		SubscriptionStatus: "incomplete",
-	}
-	if err := models.CreateBillingCustomer(bc); err != nil {
+	bc, err = models.UpsertBillingCustomer(userID, cust.ID)
+	if err != nil {
 		log.Printf("Stripe: failed to save billing customer user=%s stripe_customer=%s err=%v", userID, cust.ID, err)
 		return nil, fmt.Errorf("billing update failed. please try again")
 	}
@@ -622,6 +644,14 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 	}
 
 	if existingSubItemID != "" {
+		// Use a transaction with FOR UPDATE to prevent concurrent quantity races.
+		tx, txErr := database.DB.Begin()
+		if txErr != nil {
+			log.Printf("Stripe: failed to begin tx for quantity update resource=%s/%s err=%v", resourceType, resourceID, txErr)
+			return fmt.Errorf("billing update failed. please try again")
+		}
+		defer tx.Rollback()
+
 		// Record the resource first; then set Stripe quantity to match DB count.
 		bi := &models.BillingItem{
 			BillingCustomerID:        bc.ID,
@@ -636,7 +666,8 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 			log.Printf("Stripe: failed to save billing item resource=%s/%s err=%v", resourceType, resourceID, err)
 			return fmt.Errorf("billing update failed. please try again")
 		}
-		qty, qErr := models.CountBillingItemsBySubscriptionItemID(existingSubItemID)
+		// Lock rows and count under transaction to prevent concurrent updates.
+		qty, qErr := models.CountBillingItemsBySubscriptionItemIDForUpdate(tx, existingSubItemID)
 		if qErr != nil || qty < 1 {
 			_ = models.DeleteBillingItemByResource(resourceType, resourceID)
 			if qErr != nil {
@@ -655,6 +686,11 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 			log.Printf("Stripe: update quantity failed sub_item=%s qty=%d resource=%s/%s err=%v", existingSubItemID, qty, resourceType, resourceID, err)
 			_ = models.DeleteBillingItemByResource(resourceType, resourceID)
 			return stripeUserError(err)
+		}
+		if err := tx.Commit(); err != nil {
+			log.Printf("Stripe: failed to commit quantity tx sub_item=%s err=%v", existingSubItemID, err)
+			_ = models.DeleteBillingItemByResource(resourceType, resourceID)
+			return fmt.Errorf("billing update failed. please try again")
 		}
 		return nil
 	}
@@ -937,6 +973,12 @@ func (s *StripeService) HandleWebhookEvent(payload []byte, signature string) err
 		handleErr = s.handlePaymentSucceeded(event)
 	case "invoice.payment_failed":
 		handleErr = s.handlePaymentFailed(event)
+	case "charge.refunded":
+		handleErr = s.handleChargeRefunded(event)
+	case "charge.disputed":
+		handleErr = s.handleChargeDisputed(event)
+	case "customer.updated":
+		handleErr = s.handleCustomerUpdated(event)
 	}
 
 	if handleErr != nil {
@@ -1128,6 +1170,56 @@ func (s *StripeService) handlePaymentFailed(event stripe.Event) error {
 	bc.SubscriptionStatus = "past_due"
 
 	return models.UpdateBillingCustomer(bc)
+}
+
+func (s *StripeService) handleChargeRefunded(event stripe.Event) error {
+	var ch stripe.Charge
+	if err := json.Unmarshal(event.Data.Raw, &ch); err != nil {
+		return err
+	}
+	customerID := ""
+	if ch.Customer != nil {
+		customerID = ch.Customer.ID
+	}
+	log.Printf("Stripe: charge refunded customer=%s charge=%s amount_refunded=%d", customerID, ch.ID, ch.AmountRefunded)
+	// Record for ops visibility; no automatic action needed.
+	return nil
+}
+
+func (s *StripeService) handleChargeDisputed(event stripe.Event) error {
+	var disp stripe.Dispute
+	if err := json.Unmarshal(event.Data.Raw, &disp); err != nil {
+		return err
+	}
+	customerID := ""
+	if disp.Charge != nil && disp.Charge.Customer != nil {
+		customerID = disp.Charge.Customer.ID
+	}
+	log.Printf("Stripe: charge disputed customer=%s dispute=%s amount=%d reason=%s status=%s",
+		customerID, disp.ID, disp.Amount, disp.Reason, disp.Status)
+	// Log the dispute for ops alerting. Future: suspend workspace if dispute is fraudulent.
+	return nil
+}
+
+func (s *StripeService) handleCustomerUpdated(event stripe.Event) error {
+	var cust stripe.Customer
+	if err := json.Unmarshal(event.Data.Raw, &cust); err != nil {
+		return err
+	}
+	bc, err := models.GetBillingCustomerByStripeID(cust.ID)
+	if err != nil || bc == nil {
+		return nil
+	}
+	// Sync default payment method if changed in Stripe dashboard or customer portal.
+	if cust.InvoiceSettings != nil && cust.InvoiceSettings.DefaultPaymentMethod != nil {
+		pm := cust.InvoiceSettings.DefaultPaymentMethod
+		if pm.Card != nil {
+			bc.PaymentMethodLast4 = pm.Card.Last4
+			bc.PaymentMethodBrand = string(pm.Card.Brand)
+			return models.UpdateBillingCustomer(bc)
+		}
+	}
+	return nil
 }
 
 // ReadBody is a helper to read the webhook request body.

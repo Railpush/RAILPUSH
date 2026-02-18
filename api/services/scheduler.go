@@ -6,14 +6,16 @@ import (
 	"time"
 
 	"github.com/railpush/api/config"
+	"github.com/railpush/api/database"
 	"github.com/railpush/api/models"
 	"github.com/robfig/cron/v3"
 )
 
 type Scheduler struct {
-	Config *config.Config
-	stop   chan struct{}
-	parser cron.Parser
+	Config      *config.Config
+	stop        chan struct{}
+	parser      cron.Parser
+	lastCleanup time.Time
 }
 
 func NewScheduler(cfg *config.Config) *Scheduler {
@@ -31,6 +33,7 @@ func (s *Scheduler) Start() {
 			select {
 			case <-ticker.C:
 				s.checkCronJobs()
+				s.cleanupStaleData()
 			case <-s.stop:
 				ticker.Stop()
 				return
@@ -73,4 +76,23 @@ func (s *Scheduler) shouldRun(schedule string, now time.Time) bool {
 	windowStart := windowEnd.Add(-time.Minute)
 	next := spec.Next(windowStart)
 	return !next.After(windowEnd)
+}
+
+// cleanupStaleData runs once per day to purge old webhook events (30-day retention).
+func (s *Scheduler) cleanupStaleData() {
+	if time.Since(s.lastCleanup) < 24*time.Hour {
+		return
+	}
+	s.lastCleanup = time.Now()
+	if database.DB == nil {
+		return
+	}
+	res, err := database.DB.Exec("DELETE FROM stripe_webhook_events WHERE received_at < NOW() - INTERVAL '30 days'")
+	if err != nil {
+		log.Printf("Scheduler: webhook events cleanup failed: %v", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("Scheduler: cleaned up %d old webhook events", n)
+	}
 }

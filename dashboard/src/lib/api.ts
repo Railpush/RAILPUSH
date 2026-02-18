@@ -218,8 +218,6 @@ export const billing = {
     request<{ url: string }>('/billing/checkout-session', { method: 'POST', body: JSON.stringify({ return_url: returnUrl }) }),
   createPortalSession: (returnUrl?: string) =>
     request<{ url: string }>('/billing/portal-session', { method: 'POST', body: JSON.stringify({ return_url: returnUrl }) }),
-  getPaymentMethod: () =>
-    request<{ has_payment_method: boolean; last4?: string; brand?: string }>('/billing/payment-method'),
 };
 
 // GitHub

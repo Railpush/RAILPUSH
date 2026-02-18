@@ -7,6 +7,7 @@ import {
   CreditCard,
   Database,
   ExternalLink,
+  AlertTriangle,
   FileDown,
   Globe,
   Key,
@@ -219,7 +220,6 @@ export function Billing() {
   const [billingEmail, setBillingEmail] = useState('');
   const [loading, setLoading] = useState(true);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string> | null>(null);
-  const [promoCode, setPromoCode] = useState('');
   const [syncingBilling, setSyncingBilling] = useState(false);
   const [autoSyncAttempted, setAutoSyncAttempted] = useState(false);
   const [billingSyncIssue, setBillingSyncIssue] = useState<string | null>(null);
@@ -412,14 +412,6 @@ export function Billing() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSyncAttempted, unsyncedItems.length]);
 
-  const handlePromoApply = () => {
-    if (!promoCode.trim()) {
-      toast.info('Enter a promo code first');
-      return;
-    }
-    toast.info('Promo code redemption is coming soon');
-  };
-
   const activeServiceCount = paidItems.filter((item) => item.resource_type === 'service').length;
   const activeDatabaseCount = paidItems.filter((item) => item.resource_type === 'database').length;
   const activeKeyValueCount = paidItems.filter((item) => item.resource_type === 'keyvalue').length;
@@ -458,6 +450,21 @@ export function Billing() {
           </Button>
         </div>
       </div>
+
+      {overview?.subscription_status === 'past_due' && (
+        <div className="flex items-start gap-3 p-4 rounded-lg border border-amber-500/30 bg-amber-500/10">
+          <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-amber-200">Payment failed</p>
+            <p className="text-xs text-amber-300/80 mt-0.5">
+              Your last payment was unsuccessful. Please update your payment method to avoid service interruption.
+            </p>
+          </div>
+          <Button variant="secondary" size="sm" className="ml-auto shrink-0 border-amber-500/30 text-amber-200 hover:bg-amber-500/20" onClick={handleAddPaymentMethod}>
+            Update Payment
+          </Button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <StatCard
@@ -731,18 +738,6 @@ export function Billing() {
               </div>
             </div>
 
-            <div className="mt-4 pt-4 border-t border-border-default/50">
-              <p className="text-xs text-content-tertiary mb-2">Have a promo code?</p>
-              <div className="flex gap-2">
-                <input
-                  value={promoCode}
-                  onChange={(e) => setPromoCode(e.target.value)}
-                  placeholder="Enter code..."
-                  className="bg-surface-tertiary/30 border border-border-default rounded px-3 py-1.5 text-sm text-content-primary outline-none focus:border-brand w-full max-w-xs"
-                />
-                <Button variant="secondary" onClick={handlePromoApply} disabled={!promoCode.trim()}>Apply</Button>
-              </div>
-            </div>
         </SectionFrame>
       </div>
     </div>

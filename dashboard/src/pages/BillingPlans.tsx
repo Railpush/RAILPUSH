@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, CreditCard } from 'lucide-react';
+import { ArrowLeft, CreditCard, AlertTriangle } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Modal } from '../components/ui/Modal';
 import { ApiError, billing, blueprints, databases, keyvalue, services as servicesApi } from '../lib/api';
-import { PLAN_SPECS, type PlanID } from '../lib/plans';
+import { PLAN_SPECS, PLAN_BY_ID, type PlanID } from '../lib/plans';
 import { cn } from '../lib/utils';
 import { toast } from 'sonner';
 import type { BillingOverview, Blueprint, BlueprintResource, ManagedDatabase, ManagedKeyValue, Service } from '../types';
@@ -53,6 +53,7 @@ export function BillingPlans() {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [selected, setSelected] = useState<Record<string, PlanID>>({});
   const [upgradeModal, setUpgradeModal] = useState<{ open: boolean; message: string }>({ open: false, message: '' });
+  const [confirmModal, setConfirmModal] = useState<{ open: boolean; row: ResourceRow | null; desired: PlanID; isDowngrade: boolean }>({ open: false, row: null, desired: 'free', isDowngrade: false });
 
   const focus = (searchParams.get('focus') || '').trim().toLowerCase();
   const focusID = (searchParams.get('resource_id') || '').trim();
@@ -208,11 +209,18 @@ export function BillingPlans() {
     }
   };
 
-  const applyPlan = async (row: ResourceRow) => {
+  const planRank: Record<PlanID, number> = { free: 0, starter: 1, standard: 2, pro: 3 };
+
+  const requestPlanChange = (row: ResourceRow) => {
     const k = rowKey(row);
     const desired = selected[k] || row.plan;
     if (desired === row.plan) return;
+    const isDowngrade = planRank[desired] < planRank[row.plan];
+    setConfirmModal({ open: true, row, desired, isDowngrade });
+  };
 
+  const applyPlan = async (row: ResourceRow, desired: PlanID) => {
+    const k = rowKey(row);
     setBusyKey(k);
     try {
       if (row.kind === 'service') {
@@ -230,7 +238,7 @@ export function BillingPlans() {
       if (e instanceof ApiError && e.status === 402) {
         setUpgradeModal({
           open: true,
-          message: 'A payment method is required to use paid plans.',
+          message: e.message || 'A payment method is required to use paid plans.',
         });
         return;
       }
@@ -323,7 +331,7 @@ export function BillingPlans() {
                   variant={desired === r.plan ? 'secondary' : 'primary'}
                   disabled={desired === r.plan || busyKey === k}
                   loading={busyKey === k}
-                  onClick={() => applyPlan(r)}
+                  onClick={() => requestPlanChange(r)}
                 >
                   {desired === r.plan ? 'No change' : 'Apply'}
                 </Button>
@@ -534,6 +542,61 @@ export function BillingPlans() {
         }
       >
         <p className="text-sm text-content-secondary">{upgradeModal.message}</p>
+      </Modal>
+
+      {/* Plan change confirmation modal */}
+      <Modal
+        open={confirmModal.open}
+        onClose={() => setConfirmModal({ open: false, row: null, desired: 'free', isDowngrade: false })}
+        title={confirmModal.isDowngrade ? 'Confirm Downgrade' : 'Confirm Plan Change'}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setConfirmModal({ open: false, row: null, desired: 'free', isDowngrade: false })}>
+              Cancel
+            </Button>
+            <Button
+              variant={confirmModal.isDowngrade ? 'secondary' : 'primary'}
+              onClick={() => {
+                const { row, desired } = confirmModal;
+                setConfirmModal({ open: false, row: null, desired: 'free', isDowngrade: false });
+                if (row) applyPlan(row, desired);
+              }}
+            >
+              {confirmModal.isDowngrade ? 'Downgrade' : 'Confirm Upgrade'}
+            </Button>
+          </>
+        }
+      >
+        {confirmModal.row && (() => {
+          const from = PLAN_BY_ID[confirmModal.row.plan];
+          const to = PLAN_BY_ID[confirmModal.desired];
+          const delta = to.monthlyCents - from.monthlyCents;
+          return (
+            <div className="space-y-3">
+              <div className="text-sm text-content-secondary">
+                <span className="font-medium text-content-primary">{confirmModal.row.name}</span>
+                {' '}&mdash;{' '}
+                <span className="capitalize">{from.name}</span>
+                {' '}&rarr;{' '}
+                <span className="capitalize font-medium text-content-primary">{to.name}</span>
+              </div>
+              <div className="flex items-center justify-between p-3 rounded-lg bg-surface-tertiary/30 border border-border-default/50">
+                <span className="text-sm text-content-secondary">Monthly price change</span>
+                <span className={cn('text-sm font-semibold font-mono', delta > 0 ? 'text-amber-300' : delta < 0 ? 'text-emerald-300' : 'text-content-primary')}>
+                  {delta > 0 ? '+' : ''}{(delta / 100).toFixed(2)}/mo
+                </span>
+              </div>
+              {confirmModal.isDowngrade && (
+                <div className="flex items-start gap-2 p-3 rounded-lg border border-amber-500/30 bg-amber-500/10">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <p className="text-xs text-amber-200">
+                    Downgrading reduces CPU and memory. If your workload exceeds the new limits it may restart or become unstable.
+                  </p>
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </Modal>
     </div>
   );
