@@ -331,4 +331,21 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_ai_fix_sessions_service_status ON ai_fix_sessions(service_id, status)`,
 	`ALTER TABLE deploys ADD COLUMN IF NOT EXISTS dockerfile_override TEXT NOT NULL DEFAULT ''`,
+
+	// Invoice history (populated from Stripe webhooks for local reconciliation).
+	`CREATE TABLE IF NOT EXISTS billing_invoices (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		billing_customer_id UUID NOT NULL REFERENCES billing_customers(id) ON DELETE CASCADE,
+		stripe_invoice_id TEXT UNIQUE NOT NULL,
+		status TEXT NOT NULL DEFAULT 'paid',
+		amount_due_cents INT NOT NULL DEFAULT 0,
+		amount_paid_cents INT NOT NULL DEFAULT 0,
+		currency TEXT NOT NULL DEFAULT 'usd',
+		hosted_invoice_url TEXT,
+		invoice_pdf_url TEXT,
+		period_start TIMESTAMPTZ,
+		period_end TIMESTAMPTZ,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_billing_invoices_customer_created ON billing_invoices(billing_customer_id, created_at DESC)`,
 }

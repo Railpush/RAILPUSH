@@ -170,9 +170,25 @@ func (h *OpsBillingHandler) GetCustomer(w http.ResponseWriter, r *http.Request) 
 		items = []opsBillingItem{}
 	}
 
+	// Look up workspace and credit balance for this user.
+	var workspaceID string
+	var creditBalanceCents int64
+	_ = database.DB.QueryRow(
+		"SELECT id::text FROM workspaces WHERE owner_id=$1 LIMIT 1",
+		bc.UserID,
+	).Scan(&workspaceID)
+	if workspaceID != "" {
+		_ = database.DB.QueryRow(
+			"SELECT COALESCE(SUM(amount_cents),0) FROM workspace_credit_ledger WHERE workspace_id=$1",
+			workspaceID,
+		).Scan(&creditBalanceCents)
+	}
+
 	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
-		"customer": bc,
-		"items":    items,
+		"customer":             bc,
+		"items":                items,
+		"workspace_id":         workspaceID,
+		"credit_balance_cents": creditBalanceCents,
 	})
 }
 

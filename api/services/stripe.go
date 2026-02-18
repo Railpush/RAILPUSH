@@ -719,8 +719,12 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 		Plan:                     plan,
 	}
 	if err := models.CreateBillingItem(bi); err != nil {
-		// Best-effort cleanup; leaving an orphan subscription item would charge incorrectly.
-		_, _ = subscriptionitem.Del(si.ID, &stripe.SubscriptionItemParams{})
+		// Cleanup the orphaned Stripe subscription item to avoid incorrect charges.
+		if _, delErr := subscriptionitem.Del(si.ID, &stripe.SubscriptionItemParams{}); delErr != nil {
+			log.Printf("Stripe: CRITICAL orphaned subscription item si=%s resource=%s/%s — manual cleanup required: %v", si.ID, resourceType, resourceID, delErr)
+		} else {
+			log.Printf("Stripe: cleaned up orphaned subscription item si=%s after DB write failure resource=%s/%s", si.ID, resourceType, resourceID)
+		}
 		log.Printf("Stripe: failed to save billing item after creating subscription item resource=%s/%s err=%v", resourceType, resourceID, err)
 		return fmt.Errorf("billing update failed. please try again")
 	}
@@ -870,11 +874,16 @@ func (s *StripeService) UpdateSubscriptionItemPlan(resourceType, resourceID, new
 	}
 	newDesired := newCount + 1
 
+	// Use context-aware proration: upgrades prorate immediately so user is charged
+	// the difference; downgrades defer to end of cycle to avoid confusing credits.
+	proration := "create_prorations"
+	if IsDowngrade(bi.Plan, newPlan) {
+		proration = "none"
+	}
+
 	subParams := &stripe.SubscriptionParams{
 		PaymentBehavior:      stripe.String("error_if_incomplete"),
-		// Do not force immediate invoices for plan changes; it can exceed Stripe's daily
-		// invoice limits when users (or blueprints) perform many billing updates.
-		ProrationBehavior:    stripe.String("create_prorations"),
+		ProrationBehavior:    stripe.String(proration),
 		OffSession:           stripe.Bool(true),
 		CollectionMethod:     stripe.String(string(stripe.SubscriptionCollectionMethodChargeAutomatically)),
 		Items:                []*stripe.SubscriptionItemsParams{},
@@ -1140,6 +1149,30 @@ func (s *StripeService) handlePaymentSucceeded(event stripe.Event) error {
 		bc.StripeSubscriptionID = inv.Subscription.ID
 	}
 	bc.SubscriptionStatus = "active"
+
+	// Store invoice for local reconciliation and billing history.
+	billingInv := &models.BillingInvoice{
+		BillingCustomerID: bc.ID,
+		StripeInvoiceID:   inv.ID,
+		Status:            string(inv.Status),
+		AmountDueCents:    int(inv.AmountDue),
+		AmountPaidCents:   int(inv.AmountPaid),
+		Currency:          string(inv.Currency),
+		HostedInvoiceURL:  inv.HostedInvoiceURL,
+		InvoicePDFURL:     inv.InvoicePDF,
+	}
+	if inv.PeriodStart > 0 {
+		t := time.Unix(inv.PeriodStart, 0)
+		billingInv.PeriodStart = &t
+	}
+	if inv.PeriodEnd > 0 {
+		t := time.Unix(inv.PeriodEnd, 0)
+		billingInv.PeriodEnd = &t
+	}
+	if err := models.UpsertBillingInvoice(billingInv); err != nil {
+		log.Printf("Stripe: failed to store invoice %s for customer %s: %v", inv.ID, bc.ID, err)
+		// Non-fatal: don't fail the webhook for invoice storage
+	}
 
 	return models.UpdateBillingCustomer(bc)
 }

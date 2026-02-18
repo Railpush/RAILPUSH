@@ -254,6 +254,30 @@ export interface BillingLineItem {
   stripe_linked?: boolean;
 }
 
+export interface BillingInvoice {
+  id: string;
+  billing_customer_id: string;
+  stripe_invoice_id: string;
+  status: string;
+  amount_due_cents: number;
+  amount_paid_cents: number;
+  currency: string;
+  hosted_invoice_url?: string;
+  invoice_pdf_url?: string;
+  period_start?: string;
+  period_end?: string;
+  created_at: string;
+}
+
+export interface CreditLedgerEntry {
+  id: string;
+  workspace_id: string;
+  amount_cents: number;
+  reason: string;
+  created_by: string;
+  created_at: string;
+}
+
 export interface BillingOverview {
   has_payment_method: boolean;
   payment_method_last4: string;
@@ -271,6 +295,8 @@ export interface BillingOverview {
   next_invoice_amount_due_cents?: number;
   next_invoice_credit_applied_cents?: number;
   next_invoice_credit_carry_cents?: number;
+  invoices?: BillingInvoice[];
+  credit_ledger?: CreditLedgerEntry[];
 }
 
 export interface GitHubRepo {
@@ -598,6 +624,8 @@ export interface OpsBillingItem {
 export interface OpsBillingCustomerDetail {
   customer: OpsBillingCustomerItem;
   items: OpsBillingItem[];
+  workspace_id?: string;
+  credit_balance_cents?: number;
 }
 
 // Ops: Tickets

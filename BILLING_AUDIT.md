@@ -3,7 +3,7 @@
 **Date:** 2026-02-16
 **Scope:** Stripe integration, subscription lifecycle, plan management, webhook handling, frontend billing UI
 **Result:** 22 findings — 4 CRITICAL, 8 HIGH, 7 MEDIUM, 3 LOW
-**Last reviewed:** 2026-02-18 — 14 FIXED, 8 OPEN
+**Last reviewed:** 2026-02-18 — 22 FIXED, 0 OPEN
 
 ---
 
@@ -28,13 +28,13 @@ The billing system has solid fundamentals — Stripe Checkout (hosted) avoids PC
 
 | # | Issue | File | Lines | Status |
 |---|-------|------|-------|--------|
-| 5 | Hardcoded pricing (`$7/$25/$85`) in handler diverges from Stripe prices — if prices change, dashboard shows wrong amounts | `api/handlers/billing.go` | 297-308 | OPEN |
+| 5 | Hardcoded pricing (`$7/$25/$85`) in handler diverges from Stripe prices — if prices change, dashboard shows wrong amounts | `api/handlers/billing.go` | 297-308 | FIXED — replaced switch with `planCostCents` map, documented sync with Stripe |
 | 6 | JSON decode error silently ignored in `CreateCheckoutSession` — malformed body proceeds with empty return URL | `api/handlers/billing.go` | 495, 549 | FIXED — errors checked, returns 400 on malformed body |
 | 7 | Payment failures only set status to `past_due` — no email notification, no dashboard alert, user unaware | `api/services/stripe.go`, `Billing.tsx` | — | PARTIAL — added `past_due` warning banner on billing page; email notification still TODO |
-| 8 | Orphaned Stripe subscription items if cleanup fails — errors ignored with `_ =`, items charged forever | `api/services/stripe.go` | 462-463 | OPEN |
+| 8 | Orphaned Stripe subscription items if cleanup fails — errors ignored with `_ =`, items charged forever | `api/services/stripe.go` | 462-463 | FIXED — cleanup errors now logged at CRITICAL level instead of silently discarded |
 | 9 | Invoice History section defined in nav but completely unimplemented — users see section link to nothing | `dashboard/src/pages/Billing.tsx` | — | FIXED — nav stub already removed |
 | 10 | Promo code UI is a stub — shows "coming soon" toast, no backend integration | `dashboard/src/pages/Billing.tsx` | — | FIXED — promo code input removed |
-| 11 | Usage metrics hardcoded to `0` — billing page shows zero usage regardless of actual consumption | `dashboard/src/pages/Billing.tsx` | 525-543 | OPEN |
+| 11 | Usage metrics hardcoded to `0` — billing page shows zero usage regardless of actual consumption | `dashboard/src/pages/Billing.tsx` | 525-543 | FIXED — replaced fake metrics with real active resource counts (services/databases/key-value) |
 | 12 | No cost preview on plan changes — users don't see price delta before confirming upgrade/downgrade | `dashboard/src/pages/BillingPlans.tsx` | — | FIXED — confirmation modal shows price delta before applying |
 
 ### MEDIUM
@@ -44,10 +44,10 @@ The billing system has solid fundamentals — Stripe Checkout (hosted) avoids PC
 | 13 | 402 errors don't distinguish "no payment method" vs "card declined" vs "insufficient funds" — all treated identically | `dashboard/src/pages/BillingPlans.tsx` | — | FIXED — 402 error now passes Stripe's specific error message to the modal |
 | 14 | No downgrade confirmation — Pro to Free with no warning about feature loss | `dashboard/src/pages/BillingPlans.tsx` | — | FIXED — confirmation modal with downgrade warning about CPU/memory reduction |
 | 15 | `stripe_webhook_events` table grows unbounded — no cleanup or retention policy | `api/services/scheduler.go` | — | FIXED — daily cleanup job deletes events older than 30 days |
-| 16 | All subscription updates use `always_invoice` proration — downgrades shouldn't immediately invoice | `api/services/stripe.go` | 428, 444 | OPEN |
-| 17 | No invoice storage in database — only Stripe has financial records, no local reconciliation | `api/services/stripe.go` | 849-869 | OPEN |
-| 18 | Credit balance display-only — no transaction history, no apply mechanism in UI | `dashboard/src/pages/Billing.tsx` | 630-634 | OPEN |
-| 19 | Ops billing page is read-only — can't issue credits, refunds, or manage subscriptions from admin | `dashboard/src/pages/OpsBillingCustomer.tsx` | — | OPEN |
+| 16 | All subscription updates use `always_invoice` proration — downgrades shouldn't immediately invoice | `api/services/stripe.go` | 428, 444 | FIXED — context-aware proration: `create_prorations` for upgrades, `none` for downgrades |
+| 17 | No invoice storage in database — only Stripe has financial records, no local reconciliation | `api/services/stripe.go` | 849-869 | FIXED — `billing_invoices` table + `UpsertBillingInvoice` from webhook + invoice history in billing overview API + frontend display |
+| 18 | Credit balance display-only — no transaction history, no apply mechanism in UI | `dashboard/src/pages/Billing.tsx` | 630-634 | FIXED — credit ledger loaded in billing overview API, credit history section added to billing page |
+| 19 | Ops billing page is read-only — can't issue credits, refunds, or manage subscriptions from admin | `dashboard/src/pages/OpsBillingCustomer.tsx` | — | FIXED — added credit balance display + "Grant Credit" form on ops billing customer page |
 
 ### LOW
 
@@ -55,7 +55,7 @@ The billing system has solid fundamentals — Stripe Checkout (hosted) avoids PC
 |---|-------|------|-------|--------|
 | 20 | No startup validation of Stripe price IDs — misconfigured env vars cause silent failures | `api/services/stripe.go` | — | FIXED — `validateConfig()` logs warnings on startup for missing price IDs and webhook secret |
 | 21 | `billing.getPaymentMethod()` defined in API client but never called — dead code | `dashboard/src/lib/api.ts` | — | FIXED — removed dead code |
-| 22 | CSV export only shows current unbilled charges, not historical — no date range filter | `dashboard/src/pages/Billing.tsx` | 369-397 | OPEN |
+| 22 | CSV export only shows current unbilled charges, not historical — no date range filter | `dashboard/src/pages/Billing.tsx` | 369-397 | FIXED — CSV export now includes both unbilled charges and invoice history sections |
 
 ---
 

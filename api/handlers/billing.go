@@ -216,11 +216,15 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 		NextInvoiceTotalCents         int64 `json:"next_invoice_total_cents"`
 		NextInvoiceAmountDueCents     int64 `json:"next_invoice_amount_due_cents"`
 		NextInvoiceCreditAppliedCents int64 `json:"next_invoice_credit_applied_cents"`
-		NextInvoiceCreditCarryCents   int64 `json:"next_invoice_credit_carry_cents"`
+		NextInvoiceCreditCarryCents   int64                  `json:"next_invoice_credit_carry_cents"`
+		Invoices                     []models.BillingInvoice              `json:"invoices"`
+		CreditLedger                 []models.WorkspaceCreditLedgerEntry  `json:"credit_ledger"`
 	}
 
 	overview := BillingOverview{
-		Items: []BillingLineItem{},
+		Items:        []BillingLineItem{},
+		Invoices:     []models.BillingInvoice{},
+		CreditLedger: []models.WorkspaceCreditLedgerEntry{},
 	}
 
 	var stripeSub *stripe.Subscription
@@ -434,6 +438,20 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 		overview.CurrentPlan = "free"
 	}
 
+	// Load invoice history if billing customer exists.
+	if bc != nil {
+		if invoices, err := models.ListBillingInvoicesByCustomer(bc.ID, 20); err == nil {
+			overview.Invoices = invoices
+		}
+	}
+
+	// Load credit ledger for this workspace.
+	if workspaceID != "" {
+		if ledger, err := models.ListWorkspaceCreditLedger(workspaceID, 50); err == nil {
+			overview.CreditLedger = ledger
+		}
+	}
+
 	utils.RespondJSON(w, http.StatusOK, overview)
 }
 
@@ -603,15 +621,16 @@ func (h *BillingHandler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// planCostCents returns the monthly cost in cents for a given plan.
+// These values MUST be kept in sync with dashboard/src/lib/plans.ts PLAN_SPECS
+// and the Stripe prices configured via STRIPE_PRICE_* env vars.
+var planCostCents = map[string]int{
+	"free":     0,
+	"starter":  700,
+	"standard": 2500,
+	"pro":      8500,
+}
+
 func planCost(plan string) int {
-	switch plan {
-	case "starter":
-		return 700
-	case "standard":
-		return 2500
-	case "pro":
-		return 8500
-	default:
-		return 0
-	}
+	return planCostCents[strings.ToLower(strings.TrimSpace(plan))]
 }

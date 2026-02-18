@@ -358,21 +358,46 @@ export function Billing() {
   };
 
   const handleDownloadCsv = () => {
-    if (stripeLinkedItems.length === 0) {
-      toast.info('No unbilled charges available to export');
+    const invoices = overview?.invoices ?? [];
+    if (stripeLinkedItems.length === 0 && invoices.length === 0) {
+      toast.info('No billing data available to export');
       return;
     }
 
-    const header = ['resource_type', 'resource_name', 'resource_id', 'plan', 'monthly_cost_usd'];
-    const rows = stripeLinkedItems.map((item) => [
-      item.resource_type,
-      item.resource_name,
-      item.resource_id,
-      item.plan,
-      (item.monthly_cost / 100).toFixed(2),
-    ]);
+    const sections: string[][] = [];
 
-    const csv = [header, ...rows]
+    // Unbilled charges section
+    if (stripeLinkedItems.length > 0) {
+      sections.push(['--- Unbilled Charges ---', '', '', '', '']);
+      sections.push(['resource_type', 'resource_name', 'resource_id', 'plan', 'monthly_cost_usd']);
+      stripeLinkedItems.forEach((item) => {
+        sections.push([
+          item.resource_type,
+          item.resource_name,
+          item.resource_id,
+          item.plan,
+          (item.monthly_cost / 100).toFixed(2),
+        ]);
+      });
+    }
+
+    // Invoice history section
+    if (invoices.length > 0) {
+      if (sections.length > 0) sections.push(['', '', '', '', '']);
+      sections.push(['--- Invoice History ---', '', '', '', '']);
+      sections.push(['date', 'status', 'amount_due_usd', 'amount_paid_usd', 'stripe_invoice_id']);
+      invoices.forEach((inv) => {
+        sections.push([
+          new Date(inv.created_at).toISOString().slice(0, 10),
+          inv.status,
+          (inv.amount_due_cents / 100).toFixed(2),
+          (inv.amount_paid_cents / 100).toFixed(2),
+          inv.stripe_invoice_id,
+        ]);
+      });
+    }
+
+    const csv = sections
       .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
       .join('\n');
 
@@ -380,7 +405,7 @@ export function Billing() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `railpush-unbilled-charges-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `railpush-billing-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -585,30 +610,32 @@ export function Billing() {
             </div>
         </SectionFrame>
 
-        <SectionFrame id="included-usage" title="Resource Usage">
+        <SectionFrame id="included-usage" title="Active Resources">
             <div className="space-y-6">
               <p className="text-sm text-content-secondary">
-                Usage metrics for your current billing cycle. Quotas recharge monthly.
+                Active billable resources in this workspace.
               </p>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <UsageBar
-                  label="Instance Hours"
-                  used={0}
-                  total={includedUsage.instanceHours}
+                  label="Services"
+                  used={activeServiceCount}
+                  total={Math.max(activeServiceCount, includedUsage.instanceHours / 750)}
                   color="bg-brand"
+                  subtext={activeServiceCount === 1 ? '1 active service' : `${activeServiceCount} active services`}
                 />
                 <UsageBar
-                  label="Bandwidth (GB)"
-                  used={0}
-                  total={includedUsage.bandwidthGb}
+                  label="Databases"
+                  used={activeDatabaseCount}
+                  total={Math.max(activeDatabaseCount, 5)}
                   color="bg-purple-500"
-                  subtext={`Across ${activeServiceCount + activeDatabaseCount + activeKeyValueCount} resources`}
+                  subtext={activeDatabaseCount === 1 ? '1 active database' : `${activeDatabaseCount} active databases`}
                 />
                 <UsageBar
-                  label="Pipeline Minutes"
-                  used={0}
-                  total={includedUsage.pipelineMinutes}
+                  label="Key-Value Stores"
+                  used={activeKeyValueCount}
+                  total={Math.max(activeKeyValueCount, 5)}
                   color="bg-emerald-500"
+                  subtext={activeKeyValueCount === 1 ? '1 active store' : `${activeKeyValueCount} active stores`}
                 />
               </div>
             </div>
@@ -716,7 +743,7 @@ export function Billing() {
                 </div>
               )}
 
-              {stripeLinkedItems.length > 0 && (
+              {(stripeLinkedItems.length > 0 || (overview?.invoices ?? []).length > 0) && (
                 <div className="flex justify-end pt-2">
                   <Button variant="ghost" size="sm" onClick={handleDownloadCsv}>
                     <FileDown className="w-4 h-4 mr-2" />
@@ -726,6 +753,89 @@ export function Billing() {
               )}
             </div>
         </SectionFrame>
+
+        {(overview?.invoices ?? []).length > 0 && (
+          <SectionFrame id="invoice-history" title="Invoice History">
+            <div className="space-y-2">
+              <p className="text-sm text-content-secondary mb-4">Past invoices from Stripe.</p>
+              <div className="border border-border-default/50 rounded-lg overflow-hidden">
+                <div className="grid grid-cols-12 px-4 py-2 text-[11px] uppercase tracking-[0.12em] text-content-tertiary border-b border-border-default/60 bg-surface-tertiary/20">
+                  <div className="col-span-3">Date</div>
+                  <div className="col-span-2">Status</div>
+                  <div className="col-span-2 text-right">Amount</div>
+                  <div className="col-span-2 text-right">Paid</div>
+                  <div className="col-span-3 text-right">Actions</div>
+                </div>
+                {(overview?.invoices ?? []).map((inv) => (
+                  <div key={inv.id} className="grid grid-cols-12 px-4 py-3 border-b border-border-default/10 last:border-0 items-center">
+                    <div className="col-span-3 text-sm text-content-secondary">
+                      {new Date(inv.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                    </div>
+                    <div className="col-span-2">
+                      <span className={cn(
+                        'text-xs font-medium px-2 py-0.5 rounded-full',
+                        inv.status === 'paid' && 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20',
+                        inv.status === 'open' && 'bg-amber-500/10 text-amber-300 border border-amber-500/20',
+                        inv.status !== 'paid' && inv.status !== 'open' && 'bg-surface-tertiary text-content-tertiary border border-border-default',
+                      )}>
+                        {inv.status}
+                      </span>
+                    </div>
+                    <div className="col-span-2 text-sm font-mono text-content-primary text-right">
+                      {formatCurrency(inv.amount_due_cents)}
+                    </div>
+                    <div className="col-span-2 text-sm font-mono text-content-secondary text-right">
+                      {formatCurrency(inv.amount_paid_cents)}
+                    </div>
+                    <div className="col-span-3 flex justify-end gap-2">
+                      {inv.hosted_invoice_url && (
+                        <a href={inv.hosted_invoice_url} target="_blank" rel="noreferrer" className="text-xs text-brand hover:text-brand-hover inline-flex items-center gap-1">
+                          View <ExternalLink className="w-3 h-3" />
+                        </a>
+                      )}
+                      {inv.invoice_pdf_url && (
+                        <a href={inv.invoice_pdf_url} target="_blank" rel="noreferrer" className="text-xs text-content-secondary hover:text-content-primary inline-flex items-center gap-1">
+                          PDF <FileDown className="w-3 h-3" />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </SectionFrame>
+        )}
+
+        {(overview?.credit_ledger ?? []).length > 0 && (
+          <SectionFrame id="credit-history" title="Credit History">
+            <div className="space-y-2">
+              <p className="text-sm text-content-secondary mb-4">Transaction history for your credit balance.</p>
+              <div className="border border-border-default/50 rounded-lg overflow-hidden">
+                <div className="grid grid-cols-12 px-4 py-2 text-[11px] uppercase tracking-[0.12em] text-content-tertiary border-b border-border-default/60 bg-surface-tertiary/20">
+                  <div className="col-span-3">Date</div>
+                  <div className="col-span-3 text-right">Amount</div>
+                  <div className="col-span-6">Reason</div>
+                </div>
+                {(overview?.credit_ledger ?? []).map((entry) => (
+                  <div key={entry.id} className="grid grid-cols-12 px-4 py-3 border-b border-border-default/10 last:border-0 items-center">
+                    <div className="col-span-3 text-sm text-content-secondary">
+                      {new Date(entry.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                    </div>
+                    <div className={cn(
+                      'col-span-3 text-sm font-mono text-right',
+                      entry.amount_cents > 0 ? 'text-emerald-300' : 'text-amber-300',
+                    )}>
+                      {entry.amount_cents > 0 ? '+' : ''}{formatCurrency(Math.abs(entry.amount_cents))}
+                    </div>
+                    <div className="col-span-6 text-sm text-content-tertiary truncate">
+                      {entry.reason || 'Credit adjustment'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </SectionFrame>
+        )}
 
         <SectionFrame id="billing-info" title="Billing Details">
             <div className="grid grid-cols-1 gap-6">

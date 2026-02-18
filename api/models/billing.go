@@ -245,3 +245,64 @@ func CountResourcesByWorkspaceAndPlan(workspaceID, resourceType, plan string) (i
 	}
 	return count, err
 }
+
+// BillingInvoice represents a stored Stripe invoice for local reconciliation.
+type BillingInvoice struct {
+	ID                string     `json:"id"`
+	BillingCustomerID string     `json:"billing_customer_id"`
+	StripeInvoiceID   string     `json:"stripe_invoice_id"`
+	Status            string     `json:"status"`
+	AmountDueCents    int        `json:"amount_due_cents"`
+	AmountPaidCents   int        `json:"amount_paid_cents"`
+	Currency          string     `json:"currency"`
+	HostedInvoiceURL  string     `json:"hosted_invoice_url,omitempty"`
+	InvoicePDFURL     string     `json:"invoice_pdf_url,omitempty"`
+	PeriodStart       *time.Time `json:"period_start,omitempty"`
+	PeriodEnd         *time.Time `json:"period_end,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+}
+
+func UpsertBillingInvoice(inv *BillingInvoice) error {
+	return database.DB.QueryRow(
+		`INSERT INTO billing_invoices (billing_customer_id, stripe_invoice_id, status, amount_due_cents, amount_paid_cents, currency, hosted_invoice_url, invoice_pdf_url, period_start, period_end)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		 ON CONFLICT (stripe_invoice_id) DO UPDATE SET status=$3, amount_due_cents=$4, amount_paid_cents=$5, hosted_invoice_url=$7, invoice_pdf_url=$8
+		 RETURNING id, created_at`,
+		inv.BillingCustomerID, inv.StripeInvoiceID, inv.Status, inv.AmountDueCents, inv.AmountPaidCents, inv.Currency, inv.HostedInvoiceURL, inv.InvoicePDFURL, inv.PeriodStart, inv.PeriodEnd,
+	).Scan(&inv.ID, &inv.CreatedAt)
+}
+
+func ListBillingInvoicesByCustomer(billingCustomerID string, limit int) ([]BillingInvoice, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := database.DB.Query(
+		`SELECT id, billing_customer_id, stripe_invoice_id, status, amount_due_cents, amount_paid_cents, currency,
+		        COALESCE(hosted_invoice_url,''), COALESCE(invoice_pdf_url,''), period_start, period_end, created_at
+		   FROM billing_invoices WHERE billing_customer_id=$1 ORDER BY created_at DESC LIMIT $2`,
+		billingCustomerID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BillingInvoice
+	for rows.Next() {
+		var inv BillingInvoice
+		var ps, pe sql.NullTime
+		if err := rows.Scan(&inv.ID, &inv.BillingCustomerID, &inv.StripeInvoiceID, &inv.Status, &inv.AmountDueCents, &inv.AmountPaidCents, &inv.Currency, &inv.HostedInvoiceURL, &inv.InvoicePDFURL, &ps, &pe, &inv.CreatedAt); err != nil {
+			continue
+		}
+		if ps.Valid {
+			inv.PeriodStart = &ps.Time
+		}
+		if pe.Valid {
+			inv.PeriodEnd = &pe.Time
+		}
+		out = append(out, inv)
+	}
+	if out == nil {
+		out = []BillingInvoice{}
+	}
+	return out, nil
+}
