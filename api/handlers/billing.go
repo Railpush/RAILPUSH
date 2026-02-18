@@ -211,6 +211,7 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 		UnsyncedTotal      int               `json:"unsynced_total"`
 		CreditBalanceCents int64             `json:"credit_balance_cents"`
 		BillingSource      string            `json:"billing_source"`
+		NextChargeAt       *time.Time        `json:"next_charge_at,omitempty"`
 		NextInvoiceTotalCents         int64 `json:"next_invoice_total_cents"`
 		NextInvoiceAmountDueCents     int64 `json:"next_invoice_amount_due_cents"`
 		NextInvoiceCreditAppliedCents int64 `json:"next_invoice_credit_applied_cents"`
@@ -222,7 +223,7 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 	}
 
 	var stripeSub *stripe.Subscription
-	var stripeInv *stripe.Invoice
+	var stripeInv *services.InvoicePreview
 
 	workspaceID := ""
 	if ws, _ := models.GetWorkspaceByOwner(userID); ws != nil && strings.TrimSpace(ws.ID) != "" {
@@ -276,9 +277,9 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 				overview.CreditBalanceCents = 0
 			}
 
-			if inv, err := h.Stripe.UpcomingInvoice(bc.StripeCustomerID, bc.StripeSubscriptionID); err != nil {
-				log.Printf("Warning: failed to fetch Stripe upcoming invoice: %v", err)
-			} else {
+			if inv, err := h.Stripe.PreviewInvoice(bc.StripeCustomerID, bc.StripeSubscriptionID); err != nil {
+				log.Printf("Warning: failed to fetch Stripe invoice preview: %v", err)
+			} else if inv != nil {
 				stripeInv = inv
 			}
 		}
@@ -367,6 +368,20 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 		overview.BillingSource = "stripe"
 		overview.NextInvoiceTotalCents = stripeInv.Total
 		overview.NextInvoiceAmountDueCents = stripeInv.AmountDue
+
+		// Best effort: surface when Stripe expects to charge next.
+		var nextTS int64
+		if stripeInv.NextPaymentAttempt != nil && *stripeInv.NextPaymentAttempt > 0 {
+			nextTS = *stripeInv.NextPaymentAttempt
+		} else if stripeInv.DueDate != nil && *stripeInv.DueDate > 0 {
+			nextTS = *stripeInv.DueDate
+		} else if stripeInv.PeriodEnd > 0 {
+			nextTS = stripeInv.PeriodEnd
+		}
+		if nextTS > 0 {
+			t := time.Unix(nextTS, 0).UTC()
+			overview.NextChargeAt = &t
+		}
 
 		creditApplied := stripeInv.Total - stripeInv.AmountDue
 		if creditApplied < 0 {

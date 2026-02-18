@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/railpush/api/config"
 	"github.com/railpush/api/database"
@@ -17,7 +20,6 @@ import (
 	"github.com/stripe/stripe-go/v81/checkout/session"
 	customerbalancetransaction "github.com/stripe/stripe-go/v81/customerbalancetransaction"
 	"github.com/stripe/stripe-go/v81/customer"
-	"github.com/stripe/stripe-go/v81/invoice"
 	"github.com/stripe/stripe-go/v81/paymentmethod"
 	"github.com/stripe/stripe-go/v81/setupintent"
 	"github.com/stripe/stripe-go/v81/subscription"
@@ -34,6 +36,16 @@ var ErrStripeWebhookSignature = errors.New("stripe webhook signature verificatio
 
 var stripeIDTokenRE = regexp.MustCompile(`\b(?:price|si)_[A-Za-z0-9]+\b`)
 var stripeURLTokenRE = regexp.MustCompile(`https?://\S+`)
+
+// InvoicePreview is the subset of Stripe invoice fields we need for "next invoice" display.
+// It is returned by Stripe's "create preview invoice" API.
+type InvoicePreview struct {
+	Total              int64  `json:"total"`
+	AmountDue          int64  `json:"amount_due"`
+	PeriodEnd          int64  `json:"period_end"`
+	NextPaymentAttempt *int64 `json:"next_payment_attempt"`
+	DueDate            *int64 `json:"due_date"`
+}
 
 func NewStripeService(cfg *config.Config) *StripeService {
 	stripe.Key = cfg.Stripe.SecretKey
@@ -454,7 +466,11 @@ func (s *StripeService) CreditBalanceCents(stripeCustomerID string) (int64, erro
 	return -cust.Balance, nil
 }
 
-func (s *StripeService) UpcomingInvoice(stripeCustomerID, stripeSubscriptionID string) (*stripe.Invoice, error) {
+// PreviewInvoice returns a preview of the next invoice for a customer/subscription.
+//
+// Stripe deprecated the legacy "upcoming invoice" endpoint; this uses the replacement
+// create-preview endpoint.
+func (s *StripeService) PreviewInvoice(stripeCustomerID, stripeSubscriptionID string) (*InvoicePreview, error) {
 	if s == nil || !s.Enabled() {
 		return nil, nil
 	}
@@ -462,13 +478,50 @@ func (s *StripeService) UpcomingInvoice(stripeCustomerID, stripeSubscriptionID s
 	if stripeCustomerID == "" {
 		return nil, nil
 	}
-	params := &stripe.InvoiceUpcomingParams{
-		Customer: stripe.String(stripeCustomerID),
+
+	form := url.Values{}
+	form.Set("customer", stripeCustomerID)
+	if sub := strings.TrimSpace(stripeSubscriptionID); sub != "" {
+		form.Set("subscription", sub)
 	}
-	if strings.TrimSpace(stripeSubscriptionID) != "" {
-		params.Subscription = stripe.String(stripeSubscriptionID)
+
+	req, err := http.NewRequest("POST", "https://api.stripe.com/v1/invoices/create_preview", strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
 	}
-	return invoice.Upcoming(params)
+	req.SetBasicAuth(strings.TrimSpace(s.Config.Stripe.SecretKey), "")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode >= 400 {
+		var apiErr struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(body, &apiErr)
+		if msg := sanitizeStripeMessage(apiErr.Error.Message); msg != "" {
+			return nil, fmt.Errorf("%s", msg)
+		}
+		return nil, fmt.Errorf("failed to preview invoice")
+	}
+
+	var inv InvoicePreview
+	if err := json.Unmarshal(body, &inv); err != nil {
+		return nil, err
+	}
+	return &inv, nil
 }
 
 // AddSubscriptionItem adds a resource to the user's subscription. Creates a subscription if one doesn't exist.

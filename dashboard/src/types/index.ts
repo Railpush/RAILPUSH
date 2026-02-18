@@ -266,6 +266,7 @@ export interface BillingOverview {
   unsynced_total?: number;
   credit_balance_cents?: number;
   billing_source?: 'stripe' | 'estimate';
+  next_charge_at?: string;
   next_invoice_total_cents?: number;
   next_invoice_amount_due_cents?: number;
   next_invoice_credit_applied_cents?: number;

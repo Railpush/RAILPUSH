@@ -267,6 +267,10 @@ export function Billing() {
     0,
     overview?.next_invoice_credit_carry_cents ?? (creditBalanceCents - nextInvoiceCreditAppliedCents),
   );
+  const nextChargeAt = overview?.next_charge_at ? new Date(overview.next_charge_at) : null;
+  const nextChargeAtLabel = nextChargeAt
+    ? nextChargeAt.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : null;
 
   const currentPlanId = useMemo<PlanID>(() => {
     const fromApi = overview?.current_plan ? normalizePlan(overview.current_plan) : null;
@@ -493,6 +497,12 @@ export function Billing() {
                 <span className="text-content-tertiary">Stripe will charge</span>
                 <span className="font-mono text-content-primary">{formatCurrency(nextInvoiceAmountDueCents)}</span>
               </div>
+              {nextChargeAtLabel && (
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-content-tertiary">Next charge</span>
+                  <span className="font-mono text-content-secondary">{nextChargeAtLabel}</span>
+                </div>
+              )}
               {nextInvoiceCreditCarryCents > 0 && (
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-content-tertiary">Credits next month</span>
