@@ -47,12 +47,12 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 	}
 
 	type BillingLineItem struct {
-		ResourceType  string `json:"resource_type"`
-		ResourceID    string `json:"resource_id"`
-		ResourceName  string `json:"resource_name"`
-		Plan          string `json:"plan"`
-		MonthlyCost   int    `json:"monthly_cost"`
-		CreditCovered bool   `json:"credit_covered"`
+		ResourceType string `json:"resource_type"`
+		ResourceID   string `json:"resource_id"`
+		ResourceName string `json:"resource_name"`
+		Plan         string `json:"plan"`
+		MonthlyCost  int    `json:"monthly_cost"`
+		StripeLinked bool   `json:"stripe_linked"`
 	}
 
 	type BillingOverview struct {
@@ -63,8 +63,10 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 		CurrentPlan        string            `json:"current_plan"`
 		Items              []BillingLineItem `json:"items"`
 		MonthlyTotal       int               `json:"monthly_total"`
-		CreditCoveredTotal int               `json:"credit_covered_total"`
+		UnsyncedCount      int               `json:"unsynced_count"`
+		UnsyncedTotal      int               `json:"unsynced_total"`
 		CreditBalanceCents int64             `json:"credit_balance_cents"`
+		BillingSource      string            `json:"billing_source"`
 		NextInvoiceTotalCents         int64 `json:"next_invoice_total_cents"`
 		NextInvoiceAmountDueCents     int64 `json:"next_invoice_amount_due_cents"`
 		NextInvoiceCreditAppliedCents int64 `json:"next_invoice_credit_applied_cents"`
@@ -76,6 +78,7 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 	}
 
 	var stripeSub *stripe.Subscription
+	var stripeInv *stripe.Invoice
 
 	workspaceID := ""
 	if ws, _ := models.GetWorkspaceByOwner(userID); ws != nil && strings.TrimSpace(ws.ID) != "" {
@@ -89,6 +92,8 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 
 	if bc != nil {
 		if h.Stripe != nil && h.Stripe.Enabled() {
+			overview.BillingSource = "estimate"
+
 			// One-time migration so existing workspace credits become Stripe customer balance.
 			if workspaceID != "" {
 				if err := h.Stripe.EnsureWorkspaceCreditsMigrated(bc, workspaceID); err != nil {
@@ -114,17 +119,8 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 
 			if inv, err := h.Stripe.UpcomingInvoice(bc.StripeCustomerID, bc.StripeSubscriptionID); err != nil {
 				log.Printf("Warning: failed to fetch Stripe upcoming invoice: %v", err)
-			} else if inv != nil {
-				overview.NextInvoiceTotalCents = inv.Total
-				overview.NextInvoiceAmountDueCents = inv.AmountDue
-				if inv.Total > inv.AmountDue {
-					overview.NextInvoiceCreditAppliedCents = inv.Total - inv.AmountDue
-				}
-				if overview.CreditBalanceCents > 0 && overview.NextInvoiceCreditAppliedCents > 0 {
-					if overview.CreditBalanceCents > overview.NextInvoiceCreditAppliedCents {
-						overview.NextInvoiceCreditCarryCents = overview.CreditBalanceCents - overview.NextInvoiceCreditAppliedCents
-					}
-				}
+			} else {
+				stripeInv = inv
 			}
 		}
 
@@ -140,20 +136,19 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 				if planRank(item.Plan) > planRank(overview.CurrentPlan) {
 					overview.CurrentPlan = item.Plan
 				}
-				// Items with empty Stripe IDs were paid for by credits — they are not unbilled.
-				creditCovered := strings.TrimSpace(item.StripeSubscriptionItemID) == "" && strings.TrimSpace(item.StripePriceID) == ""
+				stripeLinked := strings.TrimSpace(item.StripeSubscriptionItemID) != "" && strings.TrimSpace(item.StripePriceID) != ""
 				overview.Items = append(overview.Items, BillingLineItem{
-					ResourceType:  item.ResourceType,
-					ResourceID:    item.ResourceID,
-					ResourceName:  item.ResourceName,
-					Plan:          item.Plan,
-					MonthlyCost:   cost,
-					CreditCovered: creditCovered,
+					ResourceType: item.ResourceType,
+					ResourceID:   item.ResourceID,
+					ResourceName: item.ResourceName,
+					Plan:         item.Plan,
+					MonthlyCost:  cost,
+					StripeLinked: stripeLinked,
 				})
-				if creditCovered {
-					overview.CreditCoveredTotal += cost
-				} else {
-					overview.MonthlyTotal += cost
+				overview.MonthlyTotal += cost
+				if !stripeLinked {
+					overview.UnsyncedCount += 1
+					overview.UnsyncedTotal += cost
 				}
 			}
 		}
@@ -198,6 +193,7 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 					ResourceName: name,
 					Plan:         plan,
 					MonthlyCost:  monthly,
+					StripeLinked: true,
 				})
 				overview.MonthlyTotal += monthly
 				if planRank(plan) > planRank(overview.CurrentPlan) {
@@ -207,11 +203,204 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
+	// Stripe totals: prefer upcoming invoice when available; otherwise estimate from recurring totals.
+	if stripeInv != nil {
+		overview.BillingSource = "stripe"
+		overview.NextInvoiceTotalCents = stripeInv.Total
+		overview.NextInvoiceAmountDueCents = stripeInv.AmountDue
+
+		creditApplied := stripeInv.Total - stripeInv.AmountDue
+		if creditApplied < 0 {
+			creditApplied = 0
+		}
+		if overview.CreditBalanceCents > 0 && creditApplied > overview.CreditBalanceCents {
+			creditApplied = overview.CreditBalanceCents
+		}
+		overview.NextInvoiceCreditAppliedCents = creditApplied
+
+		carry := overview.CreditBalanceCents - overview.NextInvoiceCreditAppliedCents
+		if carry < 0 {
+			carry = 0
+		}
+		overview.NextInvoiceCreditCarryCents = carry
+	} else {
+		if strings.TrimSpace(overview.BillingSource) == "" {
+			overview.BillingSource = "estimate"
+		}
+		if overview.NextInvoiceTotalCents <= 0 && overview.MonthlyTotal > 0 {
+			overview.NextInvoiceTotalCents = int64(overview.MonthlyTotal)
+		}
+		if overview.NextInvoiceTotalCents < 0 {
+			overview.NextInvoiceTotalCents = 0
+		}
+		if overview.CreditBalanceCents < 0 {
+			overview.CreditBalanceCents = 0
+		}
+
+		applied := int64(0)
+		if overview.CreditBalanceCents > 0 && overview.NextInvoiceTotalCents > 0 {
+			if overview.CreditBalanceCents >= overview.NextInvoiceTotalCents {
+				applied = overview.NextInvoiceTotalCents
+			} else {
+				applied = overview.CreditBalanceCents
+			}
+		}
+		overview.NextInvoiceCreditAppliedCents = applied
+		overview.NextInvoiceAmountDueCents = overview.NextInvoiceTotalCents - applied
+
+		carry := overview.CreditBalanceCents - applied
+		if carry < 0 {
+			carry = 0
+		}
+		overview.NextInvoiceCreditCarryCents = carry
+	}
+
 	if strings.TrimSpace(overview.CurrentPlan) == "" {
 		overview.CurrentPlan = "free"
 	}
 
 	utils.RespondJSON(w, http.StatusOK, overview)
+}
+
+// SyncBilling reconciles workspace resources against Stripe subscription items.
+// It is safe to call multiple times (idempotent).
+func (h *BillingHandler) SyncBilling(w http.ResponseWriter, r *http.Request) {
+	if h.Stripe == nil || !h.Stripe.Enabled() {
+		utils.RespondError(w, http.StatusServiceUnavailable, "billing not configured")
+		return
+	}
+
+	userID := middleware.GetUserID(r)
+	user, err := models.GetUserByID(userID)
+	if err != nil || user == nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to get user")
+		return
+	}
+	ws, err := models.GetWorkspaceByOwner(userID)
+	if err != nil || ws == nil || strings.TrimSpace(ws.ID) == "" {
+		utils.RespondError(w, http.StatusBadRequest, "workspace not found")
+		return
+	}
+
+	bc, err := h.Stripe.EnsureCustomer(userID, user.Email)
+	if err != nil || bc == nil {
+		utils.RespondError(w, http.StatusInternalServerError, "billing error: "+err.Error())
+		return
+	}
+
+	// Best-effort: ensure existing workspace credits are mirrored into Stripe before billing changes.
+	if err := h.Stripe.EnsureWorkspaceCreditsMigrated(bc, ws.ID); err != nil {
+		log.Printf("Warning: billing sync failed to migrate workspace credits: %v", err)
+	}
+
+	type syncError struct {
+		ResourceType string `json:"resource_type"`
+		ResourceID   string `json:"resource_id"`
+		Message      string `json:"message"`
+	}
+	type syncResult struct {
+		Status         string      `json:"status"`
+		Synced         int         `json:"synced"`
+		RemovedOrphans int         `json:"removed_orphans"`
+		Errors         []syncError `json:"errors"`
+	}
+
+	out := syncResult{Status: "ok", Errors: []syncError{}}
+
+	// 1) Ensure all paid resources have matching Stripe subscription items.
+	svcs, err := models.ListServices(ws.ID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to list services")
+		return
+	}
+	dbs, err := models.ListManagedDatabasesByWorkspace(ws.ID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to list databases")
+		return
+	}
+	kvs, err := models.ListManagedKeyValuesByWorkspace(ws.ID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to list key value stores")
+		return
+	}
+
+	exists := map[string]map[string]struct{}{
+		"service":  map[string]struct{}{},
+		"database": map[string]struct{}{},
+		"keyvalue": map[string]struct{}{},
+	}
+
+	for _, svc := range svcs {
+		exists["service"][svc.ID] = struct{}{}
+		plan := strings.TrimSpace(svc.Plan)
+		if plan == "" || plan == "free" {
+			// Free resources should not have billing items.
+			if err := h.Stripe.RemoveSubscriptionItem("service", svc.ID); err != nil {
+				out.Errors = append(out.Errors, syncError{ResourceType: "service", ResourceID: svc.ID, Message: err.Error()})
+			}
+			continue
+		}
+		if err := h.Stripe.AddSubscriptionItem(bc, ws.ID, "service", svc.ID, svc.Name, plan); err != nil {
+			out.Errors = append(out.Errors, syncError{ResourceType: "service", ResourceID: svc.ID, Message: err.Error()})
+			continue
+		}
+		out.Synced += 1
+	}
+	for _, db := range dbs {
+		exists["database"][db.ID] = struct{}{}
+		plan := strings.TrimSpace(db.Plan)
+		if plan == "" || plan == "free" {
+			// Free resources should not have billing items.
+			if err := h.Stripe.RemoveSubscriptionItem("database", db.ID); err != nil {
+				out.Errors = append(out.Errors, syncError{ResourceType: "database", ResourceID: db.ID, Message: err.Error()})
+			}
+			continue
+		}
+		if err := h.Stripe.AddSubscriptionItem(bc, ws.ID, "database", db.ID, db.Name, plan); err != nil {
+			out.Errors = append(out.Errors, syncError{ResourceType: "database", ResourceID: db.ID, Message: err.Error()})
+			continue
+		}
+		out.Synced += 1
+	}
+	for _, kv := range kvs {
+		exists["keyvalue"][kv.ID] = struct{}{}
+		plan := strings.TrimSpace(kv.Plan)
+		if plan == "" || plan == "free" {
+			// Free resources should not have billing items.
+			if err := h.Stripe.RemoveSubscriptionItem("keyvalue", kv.ID); err != nil {
+				out.Errors = append(out.Errors, syncError{ResourceType: "keyvalue", ResourceID: kv.ID, Message: err.Error()})
+			}
+			continue
+		}
+		if err := h.Stripe.AddSubscriptionItem(bc, ws.ID, "keyvalue", kv.ID, kv.Name, plan); err != nil {
+			out.Errors = append(out.Errors, syncError{ResourceType: "keyvalue", ResourceID: kv.ID, Message: err.Error()})
+			continue
+		}
+		out.Synced += 1
+	}
+
+	// 2) Remove orphan billing items for resources that no longer exist in this workspace.
+	items, err := models.ListBillingItemsByCustomer(bc.ID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to list billing items")
+		return
+	}
+	for _, it := range items {
+		rt := strings.TrimSpace(it.ResourceType)
+		if rt != "service" && rt != "database" && rt != "keyvalue" {
+			continue
+		}
+		if _, ok := exists[rt][it.ResourceID]; ok {
+			continue
+		}
+		if err := h.Stripe.RemoveSubscriptionItem(rt, it.ResourceID); err != nil {
+			out.Errors = append(out.Errors, syncError{ResourceType: rt, ResourceID: it.ResourceID, Message: err.Error()})
+			continue
+		}
+		out.RemovedOrphans += 1
+	}
+
+	utils.RespondJSON(w, http.StatusOK, out)
 }
 
 // CreateCheckoutSession creates a Stripe Checkout session to collect payment method.

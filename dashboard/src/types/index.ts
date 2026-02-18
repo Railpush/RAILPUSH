@@ -251,7 +251,7 @@ export interface BillingLineItem {
   resource_name: string;
   plan: string;
   monthly_cost: number;
-  credit_covered?: boolean;
+  stripe_linked?: boolean;
 }
 
 export interface BillingOverview {
@@ -262,8 +262,10 @@ export interface BillingOverview {
   current_plan?: string;
   items: BillingLineItem[];
   monthly_total: number;
-  credit_covered_total?: number;
+  unsynced_count?: number;
+  unsynced_total?: number;
   credit_balance_cents?: number;
+  billing_source?: 'stripe' | 'estimate';
   next_invoice_total_cents?: number;
   next_invoice_amount_due_cents?: number;
   next_invoice_credit_applied_cents?: number;

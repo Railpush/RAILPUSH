@@ -213,6 +213,7 @@ export const workspaceAdmin = {
 // Billing
 export const billing = {
   getOverview: () => request<BillingOverview>('/billing'),
+  sync: () => request<{ status: string; synced: number; removed_orphans: number; errors?: Array<{ resource_type: string; resource_id: string; message: string }> }>('/billing/sync', { method: 'POST' }),
   createCheckoutSession: (returnUrl?: string) =>
     request<{ url: string }>('/billing/checkout-session', { method: 'POST', body: JSON.stringify({ return_url: returnUrl }) }),
   createPortalSession: (returnUrl?: string) =>

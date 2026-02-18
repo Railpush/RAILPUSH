@@ -220,6 +220,7 @@ export function Billing() {
   const [loading, setLoading] = useState(true);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string> | null>(null);
   const [promoCode, setPromoCode] = useState('');
+  const [syncingBilling, setSyncingBilling] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -246,8 +247,9 @@ export function Billing() {
 
   const items = overview?.items ?? [];
   const paidItems = items.filter((item) => item.monthly_cost > 0);
-  const stripeItems = paidItems.filter((item) => !item.credit_covered);
-  const monthToDateCents = overview?.monthly_total ?? stripeItems.reduce((sum, item) => sum + item.monthly_cost, 0);
+  const stripeLinkedItems = paidItems.filter((item) => item.stripe_linked !== false);
+  const unsyncedItems = paidItems.filter((item) => item.stripe_linked === false);
+  const monthToDateCents = overview?.monthly_total ?? stripeLinkedItems.reduce((sum, item) => sum + item.monthly_cost, 0);
   const creditBalanceCents = Math.max(0, overview?.credit_balance_cents ?? 0);
 
   const nextInvoiceTotalCents = Math.max(0, overview?.next_invoice_total_cents ?? monthToDateCents);
@@ -283,27 +285,25 @@ export function Billing() {
   const includedUsage = includedByPlan[currentPlanId];
 
   const groupedCharges = useMemo(() => {
-    const grouped = new Map<string, { label: string; total: number; stripeTotal: number; items: BillingLineItem[] }>();
-    paidItems.forEach((item) => {
+    const grouped = new Map<string, { label: string; total: number; items: BillingLineItem[] }>();
+    stripeLinkedItems.forEach((item) => {
       const key = item.resource_type;
       const existing = grouped.get(key);
       if (existing) {
         existing.total += item.monthly_cost;
-        if (!item.credit_covered) existing.stripeTotal += item.monthly_cost;
         existing.items.push(item);
         return;
       }
       grouped.set(key, {
         label: resourceLabel(key),
         total: item.monthly_cost,
-        stripeTotal: item.credit_covered ? 0 : item.monthly_cost,
         items: [item],
       });
     });
     return Array.from(grouped.entries())
       .map(([key, value]) => ({ key, ...value }))
       .sort((a, b) => b.total - a.total);
-  }, [paidItems]);
+  }, [stripeLinkedItems]);
 
   const allGroupKeys = useMemo(() => groupedCharges.map((group) => group.key), [groupedCharges]);
   const allGroupKeysSignature = useMemo(() => allGroupKeys.join('|'), [allGroupKeys]);
@@ -352,13 +352,13 @@ export function Billing() {
   };
 
   const handleDownloadCsv = () => {
-    if (paidItems.length === 0) {
+    if (stripeLinkedItems.length === 0) {
       toast.info('No unbilled charges available to export');
       return;
     }
 
     const header = ['resource_type', 'resource_name', 'resource_id', 'plan', 'monthly_cost_usd'];
-    const rows = paidItems.map((item) => [
+    const rows = stripeLinkedItems.map((item) => [
       item.resource_type,
       item.resource_name,
       item.resource_id,
@@ -379,6 +379,26 @@ export function Billing() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  const handleSyncBilling = async () => {
+    if (syncingBilling) return;
+    setSyncingBilling(true);
+    try {
+      const res = await billing.sync();
+      const errCount = res?.errors?.length ?? 0;
+      if (errCount > 0) {
+        toast.error(`Billing sync finished with ${errCount} issue${errCount === 1 ? '' : 's'}`);
+      } else {
+        toast.success('Billing synced');
+      }
+      const refreshed = await billing.getOverview();
+      setOverview(refreshed);
+    } catch {
+      toast.error('Failed to sync billing');
+    } finally {
+      setSyncingBilling(false);
+    }
   };
 
   const handlePromoApply = () => {
@@ -580,6 +600,42 @@ export function Billing() {
                 </div>
               </div>
 
+              {unsyncedItems.length > 0 && (
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="space-y-1">
+                      <p className="text-sm font-semibold text-amber-200">Billing sync needed</p>
+                      <p className="text-xs text-content-secondary">
+                        {unsyncedItems.length} resource{unsyncedItems.length === 1 ? '' : 's'} {unsyncedItems.length === 1 ? 'is' : 'are'} not attached to your Stripe subscription yet, so {unsyncedItems.length === 1 ? 'it' : 'they'} will not appear on the upcoming invoice.
+                      </p>
+                    </div>
+                    <Button variant="secondary" size="sm" onClick={handleSyncBilling} disabled={syncingBilling}>
+                      {syncingBilling ? 'Syncing...' : 'Sync Billing'}
+                    </Button>
+                  </div>
+
+                  <details className="mt-3">
+                    <summary className="text-xs text-amber-200/90 cursor-pointer select-none">
+                      Show unsynced resources
+                    </summary>
+                    <div className="mt-2 rounded-lg border border-amber-500/15 overflow-hidden">
+                      {unsyncedItems.map((item) => (
+                        <div key={`${item.resource_type}-${item.resource_id}`} className="px-3 py-2 flex justify-between text-xs border-b border-amber-500/10 last:border-0 bg-surface-tertiary/10">
+                          <div className="flex items-center gap-2">
+                            <span className="text-content-primary">{item.resource_name}</span>
+                            <span className="text-content-tertiary uppercase text-[10px]">{item.plan}</span>
+                            <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 text-[10px] font-medium border border-amber-500/20">
+                              Unsynced
+                            </span>
+                          </div>
+                          <span className="font-mono text-content-secondary">{formatCurrency(item.monthly_cost)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              )}
+
               {groupedCharges.length === 0 ? (
                 <div className="py-8 text-center text-content-tertiary italic">
                   No unbilled charges for this period.
@@ -611,10 +667,7 @@ export function Billing() {
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
-                            {group.stripeTotal < group.total && (
-                              <span className="text-emerald-400 text-[10px]">{formatCurrency(group.total - group.stripeTotal)} credit</span>
-                            )}
-                            <span className="font-mono text-content-primary">{formatCurrency(group.stripeTotal)}</span>
+                            <span className="font-mono text-content-primary">{formatCurrency(group.total)}</span>
                           </div>
                         </button>
 
@@ -625,11 +678,8 @@ export function Billing() {
                                 <div className="flex items-center gap-2">
                                   <span className="text-content-primary">{item.resource_name}</span>
                                   <span className="text-content-tertiary uppercase text-[10px]">{item.plan}</span>
-                                  {item.credit_covered && (
-                                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-[10px] font-medium">Credit</span>
-                                  )}
                                 </div>
-                                <span className={cn('font-mono', item.credit_covered ? 'text-emerald-400 line-through' : 'text-content-secondary')}>{formatCurrency(item.monthly_cost)}</span>
+                                <span className={cn('font-mono text-content-secondary')}>{formatCurrency(item.monthly_cost)}</span>
                               </div>
                             ))}
                           </div>
@@ -640,7 +690,7 @@ export function Billing() {
                 </div>
               )}
 
-              {paidItems.length > 0 && (
+              {stripeLinkedItems.length > 0 && (
                 <div className="flex justify-end pt-2">
                   <Button variant="ghost" size="sm" onClick={handleDownloadCsv}>
                     <FileDown className="w-4 h-4 mr-2" />

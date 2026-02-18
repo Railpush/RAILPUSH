@@ -310,6 +310,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/keyvalue/{id}", kvH.DeleteKeyValue).Methods("DELETE")
 
 	authed.HandleFunc("/billing", billH.GetBillingOverview).Methods("GET")
+	authed.HandleFunc("/billing/sync", billH.SyncBilling).Methods("POST")
 	authed.HandleFunc("/billing/checkout-session", billH.CreateCheckoutSession).Methods("POST")
 	authed.HandleFunc("/billing/payment-method", billH.GetPaymentMethod).Methods("GET")
 	authed.HandleFunc("/billing/portal-session", billH.CreatePortalSession).Methods("POST")
