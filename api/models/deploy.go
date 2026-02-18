@@ -60,7 +60,7 @@ func GetLastFailedDeploy(serviceID string) (*Deploy, error) {
 }
 
 func ListDeploys(serviceID string) ([]Deploy, error) {
-	rows, err := database.DB.Query("SELECT id, service_id, COALESCE(trigger,''), COALESCE(status,'pending'), COALESCE(commit_sha,''), COALESCE(commit_message,''), COALESCE(branch,''), COALESCE(image_tag,''), started_at, finished_at FROM deploys WHERE service_id=$1 ORDER BY started_at DESC NULLS LAST", serviceID)
+	rows, err := database.DB.Query("SELECT id, service_id, COALESCE(trigger,''), COALESCE(status,'pending'), COALESCE(commit_sha,''), COALESCE(commit_message,''), COALESCE(branch,''), COALESCE(image_tag,''), COALESCE(build_log,''), started_at, finished_at FROM deploys WHERE service_id=$1 ORDER BY started_at DESC NULLS LAST", serviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +68,7 @@ func ListDeploys(serviceID string) ([]Deploy, error) {
 	var deploys []Deploy
 	for rows.Next() {
 		var d Deploy
-		if err := rows.Scan(&d.ID, &d.ServiceID, &d.Trigger, &d.Status, &d.CommitSHA, &d.CommitMessage, &d.Branch, &d.ImageTag, &d.StartedAt, &d.FinishedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.ServiceID, &d.Trigger, &d.Status, &d.CommitSHA, &d.CommitMessage, &d.Branch, &d.ImageTag, &d.BuildLog, &d.StartedAt, &d.FinishedAt); err != nil {
 			return nil, err
 		}
 		deploys = append(deploys, d)
