@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ExternalLink, RotateCw, GitBranch, ChevronDown, ShieldCheck, Clock, Activity, Box, Settings } from 'lucide-react';
+import { ExternalLink, RotateCw, GitBranch, ChevronDown, ShieldCheck, Clock, Activity, Box, Settings, Copy, Check } from 'lucide-react';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { LiveTerminal } from '../components/ui/LiveTerminal';
 import { Button } from '../components/ui/Button';
@@ -11,6 +11,19 @@ import { serviceTypeLabel, timeAgo, formatDuration } from '../lib/utils';
 import { buildDefaultServiceUrl } from '../lib/serviceUrl';
 import { services as servicesApi, deploys as deploysApi } from '../lib/api';
 import type { Service, Deploy } from '../types';
+
+function CopyUrlButton({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => { navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
+      className="p-1 rounded hover:bg-surface-tertiary/50 text-content-tertiary hover:text-content-secondary transition-colors"
+      title="Copy URL"
+    >
+      {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+    </button>
+  );
+}
 
 export function ServiceDetail() {
   const { serviceId } = useParams<{ serviceId: string }>();
@@ -82,15 +95,18 @@ export function ServiceDetail() {
                   {service.branch}
                 </div>
                 {serviceUrl && (
-                  <a
-                    href={serviceUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-1.5 text-brand hover:text-brand-hover transition-colors ml-2"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    <span className="truncate max-w-[200px]">{serviceUrl.replace(/^https?:\/\//, '')}</span>
-                  </a>
+                  <div className="flex items-center gap-1 ml-2">
+                    <a
+                      href={serviceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1.5 text-brand hover:text-brand-hover transition-colors"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span className="truncate max-w-[200px]">{serviceUrl.replace(/^https?:\/\//, '')}</span>
+                    </a>
+                    <CopyUrlButton url={serviceUrl} />
+                  </div>
                 )}
               </div>
             </div>
