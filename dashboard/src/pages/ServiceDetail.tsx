@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ExternalLink, RotateCw, GitBranch, ChevronDown, ShieldCheck, Clock, Activity, Box, Settings, Copy, Check, Loader2 } from 'lucide-react';
 import { StatusBadge } from '../components/ui/StatusBadge';
-import { LiveTerminal } from '../components/ui/LiveTerminal';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Dropdown } from '../components/ui/Dropdown';
@@ -210,31 +209,32 @@ export function ServiceDetail() {
             </div>
           )}
 
-          {/* Logs Preview (Stub) */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between px-1">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-content-tertiary">Console Output</h2>
-              <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => navigate(`/services/${service.id}/logs`)}>View Logs</Button>
+          {/* Build Log */}
+          {latestDeploy?.build_log && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between px-1">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-content-tertiary">Console Output</h2>
+                <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => navigate(`/services/${service.id}/logs`)}>View Logs</Button>
+              </div>
+              <div className="font-mono text-xs bg-[#0d1117] rounded-lg border border-border-default shadow-2xl overflow-hidden flex flex-col">
+                <div className="flex items-center gap-2 px-4 py-2 bg-surface-tertiary/20 border-b border-border-default/50">
+                  <div className="flex gap-1.5">
+                    <div className="w-2.5 h-2.5 rounded-full bg-[#FF5F56]" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-[#FFBD2E]" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-[#27C93F]" />
+                  </div>
+                  <div className="flex-1 text-center text-[10px] text-content-tertiary font-medium opacity-60">
+                    build · {latestDeploy.commit_sha?.slice(0, 7) || 'latest'}
+                  </div>
+                </div>
+                <div className="p-4 overflow-y-auto h-[320px]">
+                  <pre className="text-content-secondary whitespace-pre-wrap break-all leading-relaxed">
+                    {latestDeploy.build_log}
+                  </pre>
+                </div>
+              </div>
             </div>
-            <LiveTerminal
-              lines={[
-                { type: 'info', content: 'Starting build for commit 8f3a2c1...', delay: 800 },
-                { type: 'command', content: 'git clone https://github.com/railpush/demo-app.git', delay: 1200 },
-                { type: 'info', content: 'Cloning into \'demo-app\'...', delay: 600 },
-                { type: 'info', content: 'Detected Node.js runtime', delay: 400 },
-                { type: 'command', content: 'npm install', delay: 1500 },
-                { type: 'normal', content: 'added 142 packages in 3.2s', delay: 500 },
-                { type: 'command', content: 'npm run build', delay: 2000 },
-                { type: 'normal', content: '> demo-app@1.0.0 build', delay: 300 },
-                { type: 'normal', content: '> tsc && vite build', delay: 1800 },
-                { type: 'success', content: 'Build completed successfully', delay: 800 },
-                { type: 'info', content: 'Starting container...', delay: 1000 },
-                { type: 'success', content: 'Health check passed (200 OK)', delay: 600 },
-                { type: 'success', content: 'Service is live at https://railpush.com', delay: 2000 },
-              ]}
-              className="h-[320px]"
-            />
-          </div>
+          )}
         </div>
 
         {/* Right Column: Sidebar Actions / Info */}
