@@ -3,7 +3,7 @@ import type {
   GitHubRepo, GitHubBranch, RegisteredDomain, DnsRecord, DomainSearchResult, Project, ProjectFolder, Environment, PreviewEnvironment, OneOffJob, AutoscalingPolicy,
   DatabaseReplica, WorkspaceMember, AuditLogEntry, SamlSSOConfig, Incident, IncidentDetail, OpsOverview, OpsUserItem, OpsWorkspaceItem, OpsServiceItem, OpsDeployItem,
   OpsEmailOutboxItem, OpsBillingCustomerItem, OpsBillingCustomerDetail, OpsTicketItem, OpsTicketDetail, OpsWorkspaceCreditItem, OpsWorkspaceCreditDetail,
-  OpsKubeSummary, OpsPerformanceSummary, OpsDatastoreItem, OpsAuditLogEntry, SupportTicket, SupportTicketMessage, BlueprintAISettings, AIFixSession,
+  OpsKubeSummary, OpsClusterSummary, OpsPerformanceSummary, OpsDatastoreItem, OpsAuditLogEntry, SupportTicket, SupportTicketMessage, BlueprintAISettings, AIFixSession,
 } from '../types';
 
 const BASE = '/api/v1';
@@ -313,8 +313,9 @@ export const ops = {
   grantCredits: (workspaceId: string, data: { amount_cents: number; reason?: string }) =>
     request<{ status: string; balance_cents: number }>(`/ops/credits/workspaces/${encodeURIComponent(workspaceId)}/grant`, { method: 'POST', body: JSON.stringify(data) }),
 
-  // Technical / Performance
+  // Technical / Performance / Cluster
   getKubeSummary: () => request<OpsKubeSummary>('/ops/kube/summary'),
+  getClusterSummary: () => request<OpsClusterSummary>('/ops/cluster'),
   getPerformanceSummary: (params?: { window_hours?: number }) => {
     const qs = new URLSearchParams();
     if (params?.window_hours) qs.set('window_hours', String(params.window_hours));

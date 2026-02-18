@@ -664,6 +664,66 @@ export interface OpsKubeSummary {
   error?: string;
 }
 
+// Ops: Cluster
+export interface OpsClusterNode {
+  name: string;
+  status: string;
+  roles: string;
+  cpu_capacity: number;
+  cpu_allocatable: number;
+  mem_capacity_mi: number;
+  mem_allocatable_mi: number;
+  pod_capacity: number;
+  pod_count: number;
+  kubelet_version: string;
+  os: string;
+  arch: string;
+  age_seconds: number;
+}
+
+export interface OpsClusterTotals {
+  nodes: number;
+  pods: number;
+  running_pods: number;
+  deployments: number;
+  deployments_ready: number;
+  statefulsets: number;
+  statefulsets_ready: number;
+  services: number;
+}
+
+export interface OpsClusterPodPhases {
+  running: number;
+  pending: number;
+  succeeded: number;
+  failed: number;
+  unknown: number;
+}
+
+export interface OpsClusterNamespace {
+  name: string;
+  pod_count: number;
+}
+
+export interface OpsClusterPVC {
+  name: string;
+  namespace: string;
+  status: string;
+  capacity: string;
+  storage_class: string;
+}
+
+export interface OpsClusterSummary {
+  enabled: boolean;
+  namespace?: string;
+  cluster_totals?: OpsClusterTotals;
+  nodes?: OpsClusterNode[];
+  pod_phases?: OpsClusterPodPhases;
+  namespaces?: OpsClusterNamespace[];
+  pvcs?: OpsClusterPVC[];
+  error?: string;
+}
+
 // Ops: Performance
 export interface OpsPerformanceSummary {
   window_hours: number;

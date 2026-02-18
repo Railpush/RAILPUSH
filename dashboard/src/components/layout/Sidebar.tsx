@@ -302,6 +302,7 @@ export function Sidebar() {
                 <NavItem icon={<Database className="w-3.5 h-3.5" />} label="Datastores" path="/ops/datastores" active={path.startsWith('/ops/datastores')} collapsed={false} tone="ops" />
                 <NavItem icon={<ScrollText className="w-3.5 h-3.5" />} label="Audit Log" path="/ops/audit" active={path.startsWith('/ops/audit')} collapsed={false} tone="ops" />
                 <NavItem icon={<Server className="w-3.5 h-3.5" />} label="Technical" path="/ops/technical" active={path.startsWith('/ops/technical')} collapsed={false} tone="ops" />
+                <NavItem icon={<Network className="w-3.5 h-3.5" />} label="Cluster" path="/ops/cluster" active={path.startsWith('/ops/cluster')} collapsed={false} tone="ops" />
                 <NavItem icon={<BarChart3 className="w-3.5 h-3.5" />} label="Performance" path="/ops/performance" active={path.startsWith('/ops/performance')} collapsed={false} tone="ops" />
                 <NavItem icon={<Mail className="w-3.5 h-3.5" />} label="Email" path="/ops/email" active={path.startsWith('/ops/email')} collapsed={false} tone="ops" />
                 <NavItem icon={<Settings className="w-3.5 h-3.5" />} label="Settings" path="/ops/settings" active={path.startsWith('/ops/settings')} collapsed={false} tone="ops" />

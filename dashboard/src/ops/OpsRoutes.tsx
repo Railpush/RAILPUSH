@@ -12,6 +12,7 @@ import { OpsTicketDetailPage } from '../pages/OpsTicketDetail';
 import { OpsCreditsPage } from '../pages/OpsCredits';
 import { OpsCreditsWorkspacePage } from '../pages/OpsCreditsWorkspace';
 import { OpsTechnicalPage } from '../pages/OpsTechnical';
+import { OpsClusterPage } from '../pages/OpsCluster';
 import { OpsPerformancePage } from '../pages/OpsPerformance';
 import { OpsSettingsPage } from '../pages/OpsSettings';
 import { OpsDatastoresPage } from '../pages/OpsDatastores';
@@ -37,6 +38,7 @@ export default function OpsRoutes() {
       <Route path="credits" element={<OpsCreditsPage />} />
       <Route path="credits/:workspaceId" element={<OpsCreditsWorkspacePage />} />
       <Route path="technical" element={<OpsTechnicalPage />} />
+      <Route path="cluster" element={<OpsClusterPage />} />
       <Route path="performance" element={<OpsPerformancePage />} />
       <Route path="settings" element={<OpsSettingsPage />} />
 

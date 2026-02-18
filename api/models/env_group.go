@@ -78,3 +78,54 @@ func UpdateEnvGroup(id, name string) error {
 	)
 	return err
 }
+
+// ListLinkedEnvGroupIDs returns env group IDs linked to a service, ordered by
+// group creation time (earliest first) so that earlier groups win on conflict.
+func ListLinkedEnvGroupIDs(serviceID string) ([]string, error) {
+	rows, err := database.DB.Query(
+		`SELECT m.env_group_id FROM env_group_memberships m
+		 JOIN env_groups g ON g.id = m.env_group_id
+		 WHERE m.service_id=$1
+		 ORDER BY g.created_at ASC`,
+		serviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func UnlinkServiceFromEnvGroup(serviceID, envGroupID string) error {
+	_, err := database.DB.Exec(
+		"DELETE FROM env_group_memberships WHERE service_id=$1 AND env_group_id=$2",
+		serviceID, envGroupID)
+	return err
+}
+
+// ListLinkedServices returns service IDs linked to an env group.
+func ListLinkedServices(envGroupID string) ([]string, error) {
+	rows, err := database.DB.Query(
+		"SELECT service_id FROM env_group_memberships WHERE env_group_id=$1",
+		envGroupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}

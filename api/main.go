@@ -166,7 +166,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	autoH := handlers.NewAutoscalingHandler()
 	jobH := handlers.NewOneOffJobHandler(worker)
 	prevH := handlers.NewPreviewEnvironmentHandler()
-	egH := handlers.NewEnvGroupHandler()
+	egH := handlers.NewEnvGroupHandler(cfg)
 	samlH := handlers.NewSamlSSOHandler(cfg)
 	aiFixH := handlers.NewAIFixHandler(cfg, worker)
 	regRouter := registrar.NewProviderRouter(cfg.Registrar)
@@ -243,6 +243,9 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 
 	opsTechH := handlers.NewOpsTechnicalHandler(cfg)
 	authed.HandleFunc("/ops/kube/summary", opsTechH.KubeSummary).Methods("GET")
+
+	opsClusterH := handlers.NewOpsClusterHandler(cfg)
+	authed.HandleFunc("/ops/cluster", opsClusterH.Summary).Methods("GET")
 
 	opsPerfH := handlers.NewOpsPerformanceHandler(cfg)
 	authed.HandleFunc("/ops/performance", opsPerfH.Summary).Methods("GET")
@@ -349,6 +352,11 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/env-groups/{id}", egH.GetEnvGroup).Methods("GET")
 	authed.HandleFunc("/env-groups/{id}", egH.UpdateEnvGroup).Methods("PATCH")
 	authed.HandleFunc("/env-groups/{id}", egH.DeleteEnvGroup).Methods("DELETE")
+	authed.HandleFunc("/env-groups/{id}/vars", egH.ListEnvGroupVars).Methods("GET")
+	authed.HandleFunc("/env-groups/{id}/vars", egH.BulkUpdateEnvGroupVars).Methods("PUT")
+	authed.HandleFunc("/env-groups/{id}/link", egH.LinkService).Methods("POST")
+	authed.HandleFunc("/env-groups/{id}/link/{serviceId}", egH.UnlinkService).Methods("DELETE")
+	authed.HandleFunc("/env-groups/{id}/services", egH.ListLinkedServices).Methods("GET")
 	authed.HandleFunc("/preview-environments", prevH.ListPreviewEnvironments).Methods("GET")
 	authed.HandleFunc("/workspaces/{id}/members", workH.ListMembers).Methods("GET")
 	authed.HandleFunc("/workspaces/{id}/members", workH.AddMember).Methods("POST")

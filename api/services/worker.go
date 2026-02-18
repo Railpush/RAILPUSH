@@ -607,21 +607,46 @@ func (w *Worker) processJobKubernetes(job DeployJob, appendLog func(string)) {
 	_ = models.UpdateDeployStarted(deploy.ID, imageTag)
 
 	// 3. Resolve env vars (decrypt secrets) and always include PORT.
-	rawEnv, _ := models.ListEnvVars("service", svc.ID)
+	//    Merge linked env group vars first (lower priority), then service vars (higher priority).
 	env := map[string]string{}
+
+	// 3a. Load env group vars (earlier-created groups win on key conflict).
+	groupIDs, _ := models.ListLinkedEnvGroupIDs(svc.ID)
+	for _, gid := range groupIDs {
+		groupVars, err := models.ListEnvVars("env_group", gid)
+		if err != nil {
+			log.Printf("worker: list env group vars failed for group=%s service=%s: %v", gid, svc.ID, err)
+			continue
+		}
+		for _, ev := range groupVars {
+			key := strings.TrimSpace(ev.Key)
+			if key == "" || strings.TrimSpace(ev.EncryptedValue) == "" {
+				continue
+			}
+			if _, exists := env[key]; exists {
+				continue // earlier group already set this key
+			}
+			decrypted, err := utils.Decrypt(ev.EncryptedValue, w.Config.Crypto.EncryptionKey)
+			if err != nil {
+				log.Printf("worker: decrypt env group var failed for group=%s key=%s: %v", gid, key, err)
+				continue
+			}
+			env[key] = decrypted
+		}
+	}
+
+	// 3b. Load service-level vars (override any group vars with the same key).
+	rawEnv, _ := models.ListEnvVars("service", svc.ID)
 	for _, ev := range rawEnv {
 		key := strings.TrimSpace(ev.Key)
 		if key == "" {
 			continue
 		}
-		// Env var values are stored encrypted; preserve empty values ("" is distinct from unset).
-		// Do not TrimSpace: many apps treat whitespace as significant.
 		if strings.TrimSpace(ev.EncryptedValue) == "" {
 			continue
 		}
 		decrypted, err := utils.Decrypt(ev.EncryptedValue, w.Config.Crypto.EncryptionKey)
 		if err != nil {
-			// If we can't decrypt, skipping is safer than deploying with a wrong value.
 			log.Printf("worker: decrypt env var failed for service=%s key=%s: %v", svc.ID, key, err)
 			continue
 		}
