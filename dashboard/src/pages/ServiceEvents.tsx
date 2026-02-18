@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { GitCommit, Rocket, RotateCw, GitBranch, Clock, ArrowLeft } from 'lucide-react';
+import { GitCommit, Rocket, RotateCw, GitBranch, Clock, ArrowLeft, ListOrdered } from 'lucide-react';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -14,18 +14,26 @@ export function ServiceEvents() {
   const [deployList, setDeployList] = useState<Deploy[]>([]);
   const [loading, setLoading] = useState(true);
   const [serviceName, setServiceName] = useState('');
+  const [queuePositions, setQueuePositions] = useState<Record<string, { position: number; total_queued: number }>>({});
 
   useEffect(() => {
     if (!serviceId) return;
 
-    // Fetch service name for context if needed, or just list deploys
     Promise.all([
       deploysApi.list(serviceId).catch(() => []),
       servicesApi.get(serviceId).then(s => s.name).catch(() => '')
     ]).then(([deploys, name]) => {
-      setDeployList(deploys)
-      setServiceName(name)
-      setLoading(false)
+      setDeployList(deploys);
+      setServiceName(name);
+      setLoading(false);
+
+      // Fetch queue positions for pending/building/deploying deploys
+      const queued = deploys.filter(d => ['pending', 'building', 'deploying'].includes(d.status));
+      queued.forEach(d => {
+        deploysApi.queuePosition(serviceId, d.id).then(info => {
+          setQueuePositions(prev => ({ ...prev, [d.id]: info }));
+        }).catch(() => {});
+      });
     });
   }, [serviceId]);
 
@@ -159,6 +167,12 @@ export function ServiceEvents() {
                           <Clock className="w-3.5 h-3.5" />
                           {deploy.started_at ? formatTime(deploy.started_at) : 'Pending'}
                         </div>
+                        {queuePositions[deploy.id] && ['pending', 'building', 'deploying'].includes(deploy.status) && (
+                          <span className="flex items-center gap-1 text-xs text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20">
+                            <ListOrdered className="w-3 h-3" />
+                            #{queuePositions[deploy.id].position} of {queuePositions[deploy.id].total_queued}
+                          </span>
+                        )}
                         {deploy.started_at && deploy.finished_at && (
                           <span>
                             Took {formatDuration(new Date(deploy.finished_at).getTime() - new Date(deploy.started_at).getTime())}

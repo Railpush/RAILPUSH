@@ -506,6 +506,8 @@ fi
 									"--dockerfile=" + dfRelForKaniko,
 									"--destination=" + destImage,
 									"--insecure-registry=" + registryHost,
+								"--cache=true",
+								"--cache-repo=" + registryHost + "/cache",
 								},
 								VolumeMounts: []corev1.VolumeMount{
 									{Name: "workspace", MountPath: "/workspace"},

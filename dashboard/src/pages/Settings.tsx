@@ -76,7 +76,7 @@ export function Settings() {
                 </div>
                 <div>
                   <h3 className="font-semibold text-content-primary">Blueprint AI Autogenerate</h3>
-                  <p className="text-xs text-content-secondary">Scan repo files and generate render.yaml during blueprint sync</p>
+                  <p className="text-xs text-content-secondary">Scan repo files and generate railpush.yaml during blueprint sync</p>
                 </div>
               </div>
             </div>

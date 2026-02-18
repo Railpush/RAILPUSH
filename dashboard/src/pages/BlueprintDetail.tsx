@@ -47,10 +47,10 @@ function formatSyncError(syncError: string | null): string | null {
 
   if (lower === 'yaml_missing_ai_disabled') {
     // Legacy status: older servers required users to explicitly enable Blueprint AI.
-    return 'No render.yaml found in the repository. RailPush can auto-generate one, but this server must be configured with OpenRouter (Blueprint AI) first.';
+    return 'No railpush.yaml (or render.yaml) found in the repository. RailPush can auto-generate one, but this server must be configured with OpenRouter (Blueprint AI) first.';
   }
   if (lower.includes('not found in repository') && (lower.includes('blueprint ai is not configured') || lower.includes('automatic blueprint generation'))) {
-    return 'No render.yaml found in the repository, and automatic blueprint generation is not configured on this server. Ask your admin to configure OpenRouter (Blueprint AI) and retry sync.';
+    return 'No railpush.yaml (or render.yaml) found in the repository, and automatic blueprint generation is not configured on this server. Ask your admin to configure OpenRouter (Blueprint AI) and retry sync.';
   }
 
   // Legacy format: sometimes we stored a JSON-encoded Stripe error blob.

@@ -146,7 +146,7 @@ export function Docs() {
     <div className="min-h-screen bg-surface-primary text-content-primary page-shell">
       <SEO
         title="Documentation — RailPush"
-        description="How RailPush works: ship from Git, wire domains, manage Postgres and Redis, schedule jobs, and define everything as code with render.yaml."
+        description="How RailPush works: ship from Git, wire domains, manage Postgres and Redis, schedule jobs, and define everything as code with railpush.yaml."
         canonical="https://railpush.com/docs"
       />
       {/* ── Top Nav ─────────────────────────────────────── */}
@@ -397,7 +397,7 @@ DB_NAME=mydb`} />
                 <h2 className="text-2xl font-bold tracking-tight">Blueprints</h2>
               </div>
               <p className="text-content-secondary text-base leading-relaxed mt-4 mb-6">
-                Blueprints are Infrastructure as Code for RailPush. Define your entire stack — services, databases, Redis, environment variables — in a single <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-content-primary text-xs font-mono">render.yaml</code> file. Push to deploy everything at once.
+                Blueprints are Infrastructure as Code for RailPush. Define your entire stack — services, databases, Redis, environment variables — in a single <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-content-primary text-xs font-mono">railpush.yaml</code> file. Push to deploy everything at once.
               </p>
 
               <div className="rounded-xl border border-brand-purple/30 bg-brand-purple/5 p-5 mb-8">
@@ -414,14 +414,14 @@ DB_NAME=mydb`} />
 
               <h3 className="text-lg font-semibold mb-3">How it works</h3>
               <div className="space-y-3 text-sm text-content-secondary mb-8">
-                <div className="flex gap-3"><span className="w-6 h-6 rounded-full bg-brand-purple/10 text-brand-purple text-xs font-bold flex items-center justify-center shrink-0">1</span> Add a <code className="text-xs bg-surface-tertiary px-1 rounded">render.yaml</code> to your repository root</div>
+                <div className="flex gap-3"><span className="w-6 h-6 rounded-full bg-brand-purple/10 text-brand-purple text-xs font-bold flex items-center justify-center shrink-0">1</span> Add a <code className="text-xs bg-surface-tertiary px-1 rounded">railpush.yaml</code> to your repository root</div>
                 <div className="flex gap-3"><span className="w-6 h-6 rounded-full bg-brand-purple/10 text-brand-purple text-xs font-bold flex items-center justify-center shrink-0">2</span> Create a Blueprint in the dashboard and point it to your repo</div>
                 <div className="flex gap-3"><span className="w-6 h-6 rounded-full bg-brand-purple/10 text-brand-purple text-xs font-bold flex items-center justify-center shrink-0">3</span> RailPush clones your repo, reads the YAML, and provisions everything</div>
                 <div className="flex gap-3"><span className="w-6 h-6 rounded-full bg-brand-purple/10 text-brand-purple text-xs font-bold flex items-center justify-center shrink-0">4</span> Databases are created first, then services with resolved env vars</div>
                 <div className="flex gap-3"><span className="w-6 h-6 rounded-full bg-brand-purple/10 text-brand-purple text-xs font-bold flex items-center justify-center shrink-0">5</span> All services are deployed simultaneously after resources are ready</div>
               </div>
 
-              <CodeBlock filename="render.yaml" code={`services:
+              <CodeBlock filename="railpush.yaml" code={`services:
   - type: web
     name: my-api
     runtime: node
@@ -465,7 +465,7 @@ keyValues:
                 <h2 className="text-2xl font-bold tracking-tight">Blueprint Spec Reference</h2>
               </div>
               <p className="text-content-secondary text-base leading-relaxed mt-4 mb-6">
-                Complete reference for the <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-content-primary text-xs font-mono">render.yaml</code> file format.
+                Complete reference for the <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-content-primary text-xs font-mono">railpush.yaml</code> file format.
               </p>
 
               <h3 className="text-lg font-semibold mb-3">Root Fields</h3>
@@ -637,7 +637,7 @@ keyValues:
               <p className="text-sm text-content-secondary mb-4">
                 Env groups let you share configuration across multiple services. Define them in your blueprint or create them in the dashboard. When a group is updated, all linked services receive the changes.
               </p>
-              <CodeBlock filename="render.yaml" code={`envVarGroups:
+              <CodeBlock filename="railpush.yaml" code={`envVarGroups:
   - name: shared-config
     envVars:
       - key: LOG_LEVEL
@@ -674,7 +674,7 @@ services:
               </div>
 
               <h3 className="text-lg font-semibold mb-3">Blueprint Domains</h3>
-              <CodeBlock filename="render.yaml" code={`services:
+              <CodeBlock filename="railpush.yaml" code={`services:
   - type: web
     name: my-app
     runtime: node
@@ -735,7 +735,7 @@ services:
               <p className="text-sm text-content-secondary mb-4">
                 If your repo has a <code className="text-xs bg-surface-tertiary px-1 rounded">Dockerfile</code>, RailPush uses it automatically. You can customize the path:
               </p>
-              <CodeBlock filename="render.yaml" code={`services:
+              <CodeBlock filename="railpush.yaml" code={`services:
   - type: web
     name: my-app
     runtime: docker
@@ -747,7 +747,7 @@ services:
               <p className="text-sm text-content-secondary mb-4">
                 Skip the build entirely and deploy from a Docker registry:
               </p>
-              <CodeBlock filename="render.yaml" code={`services:
+              <CodeBlock filename="railpush.yaml" code={`services:
   - type: web
     name: my-app
     image:
@@ -766,7 +766,7 @@ services:
               <p className="text-content-secondary text-base leading-relaxed mt-4 mb-6">
                 Deploy static sites, SPAs, and JAMstack applications. RailPush runs your build command, then serves the output directory.
               </p>
-              <CodeBlock filename="render.yaml" code={`services:
+              <CodeBlock filename="railpush.yaml" code={`services:
   - type: static
     name: my-site
     buildCommand: npm run build
@@ -787,7 +787,7 @@ services:
               <p className="text-content-secondary text-base leading-relaxed mt-4 mb-6">
                 Schedule recurring tasks with standard cron expressions. The container starts, runs your command, and shuts down.
               </p>
-              <CodeBlock filename="render.yaml" code={`services:
+              <CodeBlock filename="railpush.yaml" code={`services:
   - type: cron
     name: nightly-cleanup
     runtime: node
@@ -826,7 +826,7 @@ services:
               <p className="text-content-secondary text-base leading-relaxed mt-4 mb-6">
                 Attach persistent storage to your services. Data survives redeploys and container restarts. Useful for file uploads, SQLite databases, or any stateful data.
               </p>
-              <CodeBlock filename="render.yaml" code={`services:
+              <CodeBlock filename="railpush.yaml" code={`services:
   - type: web
     name: my-app
     runtime: node
@@ -879,7 +879,7 @@ services:
                 ))}
               </div>
 
-              <CodeBlock filename="render.yaml" code={`services:
+              <CodeBlock filename="railpush.yaml" code={`services:
   - type: web
     name: my-api
     runtime: node

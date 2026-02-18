@@ -16,7 +16,7 @@ export function CreateBlueprint() {
     name: '',
     repo_url: '',
     branch: 'main',
-    file_path: 'render.yaml',
+    file_path: 'railpush.yaml',
     ai_ignore_repo_yaml: false,
   });
 
@@ -259,7 +259,7 @@ export function CreateBlueprint() {
               label="YAML File Path"
               value={form.file_path}
               onChange={(e) => setForm({ ...form, file_path: e.target.value })}
-              placeholder="render.yaml"
+              placeholder="railpush.yaml"
             />
           </div>
 
@@ -268,7 +268,7 @@ export function CreateBlueprint() {
               <div>
                 <div className="text-sm font-medium text-content-primary">Blueprint AI</div>
                 <div className="text-xs text-content-tertiary mt-1">
-                  If <span className="font-mono">{form.file_path || 'render.yaml'}</span> exists in your repo, should we use it or generate our own?
+                  If <span className="font-mono">{form.file_path || 'railpush.yaml'}</span> exists in your repo, should we use it or generate our own?
                 </div>
               </div>
 
@@ -300,7 +300,7 @@ export function CreateBlueprint() {
                   <div className="min-w-0">
                     <div className="text-sm font-semibold text-content-primary">Ignore YAML and generate</div>
                     <div className="text-xs text-content-tertiary">
-                      OpenRouter will scan your repository and generate a new render.yaml during sync.
+                      OpenRouter will scan your repository and generate a new railpush.yaml during sync.
                     </div>
                   </div>
                 </label>

@@ -15,7 +15,7 @@ type Blueprint struct {
 	RepoURL        string     `json:"repo_url"`
 	Branch         string     `json:"branch"`
 	FilePath       string     `json:"file_path"`
-	// GeneratedYAML stores an AI-generated blueprint (e.g. when render.yaml is missing in the repo).
+	// GeneratedYAML stores an AI-generated blueprint (e.g. when railpush.yaml is missing in the repo).
 	// It is intentionally not returned in the public API by default to avoid large payloads.
 	GeneratedYAML  string     `json:"-"`
 	AIIgnoreRepoYAML bool     `json:"ai_ignore_repo_yaml"`
@@ -38,7 +38,7 @@ func CreateBlueprint(b *Blueprint) error {
 	).Scan(&b.ID, &b.CreatedAt)
 }
 
-const blueprintSelectCols = `id, workspace_id, name, COALESCE(repo_url,''), COALESCE(branch,'main'), COALESCE(file_path,'render.yaml'), COALESCE(ai_ignore_repo_yaml,false), last_synced_at, COALESCE(last_sync_status,''), created_at`
+const blueprintSelectCols = `id, workspace_id, name, COALESCE(repo_url,''), COALESCE(branch,'main'), COALESCE(file_path,'railpush.yaml'), COALESCE(ai_ignore_repo_yaml,false), last_synced_at, COALESCE(last_sync_status,''), created_at`
 const blueprintSelectColsWithGenerated = blueprintSelectCols + `, COALESCE(generated_yaml,'')`
 
 func GetBlueprint(id string) (*Blueprint, error) {

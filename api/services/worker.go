@@ -7,9 +7,12 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/big"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1056,6 +1059,11 @@ func (w *Worker) notifyDeployResult(svc *models.Service, deploy *models.Deploy, 
 		}()
 	}
 
+	// Post a comment on the GitHub PR with the preview URL when a preview deploy succeeds.
+	if ok && deploy.Trigger == "preview" {
+		go w.postGitHubPRComment(svc, deploy)
+	}
+
 	if !w.Config.Email.Enabled() {
 		return
 	}
@@ -1083,6 +1091,107 @@ func (w *Worker) notifyDeployResult(svc *models.Service, deploy *models.Deploy, 
 			log.Printf("email enqueue failed: type=deploy_result deploy=%s err=%v", deploy.ID, err)
 		}
 	}()
+}
+
+// postGitHubPRComment posts a comment on the GitHub PR with the preview URL.
+func (w *Worker) postGitHubPRComment(svc *models.Service, deploy *models.Deploy) {
+	if w == nil || w.Config == nil || svc == nil || deploy == nil {
+		return
+	}
+
+	pe, err := models.GetPreviewEnvironmentByServiceID(svc.ID)
+	if err != nil || pe == nil || pe.PRNumber == 0 {
+		return
+	}
+
+	// Extract owner/repo from the repository clone URL.
+	// Supports: https://github.com/owner/repo.git or https://github.com/owner/repo
+	ownerRepo := extractGitHubOwnerRepo(pe.Repository)
+	if ownerRepo == "" {
+		return
+	}
+
+	// Get the workspace owner's GitHub token.
+	ws, err := models.GetWorkspace(svc.WorkspaceID)
+	if err != nil || ws == nil {
+		return
+	}
+	encToken, err := models.GetUserGitHubToken(ws.OwnerID)
+	if err != nil || encToken == "" {
+		return
+	}
+	ghToken, err := utils.Decrypt(encToken, w.Config.Crypto.EncryptionKey)
+	if err != nil || ghToken == "" {
+		return
+	}
+
+	previewURL := utils.ServicePublicURL(svc.Type, svc.Name, svc.Subdomain, w.Config.Deploy.Domain, 0)
+	if previewURL == "" {
+		return
+	}
+
+	body := fmt.Sprintf(
+		"### Preview Deploy Ready\n\n"+
+			"| | |\n|---|---|\n"+
+			"| **Preview URL** | %s |\n"+
+			"| **Commit** | `%s` |\n"+
+			"| **Branch** | `%s` |\n\n"+
+			"Deployed by [RailPush](https://%s)",
+		previewURL,
+		deploy.CommitSHA,
+		deploy.Branch,
+		w.Config.Deploy.Domain,
+	)
+
+	commentURL := fmt.Sprintf("https://api.github.com/repos/%s/issues/%d/comments", ownerRepo, pe.PRNumber)
+	payload, _ := json.Marshal(map[string]string{"body": body})
+	req, err := http.NewRequest("POST", commentURL, bytes.NewReader(payload))
+	if err != nil {
+		log.Printf("preview PR comment: failed to create request: %v", err)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+ghToken)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("preview PR comment: request failed: %v", err)
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		log.Printf("preview PR comment: GitHub API returned %d for %s PR#%d", resp.StatusCode, ownerRepo, pe.PRNumber)
+		return
+	}
+	log.Printf("preview PR comment: posted to %s PR#%d", ownerRepo, pe.PRNumber)
+
+	// Update preview environment status.
+	_ = models.CreateOrUpdatePreviewEnvironment(&models.PreviewEnvironment{
+		WorkspaceID: svc.WorkspaceID,
+		ServiceID:   &svc.ID,
+		Repository:  pe.Repository,
+		PRNumber:    pe.PRNumber,
+		PRTitle:     pe.PRTitle,
+		PRBranch:    pe.PRBranch,
+		BaseBranch:  pe.BaseBranch,
+		CommitSHA:   deploy.CommitSHA,
+		Status:      "live",
+	})
+}
+
+// extractGitHubOwnerRepo extracts "owner/repo" from a GitHub clone URL.
+func extractGitHubOwnerRepo(repoURL string) string {
+	repoURL = strings.TrimSpace(repoURL)
+	repoURL = strings.TrimSuffix(repoURL, ".git")
+	// https://github.com/owner/repo
+	if idx := strings.Index(repoURL, "github.com/"); idx >= 0 {
+		parts := strings.SplitN(repoURL[idx+len("github.com/"):], "/", 3)
+		if len(parts) >= 2 && parts[0] != "" && parts[1] != "" {
+			return parts[0] + "/" + parts[1]
+		}
+	}
+	return ""
 }
 
 func (w *Worker) emailOutboxLoop() {

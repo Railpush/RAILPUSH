@@ -33,7 +33,7 @@ export function Blueprints() {
         <EmptyState
           icon={<Layers className="w-6 h-6" />}
           title="No blueprints"
-          description="Blueprints let you define your entire infrastructure in a render.yaml file. Push to deploy your full stack."
+          description="Blueprints let you define your entire infrastructure in a railpush.yaml file. Push to deploy your full stack."
           action={{ label: 'Create Blueprint', onClick: () => navigate('/new/blueprint') }}
         />
       ) : (

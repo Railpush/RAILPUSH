@@ -94,6 +94,29 @@ func ListPreviewEnvironments(workspaceID string) ([]PreviewEnvironment, error) {
 	return out, nil
 }
 
+func GetPreviewEnvironmentByServiceID(serviceID string) (*PreviewEnvironment, error) {
+	pe := &PreviewEnvironment{}
+	var sid sql.NullString
+	err := database.DB.QueryRow(
+		`SELECT id, workspace_id, service_id::text, repository, pr_number, COALESCE(pr_title,''), COALESCE(pr_branch,''), COALESCE(base_branch,''), COALESCE(commit_sha,''), COALESCE(status,''), created_at, updated_at, closed_at
+		   FROM preview_environments
+		  WHERE service_id=$1`,
+		serviceID,
+	).Scan(
+		&pe.ID, &pe.WorkspaceID, &sid, &pe.Repository, &pe.PRNumber, &pe.PRTitle, &pe.PRBranch, &pe.BaseBranch, &pe.CommitSHA, &pe.Status, &pe.CreatedAt, &pe.UpdatedAt, &pe.ClosedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if sid.Valid && sid.String != "" {
+		pe.ServiceID = &sid.String
+	}
+	return pe, nil
+}
+
 func MarkPreviewEnvironmentClosed(workspaceID, repository string, prNumber int) error {
 	_, err := database.DB.Exec(
 		`UPDATE preview_environments

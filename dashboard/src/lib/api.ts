@@ -113,6 +113,8 @@ export const deploys = {
     request<Deploy>(`/services/${serviceId}/deploys`, { method: 'POST', body: JSON.stringify(data || {}) }),
   rollback: (serviceId: string, deployId: string) =>
     request<Deploy>(`/services/${serviceId}/deploys/${deployId}/rollback`, { method: 'POST' }),
+  queuePosition: (serviceId: string, deployId: string) =>
+    request<{ position: number; total_queued: number }>(`/services/${serviceId}/deploys/${deployId}/queue`),
 };
 
 // AI Fix

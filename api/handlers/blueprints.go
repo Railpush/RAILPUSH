@@ -74,7 +74,7 @@ func (h *BlueprintHandler) CreateBlueprint(w http.ResponseWriter, r *http.Reques
 		bp.Branch = "main"
 	}
 	if bp.FilePath == "" {
-		bp.FilePath = "render.yaml"
+		bp.FilePath = "railpush.yaml"
 	}
 	if bp.WorkspaceID == "" {
 		ws, err := models.GetWorkspaceByOwner(userID)
@@ -465,7 +465,7 @@ func (h *BlueprintHandler) DeleteBlueprint(w http.ResponseWriter, r *http.Reques
 	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{"status": "deleted", "deleted_services": deleted})
 }
 
-// RenderYAML represents the render.yaml file format
+// RenderYAML represents the railpush.yaml (or render.yaml) blueprint file format
 type RenderYAML struct {
 	Services     []RenderService     `yaml:"services"`
 	Databases    []RenderDatabase    `yaml:"databases"`
@@ -895,12 +895,26 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		return
 	}
 
-	// Read render.yaml.
-	// If it's missing, use the stored generated YAML if present, otherwise auto-generate it from the repo
-	// via OpenRouter (when configured).
+	// Read railpush.yaml (preferred) or render.yaml (fallback).
+	// If neither exists, use the stored generated YAML if present, otherwise auto-generate via OpenRouter.
 	yamlPath := filepath.Join(tmpDir, bp.FilePath)
 	data, err := os.ReadFile(yamlPath)
 	repoFileExists := err == nil
+	// Fallback: if the primary file doesn't exist, try the other name.
+	if !repoFileExists {
+		var fallback string
+		if strings.HasSuffix(bp.FilePath, "railpush.yaml") {
+			fallback = strings.Replace(bp.FilePath, "railpush.yaml", "render.yaml", 1)
+		} else if strings.HasSuffix(bp.FilePath, "render.yaml") {
+			fallback = strings.Replace(bp.FilePath, "render.yaml", "railpush.yaml", 1)
+		}
+		if fallback != "" {
+			if fbData, fbErr := os.ReadFile(filepath.Join(tmpDir, fallback)); fbErr == nil {
+				data = fbData
+				repoFileExists = true
+			}
+		}
+	}
 	specGeneratedByAI := false
 
 	// Prefer the stored generated blueprint when the repo has no yaml.

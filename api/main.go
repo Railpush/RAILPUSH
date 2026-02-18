@@ -278,6 +278,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/services/{id}/deploys", depH.ListDeploys).Methods("GET")
 	authed.HandleFunc("/services/{id}/deploys/{deployId}", depH.GetDeploy).Methods("GET")
 	authed.HandleFunc("/services/{id}/deploys/{deployId}/rollback", depH.Rollback).Methods("POST")
+	authed.HandleFunc("/services/{id}/deploys/{deployId}/queue", depH.QueuePosition).Methods("GET")
 
 	authed.HandleFunc("/services/{id}/ai-fix", aiFixH.StartFix).Methods("POST")
 	authed.HandleFunc("/services/{id}/ai-fix/status", aiFixH.GetStatus).Methods("GET")

@@ -132,6 +132,27 @@ func (h *DeployHandler) GetDeploy(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, deploy)
 }
 
+func (h *DeployHandler) QueuePosition(w http.ResponseWriter, r *http.Request) {
+	serviceID := mux.Vars(r)["id"]
+	deployID := mux.Vars(r)["deployId"]
+	userID := middleware.GetUserID(r)
+	svc, err := models.GetService(serviceID)
+	if err != nil || svc == nil {
+		utils.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if err := services.EnsureWorkspaceAccess(userID, svc.WorkspaceID, models.RoleViewer); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	info, err := models.GetDeployQueuePosition(deployID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to get queue position")
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, info)
+}
+
 func (h *DeployHandler) Rollback(w http.ResponseWriter, r *http.Request) {
 	serviceID := mux.Vars(r)["id"]
 	deployID := mux.Vars(r)["deployId"]

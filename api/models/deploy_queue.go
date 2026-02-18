@@ -132,6 +132,44 @@ func ClaimExpiredDeploys(owner string, limit int, leaseSeconds int, maxAttempts 
 	return deploys, nil
 }
 
+// DeployQueueInfo contains queue position and stats for a pending deploy.
+type DeployQueueInfo struct {
+	Position   int `json:"position"`
+	TotalQueue int `json:"total_queued"`
+}
+
+// GetDeployQueuePosition returns the queue position of a deploy (1-based) and total queue size.
+// Returns position 0 if the deploy is not in the queue.
+func GetDeployQueuePosition(deployID string) (*DeployQueueInfo, error) {
+	var pos int
+	err := database.DB.QueryRow(
+		`SELECT COUNT(*) FROM deploys
+		  WHERE status IN ('pending','building','deploying')
+		    AND created_at <= (SELECT created_at FROM deploys WHERE id=$1)`,
+		deployID,
+	).Scan(&pos)
+	if err != nil {
+		return nil, err
+	}
+	var total int
+	err = database.DB.QueryRow(
+		`SELECT COUNT(*) FROM deploys WHERE status IN ('pending','building','deploying')`,
+	).Scan(&total)
+	if err != nil {
+		return nil, err
+	}
+	return &DeployQueueInfo{Position: pos, TotalQueue: total}, nil
+}
+
+// GetQueueSummary returns the number of deploys currently in the queue.
+func GetQueueSummary() (int, error) {
+	var count int
+	err := database.DB.QueryRow(
+		`SELECT COUNT(*) FROM deploys WHERE status IN ('pending','building','deploying')`,
+	).Scan(&count)
+	return count, err
+}
+
 // MarkStaleDeploysFailed marks deploys as failed when they have exceeded maxAttempts and are not actively leased.
 func MarkStaleDeploysFailed(maxAttempts int) (int64, error) {
 	if maxAttempts <= 0 {

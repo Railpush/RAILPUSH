@@ -126,7 +126,7 @@ func (g *BlueprintAIGenerator) GenerateRenderYAMLFromRepo(repoDir string, repoUR
 		}
 	}
 
-	systemPrompt := `You generate RailPush render.yaml files from repository source.
+	systemPrompt := `You generate RailPush railpush.yaml (blueprint) files from repository source.
 Return ONLY valid YAML, no markdown fences and no explanation.
 
 Full schema:
@@ -294,6 +294,8 @@ func collectBlueprintAISnippets(repoDir string, maxFiles int, maxFileBytes int) 
 	}
 	exactPriority := map[string]int{
 		"dockerfile":          1,
+		"railpush.yaml":       1,
+		"railpush.yml":        1,
 		"render.yaml":         1,
 		"render.yml":          1,
 		"docker-compose.yml":  2,
