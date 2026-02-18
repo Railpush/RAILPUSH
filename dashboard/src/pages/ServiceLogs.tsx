@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
-import { Search, Maximize2, Minimize2, AlertTriangle, XCircle, RefreshCw } from 'lucide-react';
+import { Search, Maximize2, Minimize2, RefreshCw, Copy, Check, ChevronDown } from 'lucide-react';
 import { logs as logsApi, connectLogStream } from '../lib/api';
-import { formatTime } from '../lib/utils';
+import { copyToClipboard } from '../lib/utils';
 import type { LogEntry } from '../types';
 
 interface DeployLog {
@@ -11,6 +11,104 @@ interface DeployLog {
   log: string;
   started_at: string;
 }
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+/** Strip ANSI escape sequences from a string */
+function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+}
+
+function formatTs(raw: string): string {
+  try {
+    const d = new Date(raw);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+  } catch { return ''; }
+}
+
+function levelCls(level: string) {
+  switch (level) {
+    case 'error': return 'text-red-400';
+    case 'warn': return 'text-amber-400';
+    case 'debug': return 'text-content-tertiary';
+    default: return 'text-content-secondary';
+  }
+}
+
+function levelBadgeCls(level: string) {
+  switch (level) {
+    case 'error': return 'bg-red-500/15 text-red-400 border-red-500/25';
+    case 'warn': return 'bg-amber-500/15 text-amber-400 border-amber-500/25';
+    case 'debug': return 'bg-zinc-500/15 text-zinc-400 border-zinc-500/25';
+    default: return 'bg-blue-500/15 text-blue-400 border-blue-500/25';
+  }
+}
+
+/** Parse an HTTP status code from a runtime log message (e.g. "GET /api 200 3ms") */
+function parseHttpStatus(msg: string): { method?: string; status?: number } {
+  const httpMatch = msg.match(/\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/);
+  const statusMatch = msg.match(/\b([1-5]\d{2})\b/);
+  return {
+    method: httpMatch?.[1],
+    status: statusMatch ? parseInt(statusMatch[1], 10) : undefined,
+  };
+}
+
+function httpStatusCls(code: number) {
+  if (code >= 500) return 'bg-red-500/15 text-red-400 border-red-500/25';
+  if (code >= 400) return 'bg-amber-500/15 text-amber-400 border-amber-500/25';
+  if (code >= 300) return 'bg-blue-500/15 text-blue-400 border-blue-500/25';
+  if (code >= 200) return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/25';
+  return 'bg-zinc-500/15 text-zinc-400 border-zinc-500/25';
+}
+
+function deployLineLevel(line: string): 'error' | 'warn' | 'success' | 'info' | 'normal' {
+  const l = line.toLowerCase();
+  if (l.includes('error') || l.includes('fatal') || l.includes('failed') || l.includes('panic')) return 'error';
+  if (l.includes('warn')) return 'warn';
+  if (l.includes('success') || l.includes('passed') || l.includes('live at') || l.includes('pushed')) return 'success';
+  if (l.includes('step') || l.includes('==>') || l.includes('detected runtime') || l.includes('cloning') || l.includes('building')) return 'info';
+  return 'normal';
+}
+
+function deployLineCls(level: string) {
+  switch (level) {
+    case 'error': return 'text-red-400';
+    case 'warn': return 'text-amber-400';
+    case 'success': return 'text-emerald-400';
+    case 'info': return 'text-blue-400';
+    default: return 'text-content-secondary';
+  }
+}
+
+/** Parse a deploy log line, extracting optional container prefix like [kaniko] or [clone] */
+function parseDeployLine(raw: string): { prefix: string; message: string } {
+  const clean = stripAnsi(raw).replace(/\r/g, '');
+  const m = clean.match(/^\s*\[(\w+)]\s*(.*)/);
+  if (m) return { prefix: m[1], message: m[2] };
+  const m2 = clean.match(/^\s{4}\[(\w+)]\s*(.*)/);
+  if (m2) return { prefix: m2[1], message: m2[2] };
+  return { prefix: '', message: clean };
+}
+
+// ── inline copy button ──────────────────────────────────────────────────────
+
+function LineCopy({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); copyToClipboard(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
+      className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-content-tertiary hover:text-content-primary transition-opacity flex-shrink-0"
+      title="Copy line"
+    >
+      {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+    </button>
+  );
+}
+
+// ── component ───────────────────────────────────────────────────────────────
 
 export function ServiceLogs() {
   const { serviceId } = useParams<{ serviceId: string }>();
@@ -22,99 +120,58 @@ export function ServiceLogs() {
   const [fullscreen, setFullscreen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [logType, setLogType] = useState<'runtime' | 'deploy'>('runtime');
+  const [copyAll, setCopyAll] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Allow linking directly to deploy logs (e.g. /services/:id/logs?type=deploy).
   useEffect(() => {
     const type = new URLSearchParams(location.search).get('type');
     if (type === 'deploy') setLogType('deploy');
     if (type === 'runtime') setLogType('runtime');
   }, [location.search]);
 
-  const fetchLogs = () => {
+  const fetchLogs = useCallback(() => {
     if (!serviceId) return;
     setLoading(true);
-
     if (logType === 'runtime') {
       logsApi.query(serviceId, { limit: 200 })
-        .then((data) => {
-          if (Array.isArray(data) && data.length > 0) {
-            setEntries(data);
-          } else {
-            setEntries([]);
-          }
-        })
-        .catch(() => { /* ignore */ })
+        .then((data) => { if (Array.isArray(data) && data.length > 0) setEntries(data); else setEntries([]); })
+        .catch(() => {})
         .finally(() => setLoading(false));
     } else {
       logsApi.query(serviceId, { limit: 10, type: 'deploy' })
-        .then((data: unknown) => {
-          const logs = data as DeployLog[];
-          if (Array.isArray(logs)) {
-            setDeployLogs(logs);
-          } else {
-            setDeployLogs([]);
-          }
-        })
-        .catch(() => { /* ignore */ })
+        .then((data: unknown) => { const logs = data as DeployLog[]; if (Array.isArray(logs)) setDeployLogs(logs); else setDeployLogs([]); })
+        .catch(() => {})
         .finally(() => setLoading(false));
     }
-  };
-
-  useEffect(() => {
-    fetchLogs();
-
-    // Connect WebSocket for live streaming (runtime logs only)
-    if (serviceId && logType === 'runtime') {
-      try {
-        wsRef.current = connectLogStream(serviceId, (entry) => {
-          setEntries((prev) => [...prev, entry].slice(-1000));
-        });
-      } catch { /* ignore */ }
-    }
-
-    return () => { wsRef.current?.close(); };
   }, [serviceId, logType]);
 
   useEffect(() => {
-    if (isLive && containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    fetchLogs();
+    if (serviceId && logType === 'runtime') {
+      try { wsRef.current = connectLogStream(serviceId, (entry) => { setEntries((prev) => [...prev, entry].slice(-1000)); }); } catch {}
     }
+    return () => { wsRef.current?.close(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serviceId, logType]);
+
+  useEffect(() => {
+    if (isLive && containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight;
   }, [entries, deployLogs, isLive]);
 
-  const filtered = search
-    ? entries.filter((e) => e.message.toLowerCase().includes(search.toLowerCase()))
-    : entries;
+  const filtered = search ? entries.filter((e) => e.message.toLowerCase().includes(search.toLowerCase())) : entries;
+  const filteredDeployLogs = search ? deployLogs.filter((d) => d.log.toLowerCase().includes(search.toLowerCase())) : deployLogs;
 
-  const filteredDeployLogs = search
-    ? deployLogs.filter((d) => d.log.toLowerCase().includes(search.toLowerCase()))
-    : deployLogs;
-
-  const levelIcon = (level: string) => {
-    switch (level) {
-      case 'warn': return <AlertTriangle className="w-3.5 h-3.5 text-status-warning flex-shrink-0" />;
-      case 'error': return <XCircle className="w-3.5 h-3.5 text-status-error flex-shrink-0" />;
-      default: return <span className="w-3.5 h-3.5 flex-shrink-0" />;
+  const handleCopyAll = async () => {
+    let text = '';
+    if (logType === 'runtime') {
+      text = filtered.map((e) => `${formatTs(e.timestamp)} [${e.level.toUpperCase()}] [${e.instance_id}] ${e.message}`).join('\n');
+    } else {
+      text = filteredDeployLogs.map((d) => `=== Deploy ${d.id.slice(0, 8)} (${d.status}) ===\n${stripAnsi(d.log)}`).join('\n\n');
     }
-  };
-
-  const levelColor = (level: string) => {
-    switch (level) {
-      case 'warn': return 'text-status-warning';
-      case 'error': return 'text-status-error';
-      case 'debug': return 'text-content-tertiary';
-      default: return 'text-content-primary';
-    }
-  };
-
-  const deployLineColor = (line: string) => {
-    const lower = line.toLowerCase();
-    if (lower.includes('error') || lower.includes('fatal') || lower.includes('failed')) return 'text-status-error';
-    if (lower.includes('warn')) return 'text-status-warning';
-    if (lower.includes('success') || lower.includes('passed') || lower.includes('live at')) return 'text-status-success';
-    if (lower.includes('detected runtime') || lower.includes('cloning')) return 'text-status-info';
-    return 'text-content-secondary';
+    await copyToClipboard(text);
+    setCopyAll(true);
+    setTimeout(() => setCopyAll(false), 2000);
   };
 
   return (
@@ -124,18 +181,14 @@ export function ServiceLogs() {
           <p className="text-[11px] uppercase tracking-[0.22em] text-content-tertiary font-semibold">Observability</p>
           <h1 className="text-2xl font-semibold text-content-primary">Logs</h1>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={fetchLogs}
-            className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors border border-transparent hover:border-border-default"
-            title="Refresh logs"
-          >
+        <div className="flex items-center gap-1.5">
+          <button onClick={handleCopyAll} className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors border border-transparent hover:border-border-default" title="Copy all logs">
+            {copyAll ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+          </button>
+          <button onClick={fetchLogs} className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors border border-transparent hover:border-border-default" title="Refresh logs">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          <button
-            onClick={() => setFullscreen(!fullscreen)}
-            className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors border border-transparent hover:border-border-default"
-          >
+          <button onClick={() => setFullscreen(!fullscreen)} className="p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors border border-transparent hover:border-border-default">
             {fullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
           </button>
         </div>
@@ -143,84 +196,68 @@ export function ServiceLogs() {
 
       {/* Controls */}
       <div className="flex items-center gap-3 mb-3">
-        {/* Log type toggle */}
         <div className="flex rounded-lg border border-border-default overflow-hidden bg-surface-secondary">
-          <button
-            onClick={() => setLogType('runtime')}
-            className={`px-3 py-2 text-sm font-medium transition-colors ${
-              logType === 'runtime'
-                ? 'bg-surface-tertiary text-content-primary shadow-inner'
-                : 'text-content-tertiary hover:text-content-secondary'
-            }`}
-          >
-            Runtime
-          </button>
-          <button
-            onClick={() => setLogType('deploy')}
-            className={`px-3 py-2 text-sm font-medium transition-colors border-l border-border-default ${
-              logType === 'deploy'
-                ? 'bg-surface-tertiary text-content-primary shadow-inner'
-                : 'text-content-tertiary hover:text-content-secondary'
-            }`}
-          >
-            Deploy
-          </button>
+          <button onClick={() => setLogType('runtime')} className={`px-3 py-2 text-sm font-medium transition-colors ${logType === 'runtime' ? 'bg-surface-tertiary text-content-primary shadow-inner' : 'text-content-tertiary hover:text-content-secondary'}`}>Runtime</button>
+          <button onClick={() => setLogType('deploy')} className={`px-3 py-2 text-sm font-medium transition-colors border-l border-border-default ${logType === 'deploy' ? 'bg-surface-tertiary text-content-primary shadow-inner' : 'text-content-tertiary hover:text-content-secondary'}`}>Deploy</button>
         </div>
-
         <div className="flex-1 relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-content-tertiary" />
-          <input
-            type="text"
-            placeholder="Search logs..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full bg-surface-secondary border border-border-default rounded-lg pl-9 pr-3 py-2 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 transition-all font-mono shadow-[0_1px_2px_rgba(15,23,42,0.05)]"
-          />
+          <input type="text" placeholder="Search logs..." value={search} onChange={(e) => setSearch(e.target.value)} className="w-full bg-surface-secondary border border-border-default rounded-lg pl-9 pr-3 py-2 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 transition-all font-mono shadow-[0_1px_2px_rgba(15,23,42,0.05)]" />
         </div>
         {logType === 'runtime' && (
-          <button
-            onClick={() => setIsLive(!isLive)}
-            className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-              isLive
-                ? 'bg-status-success-bg text-status-success border border-status-success/20'
-                : 'bg-surface-tertiary text-content-secondary border border-border-default'
-            }`}
-          >
-            <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-status-success animate-pulse-dot' : 'bg-content-tertiary'}`} />
-            Live
+          <button onClick={() => setIsLive(!isLive)} className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${isLive ? 'bg-status-success-bg text-status-success border border-status-success/20' : 'bg-surface-tertiary text-content-secondary border border-border-default'}`}>
+            <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-status-success animate-pulse-dot' : 'bg-content-tertiary'}`} />Live
           </button>
         )}
       </div>
 
       {/* Log viewer */}
-      <div
-        ref={containerRef}
-        className={`rounded-xl border border-border-default overflow-auto font-mono text-xs bg-surface-secondary shadow-inner ${
-          fullscreen ? 'h-[calc(100vh-140px)]' : 'h-[600px]'
-        }`}
-      >
+      <div ref={containerRef} className={`rounded-xl border border-border-default overflow-auto font-mono text-xs bg-surface-secondary ${fullscreen ? 'h-[calc(100vh-140px)]' : 'h-[600px]'}`}>
         {logType === 'runtime' ? (
           filtered.length === 0 ? (
             <div className="flex items-center justify-center h-full text-content-tertiary text-sm">
               {loading ? 'Loading logs...' : search ? 'No matching log entries' : 'No logs available. Deploy a service to see logs.'}
             </div>
           ) : (
-            <div className="p-3 space-y-0">
-              {filtered.map((entry, i) => (
-                <div key={i} className="flex items-start gap-2 py-0.5 hover:bg-surface-tertiary px-2 -mx-2 rounded group transition-colors">
-                  {levelIcon(entry.level)}
-                  <span className="text-content-tertiary flex-shrink-0 select-none text-[11px]">
-                    {formatTime(entry.timestamp)}
-                  </span>
-                  <span className="text-brand/60 flex-shrink-0 text-[11px]">
-                    [{entry.instance_id}]
-                  </span>
-                  <span className={`${levelColor(entry.level)} break-all leading-relaxed`}>
-                    {entry.message}
-                  </span>
-                </div>
-              ))}
-            </div>
+            <table className="w-full border-collapse">
+              <tbody>
+                {filtered.map((entry, i) => {
+                  const http = parseHttpStatus(entry.message);
+                  return (
+                    <tr key={i} className="group hover:bg-white/[0.02] border-b border-white/[0.03]">
+                      <td className="py-1.5 pl-3 pr-2 text-content-tertiary whitespace-nowrap select-none align-top w-[100px]">
+                        {formatTs(entry.timestamp)}
+                      </td>
+                      <td className="py-1.5 px-1.5 align-top w-[52px]">
+                        <span className={`inline-flex items-center justify-center px-1.5 py-0 rounded border text-[10px] font-semibold uppercase leading-relaxed ${levelBadgeCls(entry.level)}`}>
+                          {entry.level === 'error' ? 'ERR' : entry.level === 'warn' ? 'WRN' : entry.level === 'debug' ? 'DBG' : 'INF'}
+                        </span>
+                      </td>
+                      {http.method && (
+                        <td className="py-1.5 px-1 align-top whitespace-nowrap w-[52px]">
+                          <span className="inline-flex items-center px-1.5 py-0 rounded border border-violet-500/25 bg-violet-500/15 text-violet-400 text-[10px] font-semibold leading-relaxed">
+                            {http.method}
+                          </span>
+                        </td>
+                      )}
+                      {http.status && (
+                        <td className="py-1.5 px-1 align-top whitespace-nowrap w-[40px]">
+                          <span className={`inline-flex items-center px-1.5 py-0 rounded border text-[10px] font-semibold tabular-nums leading-relaxed ${httpStatusCls(http.status)}`}>
+                            {http.status}
+                          </span>
+                        </td>
+                      )}
+                      <td className={`py-1.5 px-2 ${levelCls(entry.level)} break-all leading-relaxed align-top`}>
+                        {entry.message}
+                      </td>
+                      <td className="py-1.5 pr-2 align-top w-[24px]">
+                        <LineCopy text={`${formatTs(entry.timestamp)} [${entry.level.toUpperCase()}] ${entry.message}`} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           )
         ) : (
           filteredDeployLogs.length === 0 ? (
@@ -228,53 +265,90 @@ export function ServiceLogs() {
               {loading ? 'Loading deploy logs...' : 'No deploy logs available.'}
             </div>
           ) : (
-            <div className="p-3 space-y-4">
+            <div>
               {filteredDeployLogs.map((deploy) => (
-                <div key={deploy.id}>
-                  <div className="flex items-center gap-2 mb-2 px-2">
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${
-                      deploy.status === 'live'
-                        ? 'bg-status-success-bg text-status-success'
-                        : deploy.status === 'failed'
-                        ? 'bg-status-error-bg text-status-error'
-                        : 'bg-status-warning-bg text-status-warning'
-                    }`}>
-                      {deploy.status}
-                    </span>
-                    <span className="text-content-tertiary text-[11px]">
-                      {deploy.started_at ? formatTime(deploy.started_at) : ''}
-                    </span>
-                    <span className="text-content-tertiary text-[11px]">
-                      {deploy.id.slice(0, 8)}
-                    </span>
-                  </div>
-                  {deploy.log ? (
-                    <div className="space-y-0">
-                      {deploy.log.split('\n').filter(Boolean).map((line, j) => (
-                        <div key={j} className="py-0.5 hover:bg-surface-tertiary px-2 -mx-2 rounded transition-colors">
-                          <span className={`${deployLineColor(line)} break-all leading-relaxed`}>
-                            {line}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="px-2 text-content-tertiary">No build output</div>
-                  )}
-                </div>
+                <DeployLogBlock key={deploy.id} deploy={deploy} />
               ))}
             </div>
           )
         )}
       </div>
 
-      {/* Keyboard shortcuts */}
       <div className="flex items-center gap-4 mt-2 text-[11px] text-content-tertiary">
         <span><kbd className="px-1 py-0.5 bg-surface-tertiary rounded border border-border-default">M</kbd> Fullscreen</span>
         <span><kbd className="px-1 py-0.5 bg-surface-tertiary rounded border border-border-default">/</kbd> Focus search</span>
         <span><kbd className="px-1 py-0.5 bg-surface-tertiary rounded border border-border-default">Home</kbd> Jump to start</span>
         <span><kbd className="px-1 py-0.5 bg-surface-tertiary rounded border border-border-default">End</kbd> Jump to end</span>
       </div>
+    </div>
+  );
+}
+
+// ── deploy log block ────────────────────────────────────────────────────────
+
+function DeployLogBlock({ deploy }: { deploy: DeployLog }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const lines = (deploy.log || '').split('\n').filter(Boolean);
+
+  const handleCopy = async () => {
+    await copyToClipboard(stripAnsi(deploy.log));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="border-b border-white/[0.04]">
+      {/* Header */}
+      <div className="flex items-center gap-2 px-3 py-2.5 bg-white/[0.02] border-b border-white/[0.04]">
+        <button onClick={() => setCollapsed(!collapsed)} className="text-content-tertiary hover:text-content-primary transition-colors">
+          <ChevronDown className={`w-3.5 h-3.5 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+        </button>
+        <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
+          deploy.status === 'live'
+            ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/25'
+            : deploy.status === 'failed'
+            ? 'bg-red-500/15 text-red-400 border border-red-500/25'
+            : 'bg-amber-500/15 text-amber-400 border border-amber-500/25'
+        }`}>{deploy.status}</span>
+        <span className="text-content-tertiary text-[11px]">{deploy.started_at ? formatTs(deploy.started_at) : ''}</span>
+        <span className="text-content-tertiary text-[11px] font-mono">{deploy.id.slice(0, 8)}</span>
+        <span className="text-content-tertiary text-[11px] ml-auto">{lines.length} lines</span>
+        <button onClick={handleCopy} className="p-1 rounded text-content-tertiary hover:text-content-primary transition-colors" title="Copy deploy log">
+          {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+        </button>
+      </div>
+
+      {/* Lines */}
+      {!collapsed && (
+        <table className="w-full border-collapse">
+          <tbody>
+            {lines.map((raw, j) => {
+              const { prefix, message } = parseDeployLine(raw);
+              const level = deployLineLevel(message);
+              return (
+                <tr key={j} className="group hover:bg-white/[0.02] border-b border-white/[0.02]">
+                  <td className="py-1 pl-3 pr-1 text-content-tertiary/50 select-none align-top w-[40px] text-right tabular-nums">{j + 1}</td>
+                  {prefix && (
+                    <td className="py-1 px-1 align-top whitespace-nowrap w-[64px]">
+                      <span className="inline-flex items-center px-1.5 py-0 rounded border border-cyan-500/25 bg-cyan-500/10 text-cyan-400 text-[10px] font-semibold leading-relaxed">
+                        {prefix}
+                      </span>
+                    </td>
+                  )}
+                  <td className={`py-1 px-2 ${deployLineCls(level)} break-all leading-relaxed align-top`}>
+                    {message || '\u00A0'}
+                  </td>
+                  <td className="py-1 pr-2 align-top w-[24px]">
+                    <LineCopy text={stripAnsi(raw)} />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

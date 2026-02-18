@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Network, RefreshCcw } from 'lucide-react';
+import { Network, RefreshCcw, Server, Shield } from 'lucide-react';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Skeleton } from '../components/ui/Skeleton';
 import { ApiError, ops } from '../lib/api';
 import { cn } from '../lib/utils';
-import type { OpsClusterSummary } from '../types';
+import type { OpsClusterSummary, OpsClusterNode } from '../types';
 
 function fmtAge(seconds: number) {
   if (!Number.isFinite(seconds) || seconds < 0) return '—';
@@ -46,6 +46,94 @@ function StatCard({ label, value, sub }: { label: string; value: string | number
       <p className="text-2xl font-semibold text-content-primary mt-1 tabular-nums">{value}</p>
       {sub && <p className="text-xs text-content-tertiary mt-0.5">{sub}</p>}
     </Card>
+  );
+}
+
+function NodeDiagram({ nodes }: { nodes: OpsClusterNode[] }) {
+  const controlPlane = nodes.filter((n) => n.roles.includes('control-plane'));
+  const workers = nodes.filter((n) => !n.roles.includes('control-plane'));
+
+  return (
+    <Card className="p-6">
+      <h2 className="text-sm font-semibold text-content-primary mb-5 flex items-center gap-2">
+        <Network className="w-4 h-4 text-content-tertiary" />
+        Cluster Topology
+      </h2>
+
+      <div className="flex flex-col items-center gap-6">
+        {/* Control plane nodes */}
+        <div className="flex flex-wrap justify-center gap-3">
+          {controlPlane.map((n) => (
+            <NodeTile key={n.name} node={n} />
+          ))}
+        </div>
+
+        {/* Connector line */}
+        {workers.length > 0 && (
+          <div className="flex flex-col items-center gap-1">
+            <div className="w-px h-4 bg-border-default/60" />
+            <div className="px-3 py-1 rounded-full bg-surface-secondary text-[10px] uppercase tracking-[0.15em] text-content-tertiary border border-border-default/40">
+              workers
+            </div>
+            <div className="w-px h-4 bg-border-default/60" />
+          </div>
+        )}
+
+        {/* Worker nodes */}
+        {workers.length > 0 && (
+          <div className="flex flex-wrap justify-center gap-3">
+            {workers.map((n) => (
+              <NodeTile key={n.name} node={n} />
+            ))}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function NodeTile({ node }: { node: OpsClusterNode }) {
+  const isReady = node.status === 'Ready';
+  const isCP = node.roles.includes('control-plane');
+
+  return (
+    <div
+      className={cn(
+        'relative flex flex-col items-center gap-2 rounded-xl border px-5 py-4 min-w-[120px] transition-colors',
+        isReady
+          ? 'border-emerald-500/30 bg-emerald-500/[0.04]'
+          : 'border-red-500/30 bg-red-500/[0.04]'
+      )}
+    >
+      {/* Status light */}
+      <div className="relative">
+        <div
+          className={cn(
+            'w-3 h-3 rounded-full',
+            isReady ? 'bg-emerald-500' : 'bg-red-500'
+          )}
+        />
+        {isReady && (
+          <div className="absolute inset-0 w-3 h-3 rounded-full bg-emerald-500 animate-ping opacity-30" />
+        )}
+      </div>
+
+      {/* Icon */}
+      {isCP ? (
+        <Shield className="w-5 h-5 text-content-tertiary" />
+      ) : (
+        <Server className="w-5 h-5 text-content-tertiary" />
+      )}
+
+      {/* Name */}
+      <span className="text-sm font-medium text-content-primary">{node.name}</span>
+
+      {/* Details */}
+      <div className="flex flex-col items-center gap-0.5 text-[11px] text-content-tertiary">
+        <span>{node.pod_count} pods</span>
+        <span>{(node.cpu_capacity / 1000).toFixed(0)} CPU &middot; {(node.mem_capacity_mi / 1024).toFixed(0)}Gi</span>
+      </div>
+    </div>
   );
 }
 
@@ -130,10 +218,15 @@ export function OpsClusterPage() {
             <StatCard label="StatefulSets" value={`${totals?.statefulsets_ready ?? 0}/${totals?.statefulsets ?? 0}`} sub="ready" />
           </div>
 
-          {/* Nodes */}
+          {/* Node Topology Diagram */}
+          {(data.nodes ?? []).length > 0 && (
+            <NodeDiagram nodes={data.nodes!} />
+          )}
+
+          {/* Node Details */}
           {(data.nodes ?? []).length > 0 && (
             <div>
-              <h2 className="text-sm font-semibold text-content-primary mb-3">Nodes</h2>
+              <h2 className="text-sm font-semibold text-content-primary mb-3">Node Details</h2>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {(data.nodes ?? []).map((n) => (
                   <Card key={n.name} className="p-4 space-y-3">

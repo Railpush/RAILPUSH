@@ -375,6 +375,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 func spaHandler(w http.ResponseWriter, r *http.Request) {
 	path := "./dashboard/dist" + r.URL.Path
 	if _, err := os.Stat(path); os.IsNotExist(err) {
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		http.ServeFile(w, r, "./dashboard/dist/index.html")
 		return
 	}
