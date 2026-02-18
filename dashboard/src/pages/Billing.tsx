@@ -221,6 +221,8 @@ export function Billing() {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string> | null>(null);
   const [promoCode, setPromoCode] = useState('');
   const [syncingBilling, setSyncingBilling] = useState(false);
+  const [autoSyncAttempted, setAutoSyncAttempted] = useState(false);
+  const [billingSyncIssue, setBillingSyncIssue] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -384,22 +386,27 @@ export function Billing() {
   const handleSyncBilling = async () => {
     if (syncingBilling) return;
     setSyncingBilling(true);
+    setBillingSyncIssue(null);
     try {
       const res = await billing.sync();
       const errCount = res?.errors?.length ?? 0;
-      if (errCount > 0) {
-        toast.error(`Billing sync finished with ${errCount} issue${errCount === 1 ? '' : 's'}`);
-      } else {
-        toast.success('Billing synced');
-      }
+      if (errCount > 0) setBillingSyncIssue(`Billing sync reported ${errCount} issue${errCount === 1 ? '' : 's'}.`);
       const refreshed = await billing.getOverview();
       setOverview(refreshed);
     } catch {
-      toast.error('Failed to sync billing');
+      setBillingSyncIssue('We could not sync billing automatically. Please update your payment method (or contact support).');
     } finally {
       setSyncingBilling(false);
     }
   };
+
+  useEffect(() => {
+    if (autoSyncAttempted) return;
+    if (unsyncedItems.length === 0) return;
+    setAutoSyncAttempted(true);
+    handleSyncBilling();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSyncAttempted, unsyncedItems.length]);
 
   const handlePromoApply = () => {
     if (!promoCode.trim()) {
@@ -604,14 +611,16 @@ export function Billing() {
                 <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div className="space-y-1">
-                      <p className="text-sm font-semibold text-amber-200">Billing sync needed</p>
-                      <p className="text-xs text-content-secondary">
-                        {unsyncedItems.length} resource{unsyncedItems.length === 1 ? '' : 's'} {unsyncedItems.length === 1 ? 'is' : 'are'} not attached to your Stripe subscription yet, so {unsyncedItems.length === 1 ? 'it' : 'they'} will not appear on the upcoming invoice.
+                      <p className="text-sm font-semibold text-amber-200">
+                        {syncingBilling ? 'Updating billing...' : 'Updating billing'}
                       </p>
+                      <p className="text-xs text-content-secondary">
+                        {unsyncedItems.length} resource{unsyncedItems.length === 1 ? '' : 's'} {unsyncedItems.length === 1 ? 'is' : 'are'} being attached to your Stripe subscription. This usually takes a few seconds.
+                      </p>
+                      {billingSyncIssue && (
+                        <p className="text-xs text-amber-200/90">{billingSyncIssue}</p>
+                      )}
                     </div>
-                    <Button variant="secondary" size="sm" onClick={handleSyncBilling} disabled={syncingBilling}>
-                      {syncingBilling ? 'Syncing...' : 'Sync Billing'}
-                    </Button>
                   </div>
 
                   <details className="mt-3">

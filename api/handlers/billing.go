@@ -3,11 +3,14 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"hash/fnv"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/railpush/api/config"
+	"github.com/railpush/api/database"
 	"github.com/railpush/api/middleware"
 	"github.com/railpush/api/models"
 	"github.com/railpush/api/services"
@@ -24,6 +27,19 @@ func NewBillingHandler(cfg *config.Config, stripeService *services.StripeService
 	return &BillingHandler{Config: cfg, Stripe: stripeService}
 }
 
+type billingSyncError struct {
+	ResourceType string `json:"resource_type"`
+	ResourceID   string `json:"resource_id"`
+	Message      string `json:"message"`
+}
+
+type billingSyncResult struct {
+	Status         string            `json:"status"`
+	Synced         int               `json:"synced"`
+	RemovedOrphans int               `json:"removed_orphans"`
+	Errors         []billingSyncError `json:"errors"`
+}
+
 func planRank(plan string) int {
 	switch strings.ToLower(strings.TrimSpace(plan)) {
 	case "pro":
@@ -35,6 +51,134 @@ func planRank(plan string) int {
 	default:
 		return 0
 	}
+}
+
+func billingSyncLockKey(workspaceID string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte("billing_sync:"))
+	_, _ = h.Write([]byte(strings.TrimSpace(workspaceID)))
+	return int64(h.Sum64())
+}
+
+func (h *BillingHandler) syncWorkspaceBilling(bc *models.BillingCustomer, workspaceID string) (billingSyncResult, error) {
+	out := billingSyncResult{Status: "ok", Errors: []billingSyncError{}}
+
+	if h == nil || h.Stripe == nil || !h.Stripe.Enabled() {
+		return out, errors.New("billing not configured")
+	}
+	workspaceID = strings.TrimSpace(workspaceID)
+	if bc == nil || strings.TrimSpace(bc.ID) == "" || workspaceID == "" {
+		return out, nil
+	}
+
+	var locked bool
+	lockKey := billingSyncLockKey(workspaceID)
+	if err := database.DB.QueryRow("SELECT pg_try_advisory_lock($1)", lockKey).Scan(&locked); err != nil {
+		return out, err
+	}
+	if !locked {
+		return out, nil
+	}
+	defer func() {
+		_, _ = database.DB.Exec("SELECT pg_advisory_unlock($1)", lockKey)
+	}()
+	_ = models.TouchBillingCustomerLastBillingSync(bc.ID)
+
+	// Best-effort: ensure existing workspace credits are mirrored into Stripe before billing changes.
+	if err := h.Stripe.EnsureWorkspaceCreditsMigrated(bc, workspaceID); err != nil {
+		log.Printf("Warning: billing sync failed to migrate workspace credits: %v", err)
+	}
+
+	// 1) Ensure all paid resources have matching Stripe subscription items.
+	svcs, err := models.ListServices(workspaceID)
+	if err != nil {
+		return out, err
+	}
+	dbs, err := models.ListManagedDatabasesByWorkspace(workspaceID)
+	if err != nil {
+		return out, err
+	}
+	kvs, err := models.ListManagedKeyValuesByWorkspace(workspaceID)
+	if err != nil {
+		return out, err
+	}
+
+	exists := map[string]map[string]struct{}{
+		"service":  map[string]struct{}{},
+		"database": map[string]struct{}{},
+		"keyvalue": map[string]struct{}{},
+	}
+
+	for _, svc := range svcs {
+		exists["service"][svc.ID] = struct{}{}
+		plan := strings.TrimSpace(svc.Plan)
+		if plan == "" || plan == "free" {
+			// Free resources should not have billing items.
+			if err := h.Stripe.RemoveSubscriptionItem("service", svc.ID); err != nil {
+				out.Errors = append(out.Errors, billingSyncError{ResourceType: "service", ResourceID: svc.ID, Message: err.Error()})
+			}
+			continue
+		}
+		if err := h.Stripe.AddSubscriptionItem(bc, workspaceID, "service", svc.ID, svc.Name, plan); err != nil {
+			out.Errors = append(out.Errors, billingSyncError{ResourceType: "service", ResourceID: svc.ID, Message: err.Error()})
+			continue
+		}
+		out.Synced += 1
+	}
+	for _, db := range dbs {
+		exists["database"][db.ID] = struct{}{}
+		plan := strings.TrimSpace(db.Plan)
+		if plan == "" || plan == "free" {
+			// Free resources should not have billing items.
+			if err := h.Stripe.RemoveSubscriptionItem("database", db.ID); err != nil {
+				out.Errors = append(out.Errors, billingSyncError{ResourceType: "database", ResourceID: db.ID, Message: err.Error()})
+			}
+			continue
+		}
+		if err := h.Stripe.AddSubscriptionItem(bc, workspaceID, "database", db.ID, db.Name, plan); err != nil {
+			out.Errors = append(out.Errors, billingSyncError{ResourceType: "database", ResourceID: db.ID, Message: err.Error()})
+			continue
+		}
+		out.Synced += 1
+	}
+	for _, kv := range kvs {
+		exists["keyvalue"][kv.ID] = struct{}{}
+		plan := strings.TrimSpace(kv.Plan)
+		if plan == "" || plan == "free" {
+			// Free resources should not have billing items.
+			if err := h.Stripe.RemoveSubscriptionItem("keyvalue", kv.ID); err != nil {
+				out.Errors = append(out.Errors, billingSyncError{ResourceType: "keyvalue", ResourceID: kv.ID, Message: err.Error()})
+			}
+			continue
+		}
+		if err := h.Stripe.AddSubscriptionItem(bc, workspaceID, "keyvalue", kv.ID, kv.Name, plan); err != nil {
+			out.Errors = append(out.Errors, billingSyncError{ResourceType: "keyvalue", ResourceID: kv.ID, Message: err.Error()})
+			continue
+		}
+		out.Synced += 1
+	}
+
+	// 2) Remove orphan billing items for resources that no longer exist in this workspace.
+	items, err := models.ListBillingItemsByCustomer(bc.ID)
+	if err != nil {
+		return out, err
+	}
+	for _, it := range items {
+		rt := strings.TrimSpace(it.ResourceType)
+		if rt != "service" && rt != "database" && rt != "keyvalue" {
+			continue
+		}
+		if _, ok := exists[rt][it.ResourceID]; ok {
+			continue
+		}
+		if err := h.Stripe.RemoveSubscriptionItem(rt, it.ResourceID); err != nil {
+			out.Errors = append(out.Errors, billingSyncError{ResourceType: rt, ResourceID: it.ResourceID, Message: err.Error()})
+			continue
+		}
+		out.RemovedOrphans += 1
+	}
+
+	return out, nil
 }
 
 // GetBillingOverview returns the user's billing status, payment method, and all billing items.
@@ -98,6 +242,21 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 			if workspaceID != "" {
 				if err := h.Stripe.EnsureWorkspaceCreditsMigrated(bc, workspaceID); err != nil {
 					log.Printf("Warning: failed to migrate workspace credits to Stripe: %v", err)
+				}
+			}
+
+			// Self-heal legacy "credit-covered" billing items by reconciling all workspace resources into Stripe.
+			if workspaceID != "" {
+				if n, err := models.CountLegacyBillingItems(bc.ID); err == nil && n > 0 {
+					shouldSync := bc.LastBillingSyncAt == nil
+					if bc.LastBillingSyncAt != nil && time.Since(*bc.LastBillingSyncAt) > 30*time.Second {
+						shouldSync = true
+					}
+					if shouldSync {
+						if _, err := h.syncWorkspaceBilling(bc, workspaceID); err != nil {
+							log.Printf("Warning: billing auto-sync failed: %v", err)
+						}
+					}
 				}
 			}
 
@@ -287,119 +446,11 @@ func (h *BillingHandler) SyncBilling(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusInternalServerError, "billing error: "+err.Error())
 		return
 	}
-
-	// Best-effort: ensure existing workspace credits are mirrored into Stripe before billing changes.
-	if err := h.Stripe.EnsureWorkspaceCreditsMigrated(bc, ws.ID); err != nil {
-		log.Printf("Warning: billing sync failed to migrate workspace credits: %v", err)
-	}
-
-	type syncError struct {
-		ResourceType string `json:"resource_type"`
-		ResourceID   string `json:"resource_id"`
-		Message      string `json:"message"`
-	}
-	type syncResult struct {
-		Status         string      `json:"status"`
-		Synced         int         `json:"synced"`
-		RemovedOrphans int         `json:"removed_orphans"`
-		Errors         []syncError `json:"errors"`
-	}
-
-	out := syncResult{Status: "ok", Errors: []syncError{}}
-
-	// 1) Ensure all paid resources have matching Stripe subscription items.
-	svcs, err := models.ListServices(ws.ID)
+	out, err := h.syncWorkspaceBilling(bc, ws.ID)
 	if err != nil {
-		utils.RespondError(w, http.StatusInternalServerError, "failed to list services")
+		utils.RespondError(w, http.StatusInternalServerError, "failed to sync billing")
 		return
 	}
-	dbs, err := models.ListManagedDatabasesByWorkspace(ws.ID)
-	if err != nil {
-		utils.RespondError(w, http.StatusInternalServerError, "failed to list databases")
-		return
-	}
-	kvs, err := models.ListManagedKeyValuesByWorkspace(ws.ID)
-	if err != nil {
-		utils.RespondError(w, http.StatusInternalServerError, "failed to list key value stores")
-		return
-	}
-
-	exists := map[string]map[string]struct{}{
-		"service":  map[string]struct{}{},
-		"database": map[string]struct{}{},
-		"keyvalue": map[string]struct{}{},
-	}
-
-	for _, svc := range svcs {
-		exists["service"][svc.ID] = struct{}{}
-		plan := strings.TrimSpace(svc.Plan)
-		if plan == "" || plan == "free" {
-			// Free resources should not have billing items.
-			if err := h.Stripe.RemoveSubscriptionItem("service", svc.ID); err != nil {
-				out.Errors = append(out.Errors, syncError{ResourceType: "service", ResourceID: svc.ID, Message: err.Error()})
-			}
-			continue
-		}
-		if err := h.Stripe.AddSubscriptionItem(bc, ws.ID, "service", svc.ID, svc.Name, plan); err != nil {
-			out.Errors = append(out.Errors, syncError{ResourceType: "service", ResourceID: svc.ID, Message: err.Error()})
-			continue
-		}
-		out.Synced += 1
-	}
-	for _, db := range dbs {
-		exists["database"][db.ID] = struct{}{}
-		plan := strings.TrimSpace(db.Plan)
-		if plan == "" || plan == "free" {
-			// Free resources should not have billing items.
-			if err := h.Stripe.RemoveSubscriptionItem("database", db.ID); err != nil {
-				out.Errors = append(out.Errors, syncError{ResourceType: "database", ResourceID: db.ID, Message: err.Error()})
-			}
-			continue
-		}
-		if err := h.Stripe.AddSubscriptionItem(bc, ws.ID, "database", db.ID, db.Name, plan); err != nil {
-			out.Errors = append(out.Errors, syncError{ResourceType: "database", ResourceID: db.ID, Message: err.Error()})
-			continue
-		}
-		out.Synced += 1
-	}
-	for _, kv := range kvs {
-		exists["keyvalue"][kv.ID] = struct{}{}
-		plan := strings.TrimSpace(kv.Plan)
-		if plan == "" || plan == "free" {
-			// Free resources should not have billing items.
-			if err := h.Stripe.RemoveSubscriptionItem("keyvalue", kv.ID); err != nil {
-				out.Errors = append(out.Errors, syncError{ResourceType: "keyvalue", ResourceID: kv.ID, Message: err.Error()})
-			}
-			continue
-		}
-		if err := h.Stripe.AddSubscriptionItem(bc, ws.ID, "keyvalue", kv.ID, kv.Name, plan); err != nil {
-			out.Errors = append(out.Errors, syncError{ResourceType: "keyvalue", ResourceID: kv.ID, Message: err.Error()})
-			continue
-		}
-		out.Synced += 1
-	}
-
-	// 2) Remove orphan billing items for resources that no longer exist in this workspace.
-	items, err := models.ListBillingItemsByCustomer(bc.ID)
-	if err != nil {
-		utils.RespondError(w, http.StatusInternalServerError, "failed to list billing items")
-		return
-	}
-	for _, it := range items {
-		rt := strings.TrimSpace(it.ResourceType)
-		if rt != "service" && rt != "database" && rt != "keyvalue" {
-			continue
-		}
-		if _, ok := exists[rt][it.ResourceID]; ok {
-			continue
-		}
-		if err := h.Stripe.RemoveSubscriptionItem(rt, it.ResourceID); err != nil {
-			out.Errors = append(out.Errors, syncError{ResourceType: rt, ResourceID: it.ResourceID, Message: err.Error()})
-			continue
-		}
-		out.RemovedOrphans += 1
-	}
-
 	utils.RespondJSON(w, http.StatusOK, out)
 }
 
