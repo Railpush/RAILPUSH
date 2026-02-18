@@ -649,6 +649,17 @@ func (w *Worker) processJobKubernetes(job DeployJob, appendLog func(string)) {
 		appendLog("==> Build complete")
 	}
 
+	// Run pre-deploy command (e.g. database migrations) before deploying.
+	if cmd := strings.TrimSpace(svc.PreDeployCommand); cmd != "" {
+		appendLog("==> Running pre-deploy command: " + cmd)
+		if err := kd.RunPreDeployJob(deploy.ID, svc, imageTag, env, cmd, appendLog); err != nil {
+			appendLog(fmt.Sprintf("ERROR: Pre-deploy command failed: %v", err))
+			w.failDeploy(deploy, svc)
+			return
+		}
+		appendLog("==> Pre-deploy command complete")
+	}
+
 	_ = models.UpdateDeployStatus(deploy.ID, "deploying")
 	_ = models.UpdateServiceStatus(svc.ID, "deploying", svc.ContainerID, 0)
 	appendLog("==> Applying Kubernetes resources...")
