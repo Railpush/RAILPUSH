@@ -70,10 +70,12 @@ func ensureWritableTmp(pod *corev1.PodSpec, c *corev1.Container) {
 // - capabilities.drop=ALL (container-level)
 // - readOnlyRootFilesystem=true + writable /tmp mount (container/pod-level)
 //
-// strict=false (compat fallback):
+// strict=false (compat fallback — Render-compatible):
 // - seccomp RuntimeDefault (pod-level)
+// - automountServiceAccountToken=false (pod-level)
 // - allowPrivilegeEscalation=false + privileged=false (container-level)
-// - capabilities.drop includes NET_RAW (container-level)
+// - capabilities.drop: NET_RAW, MKNOD, SYS_CHROOT, SETFCAP (container-level)
+// - root filesystem writable, container's default UID (usually 0)
 func applyTenantSecurityContext(pod *corev1.PodSpec, c *corev1.Container, strict bool) {
 	if pod != nil {
 		if pod.SecurityContext == nil {
@@ -130,16 +132,13 @@ func applyTenantSecurityContext(pod *corev1.PodSpec, c *corev1.Container, strict
 		return
 	}
 
-	if c.SecurityContext.Capabilities == nil {
-		c.SecurityContext.Capabilities = &corev1.Capabilities{}
+	// Compat mode: drop dangerous capabilities that web apps never need.
+	c.SecurityContext.Capabilities = &corev1.Capabilities{
+		Drop: []corev1.Capability{"NET_RAW", "MKNOD", "SYS_CHROOT", "SETFCAP"},
 	}
 
-	// Compatibility fallback: keep broad compatibility but at least drop raw-socket capability.
-	drop := corev1.Capability("NET_RAW")
-	for _, existing := range c.SecurityContext.Capabilities.Drop {
-		if existing == drop {
-			return
-		}
+	// Prevent user pods from accessing the Kubernetes API.
+	if pod != nil && pod.AutomountServiceAccountToken == nil {
+		pod.AutomountServiceAccountToken = boolPtr(false)
 	}
-	c.SecurityContext.Capabilities.Drop = append(c.SecurityContext.Capabilities.Drop, drop)
 }
