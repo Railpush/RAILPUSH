@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ExternalLink, RotateCw, GitBranch, ChevronDown, ShieldCheck, Clock, Activity, Box, Settings, Copy, Check } from 'lucide-react';
+import { ExternalLink, RotateCw, GitBranch, ChevronDown, ShieldCheck, Clock, Activity, Box, Settings, Copy, Check, Loader2 } from 'lucide-react';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { LiveTerminal } from '../components/ui/LiveTerminal';
 import { Button } from '../components/ui/Button';
@@ -31,8 +31,9 @@ export function ServiceDetail() {
   const [service, setService] = useState<Service | null>(null);
   const [deployList, setDeployList] = useState<Deploy[]>([]);
   const [loading, setLoading] = useState(true);
+  const [actionInProgress, setActionInProgress] = useState<string | null>(null);
 
-  useEffect(() => {
+  const refresh = () => {
     if (!serviceId) return;
     Promise.all([
       servicesApi.get(serviceId).catch(() => null),
@@ -42,7 +43,9 @@ export function ServiceDetail() {
       setDeployList(d);
       setLoading(false);
     });
-  }, [serviceId]);
+  };
+
+  useEffect(() => { refresh(); }, [serviceId]);
 
   if (loading) {
     return (
@@ -63,11 +66,20 @@ export function ServiceDetail() {
   const latestDeploy = deployList[0];
   const serviceUrl = buildDefaultServiceUrl(service);
 
+  const runAction = async (label: string, action: () => Promise<unknown>) => {
+    setActionInProgress(label);
+    try {
+      await action();
+      setTimeout(refresh, 1000);
+    } catch { /* ignore */ }
+    setActionInProgress(null);
+  };
+
   const deployActions = [
-    { label: 'Deploy latest commit', onClick: () => deploysApi.trigger(service.id) },
-    { label: 'Clear build cache & deploy', onClick: () => deploysApi.trigger(service.id, { clearCache: true }) },
+    { label: 'Deploy latest commit', onClick: () => runAction('Deploying…', () => deploysApi.trigger(service.id)) },
+    { label: 'Clear build cache & deploy', onClick: () => runAction('Deploying…', () => deploysApi.trigger(service.id, { clearCache: true })) },
     { divider: true, label: '', onClick: () => { } },
-    { label: 'Restart service', icon: <RotateCw className="w-4 h-4" />, onClick: () => servicesApi.restart(service.id) },
+    { label: 'Restart service', icon: <RotateCw className="w-4 h-4" />, onClick: () => runAction('Restarting…', () => servicesApi.restart(service.id)) },
   ];
 
   return (
@@ -113,16 +125,23 @@ export function ServiceDetail() {
           </div>
 
           <div className="flex items-center gap-2">
-            <Dropdown
-              trigger={
-                <Button variant="primary" className="shadow-lg shadow-brand/20">
-                  Deploy
-                  <ChevronDown className="w-4 h-4 ml-1" />
-                </Button>
-              }
-              items={deployActions}
-              align="right"
-            />
+            {actionInProgress ? (
+              <Button variant="primary" className="shadow-lg shadow-brand/20 pointer-events-none opacity-80">
+                <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                {actionInProgress}
+              </Button>
+            ) : (
+              <Dropdown
+                trigger={
+                  <Button variant="primary" className="shadow-lg shadow-brand/20">
+                    Deploy
+                    <ChevronDown className="w-4 h-4 ml-1" />
+                  </Button>
+                }
+                items={deployActions}
+                align="right"
+              />
+            )}
           </div>
         </div>
 
