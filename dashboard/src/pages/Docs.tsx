@@ -97,7 +97,7 @@ const sections = [
   { id: 'cron-jobs', label: 'Cron Jobs', icon: Clock },
   { id: 'disks', label: 'Persistent Disks', icon: HardDrive },
   { id: 'scaling', label: 'Scaling', icon: Cpu },
-  { id: 'cli', label: 'CLI & API', icon: Terminal },
+  { id: 'cli', label: 'REST API', icon: Terminal },
 ];
 
 // ─── Docs Component ───────────────────────────────────────────────
@@ -281,7 +281,7 @@ export function Docs() {
                   { type: 'Private Service', tag: 'pserv', desc: 'Internal services only accessible within your private network. No public URL.', color: 'text-brand-purple' },
                   { type: 'Background Worker', tag: 'worker', desc: 'Long-running processes without HTTP endpoints. Queue consumers, data processors, etc.', color: 'text-status-warning' },
                   { type: 'Cron Job', tag: 'cron', desc: 'Scheduled tasks that run on a cron expression. Spins up, runs, and shuts down.', color: 'text-status-info' },
-                  { type: 'Static Site', tag: 'static', desc: 'Pre-rendered sites served from a CDN. Build once, serve globally.', color: 'text-status-success' },
+                  { type: 'Static Site', tag: 'static', desc: 'Pre-rendered sites served via nginx. Build once, deploy instantly.', color: 'text-status-success' },
                 ].map(s => (
                   <div key={s.tag} className="flex items-start gap-4 p-4 rounded-xl border border-border-default bg-surface-secondary/30">
                     <code className={`px-2 py-0.5 rounded text-xs font-mono font-semibold bg-surface-tertiary ${s.color}`}>{s.tag}</code>
@@ -670,7 +670,7 @@ services:
               <div className="space-y-3 text-sm text-content-secondary mb-6">
                 <div className="flex gap-3"><span className="w-6 h-6 rounded-full bg-brand/10 text-brand text-xs font-bold flex items-center justify-center shrink-0">1</span> Add your domain in the service's Networking tab</div>
                 <div className="flex gap-3"><span className="w-6 h-6 rounded-full bg-brand/10 text-brand text-xs font-bold flex items-center justify-center shrink-0">2</span> Point your DNS CNAME record to your service's <code className="text-xs bg-surface-tertiary px-1 rounded">.railpush.com</code> subdomain</div>
-                <div className="flex gap-3"><span className="w-6 h-6 rounded-full bg-brand/10 text-brand text-xs font-bold flex items-center justify-center shrink-0">3</span> TLS certificate is provisioned automatically via Let's Encrypt</div>
+                <div className="flex gap-3"><span className="w-6 h-6 rounded-full bg-brand/10 text-brand text-xs font-bold flex items-center justify-center shrink-0">3</span> TLS certificate is provisioned automatically</div>
               </div>
 
               <h3 className="text-lg font-semibold mb-3">Blueprint Domains</h3>
@@ -887,7 +887,7 @@ services:
     numInstances: 3`} />
             </section>
 
-            {/* ── CLI & API ───────────────────────────────── */}
+            {/* ── REST API ────────────────────────────────── */}
             <section id="cli" className="scroll-mt-20 mb-20">
               <div className="flex items-center gap-3 mb-2">
                 <div className="w-10 h-10 rounded-xl bg-brand/10 flex items-center justify-center">

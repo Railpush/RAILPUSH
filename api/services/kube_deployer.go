@@ -423,6 +423,56 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 		container.Ports = []corev1.ContainerPort{{Name: "http", ContainerPort: port}}
 	}
 
+	// Persistent disk support: look up attached disk and create PVC + volume mount.
+	var podVolumes []corev1.Volume
+	disk, _ := models.GetDiskByService(svc.ID)
+	if disk != nil && strings.TrimSpace(disk.MountPath) != "" {
+		pvcName := name + "-disk"
+		sizeStr := fmt.Sprintf("%dGi", disk.SizeGB)
+		if disk.SizeGB <= 0 {
+			sizeStr = "1Gi"
+		}
+		storageClassName := "local-path"
+		pvc := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      pvcName,
+				Namespace: ns,
+				Labels:    labels,
+			},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				StorageClassName: &storageClassName,
+				Resources: corev1.VolumeResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceStorage: resource.MustParse(sizeStr),
+					},
+				},
+			},
+		}
+		if existing, err := k.Client.CoreV1().PersistentVolumeClaims(ns).Get(ctx, pvcName, metav1.GetOptions{}); err == nil && existing != nil {
+			// PVC already exists — leave it untouched (resize is not supported in most storage classes).
+			log.Printf("kube deploy: PVC %s already exists for service %s", pvcName, svc.Name)
+		} else if apierrors.IsNotFound(err) {
+			if _, err := k.Client.CoreV1().PersistentVolumeClaims(ns).Create(ctx, pvc, metav1.CreateOptions{}); err != nil {
+				return "", fmt.Errorf("create disk PVC: %w", err)
+			}
+			log.Printf("kube deploy: created PVC %s (%s) for service %s", pvcName, sizeStr, svc.Name)
+		} else if err != nil {
+			return "", fmt.Errorf("get disk PVC: %w", err)
+		}
+
+		podVolumes = append(podVolumes, corev1.Volume{
+			Name: "disk",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: pvcName},
+			},
+		})
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name:      "disk",
+			MountPath: disk.MountPath,
+		})
+	}
+
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -440,6 +490,7 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 				Spec: corev1.PodSpec{
 					PriorityClassName:            "railpush-critical",
 					TerminationGracePeriodSeconds: &terminationGrace,
+					Volumes:                       podVolumes,
 					Containers:                    []corev1.Container{container},
 				},
 			},
