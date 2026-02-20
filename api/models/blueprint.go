@@ -17,11 +17,12 @@ type Blueprint struct {
 	FilePath       string     `json:"file_path"`
 	// GeneratedYAML stores an AI-generated blueprint (e.g. when railpush.yaml is missing in the repo).
 	// It is intentionally not returned in the public API by default to avoid large payloads.
-	GeneratedYAML  string     `json:"-"`
-	AIIgnoreRepoYAML bool     `json:"ai_ignore_repo_yaml"`
-	LastSyncedAt   *time.Time `json:"last_synced_at"`
-	LastSyncStatus string     `json:"last_sync_status"`
-	CreatedAt      time.Time  `json:"created_at"`
+	GeneratedYAML    string     `json:"-"`
+	AIIgnoreRepoYAML bool       `json:"ai_ignore_repo_yaml"`
+	LastSyncedAt     *time.Time `json:"last_synced_at"`
+	LastSyncStatus   string     `json:"last_sync_status"`
+	SyncLog          string     `json:"sync_log,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
 }
 
 type BlueprintResource struct {
@@ -38,13 +39,13 @@ func CreateBlueprint(b *Blueprint) error {
 	).Scan(&b.ID, &b.CreatedAt)
 }
 
-const blueprintSelectCols = `id, workspace_id, name, COALESCE(repo_url,''), COALESCE(branch,'main'), COALESCE(file_path,'railpush.yaml'), COALESCE(ai_ignore_repo_yaml,false), last_synced_at, COALESCE(last_sync_status,''), created_at`
+const blueprintSelectCols = `id, workspace_id, name, COALESCE(repo_url,''), COALESCE(branch,'main'), COALESCE(file_path,'railpush.yaml'), COALESCE(ai_ignore_repo_yaml,false), last_synced_at, COALESCE(last_sync_status,''), COALESCE(sync_log,''), created_at`
 const blueprintSelectColsWithGenerated = blueprintSelectCols + `, COALESCE(generated_yaml,'')`
 
 func GetBlueprint(id string) (*Blueprint, error) {
 	b := &Blueprint{}
 	err := database.DB.QueryRow("SELECT "+blueprintSelectColsWithGenerated+" FROM blueprints WHERE id=$1", id).Scan(
-		&b.ID, &b.WorkspaceID, &b.Name, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.CreatedAt, &b.GeneratedYAML)
+		&b.ID, &b.WorkspaceID, &b.Name, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.SyncLog, &b.CreatedAt, &b.GeneratedYAML)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -60,7 +61,7 @@ func ListBlueprints() ([]Blueprint, error) {
 	var bps []Blueprint
 	for rows.Next() {
 		var b Blueprint
-		if err := rows.Scan(&b.ID, &b.WorkspaceID, &b.Name, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.CreatedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.WorkspaceID, &b.Name, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.SyncLog, &b.CreatedAt); err != nil {
 			return nil, err
 		}
 		bps = append(bps, b)
@@ -77,7 +78,7 @@ func ListBlueprintsByWorkspace(workspaceID string) ([]Blueprint, error) {
 	var bps []Blueprint
 	for rows.Next() {
 		var b Blueprint
-		if err := rows.Scan(&b.ID, &b.WorkspaceID, &b.Name, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.CreatedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.WorkspaceID, &b.Name, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.SyncLog, &b.CreatedAt); err != nil {
 			return nil, err
 		}
 		bps = append(bps, b)
@@ -92,6 +93,16 @@ func DeleteBlueprint(id string) error {
 
 func UpdateBlueprintSync(id, status string) error {
 	_, err := database.DB.Exec("UPDATE blueprints SET last_synced_at=NOW(), last_sync_status=$1 WHERE id=$2", status, id)
+	return err
+}
+
+func UpdateBlueprintSyncLog(id, syncLog string) error {
+	_, err := database.DB.Exec("UPDATE blueprints SET sync_log=$1 WHERE id=$2", syncLog, id)
+	return err
+}
+
+func UpdateBlueprintSyncWithLog(id, status, syncLog string) error {
+	_, err := database.DB.Exec("UPDATE blueprints SET last_synced_at=NOW(), last_sync_status=$1, sync_log=$2 WHERE id=$3", status, syncLog, id)
 	return err
 }
 

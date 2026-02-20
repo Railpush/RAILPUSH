@@ -182,6 +182,7 @@ export interface Blueprint {
   ai_ignore_repo_yaml?: boolean;
   last_synced_at: string;
   last_sync_status: string;
+  sync_log?: string;
   created_at: string;
   resources?: BlueprintResource[];
 }

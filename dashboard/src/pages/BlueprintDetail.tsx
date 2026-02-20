@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, RefreshCw, GitBranch, FileText, Database, Globe, Key, Trash2, Wand2, Loader2 } from 'lucide-react';
+import { ArrowLeft, RefreshCw, GitBranch, FileText, Database, Globe, Key, Trash2, Wand2, Loader2, ChevronDown, ChevronRight, ScrollText } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { StatusBadge } from '../components/ui/StatusBadge';
@@ -64,6 +64,29 @@ interface AIFixState {
   current_attempt?: number;
   max_attempts?: number;
   last_ai_summary?: string;
+}
+
+function SyncLogSection({ log, failed }: { log: string; failed: boolean }) {
+  const [open, setOpen] = useState(failed);
+  return (
+    <div className="mb-4">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-2 text-sm font-medium text-content-secondary hover:text-content-primary transition-colors w-full text-left py-2"
+      >
+        {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        <ScrollText className="w-4 h-4" />
+        Sync Log
+      </button>
+      {open && (
+        <Card padding="md" className={failed ? 'border-status-error/20' : ''}>
+          <pre className="text-xs text-content-secondary font-mono whitespace-pre-wrap max-h-80 overflow-y-auto leading-relaxed">
+            {log.trim()}
+          </pre>
+        </Card>
+      )}
+    </div>
+  );
 }
 
 export function BlueprintDetail() {
@@ -323,6 +346,11 @@ export function BlueprintDetail() {
           </div>
         </div>
       </Card>
+
+      {/* Sync Log */}
+      {bp.sync_log && (
+        <SyncLogSection log={bp.sync_log} failed={!!isFailed} />
+      )}
 
       {/* Resources */}
       <h2 className="text-sm font-semibold text-content-primary mt-6 mb-3">

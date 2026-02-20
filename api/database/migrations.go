@@ -366,4 +366,7 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 	// item gets a row here so the hourly reporter knows where to send usage records.
 	`ALTER TABLE billing_items ADD COLUMN IF NOT EXISTS is_metered BOOLEAN NOT NULL DEFAULT FALSE`,
 	`ALTER TABLE billing_items ADD COLUMN IF NOT EXISTS last_usage_reported_at TIMESTAMPTZ`,
+
+	// Sync log: stores detailed step-by-step sync output so users can see why sync failed.
+	`ALTER TABLE blueprints ADD COLUMN IF NOT EXISTS sync_log TEXT`,
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/railpush/api/config"
@@ -324,7 +325,7 @@ func (h *BlueprintHandler) SyncBlueprint(w http.ResponseWriter, r *http.Request)
 		utils.RespondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
-	if err := models.UpdateBlueprintSync(id, "syncing"); err != nil {
+	if err := models.UpdateBlueprintSyncWithLog(id, "syncing", ""); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to start sync")
 		return
 	}
@@ -673,6 +674,12 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	}
 
 	st := syncState{}
+	var syncLog strings.Builder
+	logLine := func(msg string) {
+		syncLog.WriteString(time.Now().UTC().Format("15:04:05") + "  " + msg + "\n")
+	}
+	logLine("Starting sync for blueprint " + bp.Name)
+
 	var (
 		success bool
 		failMsg string
@@ -682,6 +689,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			return
 		}
 		failMsg = msg
+		logLine("ERROR: " + msg)
 	}
 	// warnBilling logs billing errors but does NOT abort the sync.
 	// Blueprint sync should never fail because of a billing issue — the platform
@@ -850,6 +858,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			if failMsg == "" {
 				failMsg = "internal error"
 			}
+			logLine("PANIC: " + fmt.Sprintf("%v", r))
 		}
 		if success {
 			return
@@ -858,8 +867,10 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			failMsg = "internal error"
 		}
 		log.Printf("Blueprint sync failed for %s (%s): %s", bp.Name, bp.ID, failMsg)
+		logLine("Sync failed. Rolling back created resources...")
 		rollback()
-		_ = models.UpdateBlueprintSync(bp.ID, "failed: "+failMsg)
+		logLine("Rollback complete.")
+		_ = models.UpdateBlueprintSyncWithLog(bp.ID, "failed: "+failMsg, syncLog.String())
 	}()
 
 	// Clone repo to temp dir
@@ -877,13 +888,16 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		fail("worker not initialized")
 		return
 	}
+	logLine("Cloning repository " + bp.RepoURL + " (branch: " + bp.Branch + ")...")
 	if err := h.Worker.Builder.CloneRepo(bp.RepoURL, bp.Branch, tmpDir, ghToken); err != nil {
 		fail("clone failed — check repository URL and branch")
 		return
 	}
+	logLine("Repository cloned successfully.")
 
 	// Read railpush.yaml (preferred) or render.yaml (fallback).
 	// If neither exists, use the stored generated YAML if present, otherwise auto-generate via OpenRouter.
+	logLine("Looking for " + bp.FilePath + " in repository...")
 	yamlPath := filepath.Join(tmpDir, bp.FilePath)
 	data, err := os.ReadFile(yamlPath)
 	repoFileExists := err == nil
@@ -904,6 +918,10 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	}
 	specGeneratedByAI := false
 
+	if repoFileExists {
+		logLine("Found " + bp.FilePath + " in repository.")
+	}
+
 	// Prefer the stored generated blueprint when the repo has no yaml.
 	if !repoFileExists && len(data) == 0 && strings.TrimSpace(bp.GeneratedYAML) != "" {
 		data = []byte(bp.GeneratedYAML)
@@ -920,6 +938,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		aiShouldGenerate = true
 	}
 	if aiShouldGenerate {
+		logLine("No blueprint file found. Attempting to generate via Blueprint AI...")
 		ai := services.NewBlueprintAIGenerator(h.Config)
 		if !ai.Available() {
 			if !repoFileExists && len(data) == 0 {
@@ -960,7 +979,8 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 					} else {
 						bp.GeneratedYAML = generated
 					}
-					log.Printf("Blueprint sync: generated %s via OpenRouter for blueprint=%s", bp.FilePath, bp.ID)
+					logLine("Blueprint AI generated " + bp.FilePath + " successfully.")
+				log.Printf("Blueprint sync: generated %s via OpenRouter for blueprint=%s", bp.FilePath, bp.ID)
 				}
 			}
 		}
@@ -974,9 +994,10 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		return
 	}
 
+	logLine("Parsing YAML...")
 	var spec RenderYAML
 	if err := yaml.Unmarshal(data, &spec); err != nil {
-		fail("invalid YAML syntax in " + bp.FilePath)
+		fail("invalid YAML syntax in " + bp.FilePath + ": " + err.Error())
 		return
 	}
 
@@ -994,6 +1015,10 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		fail("no services, databases, or key-value stores defined in " + bp.FilePath)
 		return
 	}
+
+	logLine(fmt.Sprintf("Found %d service(s), %d database(s), %d key-value store(s), %d env group(s) in blueprint.",
+		len(spec.Services), len(spec.Databases), len(spec.KeyValues), len(spec.EnvVarGroups)))
+	logLine("Running preflight validation...")
 
 	// --- Preflight validation (avoid partial creates on obvious conflicts) ---
 	dbSeen := map[string]struct{}{}
@@ -1138,6 +1163,8 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			}
 		}
 	}
+
+	logLine("Preflight validation passed.")
 
 	// --- Phase 1: Create all databases ---
 	dbInfoMap := map[string]*dbConnInfo{}
@@ -1693,7 +1720,12 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		h.Worker.Enqueue(job)
 	}
 
+	if len(deployIDs) > 0 {
+		logLine(fmt.Sprintf("Enqueued %d deploy(s).", len(deployIDs)))
+	}
+	logLine("Sync completed successfully.")
+
 	success = true
-	_ = models.UpdateBlueprintSync(bp.ID, "synced")
+	_ = models.UpdateBlueprintSyncWithLog(bp.ID, "synced", syncLog.String())
 	log.Printf("Blueprint sync completed for %s", bp.Name)
 }
