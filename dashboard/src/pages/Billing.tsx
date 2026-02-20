@@ -150,7 +150,22 @@ function formatCurrency(cents: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 }
 
-
+function formatCreditReason(reason: string | null | undefined): string {
+  if (!reason) return 'Credit adjustment';
+  const r = reason.trim();
+  // Strip raw UUIDs and internal billing prefixes to make it user-friendly.
+  // "billing: service menthor-api (uuid) plan=starter" -> "Service: menthor-api (Starter)"
+  const billingMatch = r.match(/^billing:\s*(service|database|keyvalue)\s+(\S+)\s*\([^)]*\)\s*plan=(\S+)/i);
+  if (billingMatch) {
+    const kind = billingMatch[1].toLowerCase() === 'keyvalue' ? 'Key Value' : billingMatch[1].charAt(0).toUpperCase() + billingMatch[1].slice(1);
+    const name = billingMatch[2];
+    const plan = billingMatch[3].charAt(0).toUpperCase() + billingMatch[3].slice(1);
+    return `${kind}: ${name} (${plan})`;
+  }
+  // Strip any leftover UUIDs: (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+  const cleaned = r.replace(/\s*\([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\)/gi, '');
+  return cleaned || 'Credit adjustment';
+}
 
 function usagePercent(used: number, included: number) {
   if (included <= 0) return 0;
@@ -778,30 +793,39 @@ export function Billing() {
         {(overview?.credit_ledger ?? []).length > 0 && (
           <SectionFrame id="credit-history" title="Credit History">
             <div className="space-y-2">
-              <p className="text-sm text-content-secondary mb-4">Transaction history for your credit balance.</p>
-              <div className="border border-border-default/50 rounded-lg overflow-hidden">
-                <div className="grid grid-cols-12 px-4 py-2 text-[11px] uppercase tracking-[0.12em] text-content-tertiary border-b border-border-default/60 bg-surface-tertiary/20">
-                  <div className="col-span-3">Date</div>
-                  <div className="col-span-3 text-right">Amount</div>
-                  <div className="col-span-6">Reason</div>
-                </div>
-                {(overview?.credit_ledger ?? []).map((entry) => (
-                  <div key={entry.id} className="grid grid-cols-12 px-4 py-3 border-b border-border-default/10 last:border-0 items-center">
-                    <div className="col-span-3 text-sm text-content-secondary">
-                      {new Date(entry.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
-                    </div>
-                    <div className={cn(
-                      'col-span-3 text-sm font-mono text-right',
-                      entry.amount_cents > 0 ? 'text-emerald-300' : 'text-amber-300',
-                    )}>
-                      {entry.amount_cents > 0 ? '+' : ''}{formatCurrency(Math.abs(entry.amount_cents))}
-                    </div>
-                    <div className="col-span-6 text-sm text-content-tertiary truncate">
-                      {entry.reason || 'Credit adjustment'}
-                    </div>
-                  </div>
-                ))}
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-sm text-content-secondary">Transaction history for your credit balance.</p>
+                <span className="text-xs text-content-tertiary">{(overview?.credit_ledger ?? []).length} transactions</span>
               </div>
+              <details className="group">
+                <summary className="cursor-pointer select-none text-sm text-content-secondary hover:text-content-primary transition-colors flex items-center gap-1.5">
+                  <ChevronRight className="w-3.5 h-3.5 group-open:rotate-90 transition-transform" />
+                  View transactions
+                </summary>
+                <div className="border border-border-default/50 rounded-lg overflow-hidden mt-3">
+                  <div className="grid grid-cols-12 px-4 py-2 text-[11px] uppercase tracking-[0.12em] text-content-tertiary border-b border-border-default/60 bg-surface-tertiary/20">
+                    <div className="col-span-3">Date</div>
+                    <div className="col-span-3 text-right pr-4">Amount</div>
+                    <div className="col-span-6 pl-2">Reason</div>
+                  </div>
+                  {(overview?.credit_ledger ?? []).map((entry) => (
+                    <div key={entry.id} className="grid grid-cols-12 px-4 py-2.5 border-b border-border-default/10 last:border-0 items-center">
+                      <div className="col-span-3 text-xs text-content-secondary">
+                        {new Date(entry.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                      </div>
+                      <div className={cn(
+                        'col-span-3 text-xs font-mono text-right pr-4',
+                        entry.amount_cents > 0 ? 'text-emerald-400' : 'text-amber-300',
+                      )}>
+                        {entry.amount_cents > 0 ? '+' : ''}{formatCurrency(Math.abs(entry.amount_cents))}
+                      </div>
+                      <div className="col-span-6 text-xs text-content-tertiary truncate pl-2">
+                        {formatCreditReason(entry.reason)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </details>
             </div>
           </SectionFrame>
         )}
