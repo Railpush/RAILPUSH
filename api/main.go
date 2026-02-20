@@ -102,6 +102,23 @@ func main() {
 		_, _ = w.Write([]byte("ready"))
 	}).Methods("GET")
 
+	// Serve CLI binaries for download at /dl/railpush-{os}-{arch}
+	r.PathPrefix("/dl/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimPrefix(r.URL.Path, "/dl/")
+		if name == "" || strings.Contains(name, "/") || strings.Contains(name, "..") {
+			http.NotFound(w, r)
+			return
+		}
+		path := "./cli/" + name
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Disposition", "attachment; filename="+name)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		http.ServeFile(w, r, path)
+	}).Methods("GET")
+
 	r.PathPrefix("/").HandlerFunc(spaHandler)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

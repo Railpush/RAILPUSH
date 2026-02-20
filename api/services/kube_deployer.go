@@ -635,16 +635,27 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 		if err := k.ensureIngressHostAvailable(ctx, ns, name, host); err != nil {
 			return "", err
 		}
+		ingressAnnotations := map[string]string{
+			"nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
+			"nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
+			"nginx.ingress.kubernetes.io/proxy-body-size":    "50m",
+		}
+		// Static sites: add CDN-friendly headers (enable upstream caching, CORS for fonts/assets)
+		if serviceType == "static" {
+			ingressAnnotations["nginx.ingress.kubernetes.io/enable-cors"] = "true"
+			ingressAnnotations["nginx.ingress.kubernetes.io/cors-allow-origin"] = "*"
+			ingressAnnotations["nginx.ingress.kubernetes.io/cors-allow-methods"] = "GET, HEAD, OPTIONS"
+			ingressAnnotations["nginx.ingress.kubernetes.io/configuration-snippet"] = `more_set_headers "Vary: Accept-Encoding";`
+			// Tighter timeouts for static assets
+			ingressAnnotations["nginx.ingress.kubernetes.io/proxy-read-timeout"] = "60"
+			ingressAnnotations["nginx.ingress.kubernetes.io/proxy-send-timeout"] = "60"
+		}
 		ing := &networkingv1.Ingress{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
 				Namespace: ns,
 				Labels:    labels,
-				Annotations: map[string]string{
-					"nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
-					"nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
-					"nginx.ingress.kubernetes.io/proxy-body-size":    "50m",
-				},
+				Annotations: ingressAnnotations,
 			},
 			Spec: networkingv1.IngressSpec{
 				IngressClassName: &k.Config.Kubernetes.IngressClass,

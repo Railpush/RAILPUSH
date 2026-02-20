@@ -97,7 +97,7 @@ const sections = [
   { id: 'cron-jobs', label: 'Cron Jobs', icon: Clock },
   { id: 'disks', label: 'Persistent Disks', icon: HardDrive },
   { id: 'scaling', label: 'Scaling', icon: Cpu },
-  { id: 'cli', label: 'REST API', icon: Terminal },
+  { id: 'cli', label: 'CLI & API', icon: Terminal },
 ];
 
 // ─── Docs Component ───────────────────────────────────────────────
@@ -281,7 +281,7 @@ export function Docs() {
                   { type: 'Private Service', tag: 'pserv', desc: 'Internal services only accessible within your private network. No public URL.', color: 'text-brand-purple' },
                   { type: 'Background Worker', tag: 'worker', desc: 'Long-running processes without HTTP endpoints. Queue consumers, data processors, etc.', color: 'text-status-warning' },
                   { type: 'Cron Job', tag: 'cron', desc: 'Scheduled tasks that run on a cron expression. Spins up, runs, and shuts down.', color: 'text-status-info' },
-                  { type: 'Static Site', tag: 'static', desc: 'Pre-rendered sites served via nginx. Build once, deploy instantly.', color: 'text-status-success' },
+                  { type: 'Static Site', tag: 'static', desc: 'Pre-rendered sites served via nginx with CDN-optimized caching headers. Build once, deploy instantly.', color: 'text-status-success' },
                 ].map(s => (
                   <div key={s.tag} className="flex items-start gap-4 p-4 rounded-xl border border-border-default bg-surface-secondary/30">
                     <code className={`px-2 py-0.5 rounded text-xs font-mono font-semibold bg-surface-tertiary ${s.color}`}>{s.tag}</code>
@@ -670,7 +670,7 @@ services:
               <div className="space-y-3 text-sm text-content-secondary mb-6">
                 <div className="flex gap-3"><span className="w-6 h-6 rounded-full bg-brand/10 text-brand text-xs font-bold flex items-center justify-center shrink-0">1</span> Add your domain in the service's Networking tab</div>
                 <div className="flex gap-3"><span className="w-6 h-6 rounded-full bg-brand/10 text-brand text-xs font-bold flex items-center justify-center shrink-0">2</span> Point your DNS CNAME record to your service's <code className="text-xs bg-surface-tertiary px-1 rounded">.railpush.com</code> subdomain</div>
-                <div className="flex gap-3"><span className="w-6 h-6 rounded-full bg-brand/10 text-brand text-xs font-bold flex items-center justify-center shrink-0">3</span> TLS certificate is provisioned automatically</div>
+                <div className="flex gap-3"><span className="w-6 h-6 rounded-full bg-brand/10 text-brand text-xs font-bold flex items-center justify-center shrink-0">3</span> TLS certificate is provisioned automatically via Let's Encrypt</div>
               </div>
 
               <h3 className="text-lg font-semibold mb-3">Blueprint Domains</h3>
@@ -764,7 +764,7 @@ services:
                 <h2 className="text-2xl font-bold tracking-tight">Static Sites</h2>
               </div>
               <p className="text-content-secondary text-base leading-relaxed mt-4 mb-6">
-                Deploy static sites, SPAs, and JAMstack applications. RailPush runs your build command, then serves the output directory.
+                Deploy static sites, SPAs, and JAMstack applications. RailPush runs your build command, then serves the output directory with CDN-optimized caching — hashed assets are served with immutable 1-year cache headers, while HTML is always fresh. CORS headers are enabled for cross-origin asset loading.
               </p>
               <CodeBlock filename="railpush.yaml" code={`services:
   - type: static
@@ -887,15 +887,100 @@ services:
     numInstances: 3`} />
             </section>
 
-            {/* ── REST API ────────────────────────────────── */}
+            {/* ── CLI & API ────────────────────────────────── */}
             <section id="cli" className="scroll-mt-20 mb-20">
               <div className="flex items-center gap-3 mb-2">
                 <div className="w-10 h-10 rounded-xl bg-brand/10 flex items-center justify-center">
                   <Terminal className="w-5 h-5 text-brand" />
                 </div>
-                <h2 className="text-2xl font-bold tracking-tight">API Reference</h2>
+                <h2 className="text-2xl font-bold tracking-tight">CLI & API Reference</h2>
               </div>
-              <p className="text-content-secondary text-base leading-relaxed mt-4 mb-6">
+
+              {/* ── CLI ── */}
+              <h3 className="text-lg font-semibold mt-6 mb-3">CLI Installation</h3>
+              <p className="text-content-secondary text-base leading-relaxed mb-4">
+                The RailPush CLI lets you manage services, deployments, databases, and more from your terminal.
+              </p>
+              <CodeBlock language="bash" filename="terminal" code={`# macOS (Apple Silicon)
+curl -fsSL https://railpush.com/dl/railpush-darwin-arm64 -o railpush && chmod +x railpush && sudo mv railpush /usr/local/bin/
+
+# macOS (Intel)
+curl -fsSL https://railpush.com/dl/railpush-darwin-amd64 -o railpush && chmod +x railpush && sudo mv railpush /usr/local/bin/
+
+# Linux (amd64)
+curl -fsSL https://railpush.com/dl/railpush-linux-amd64 -o railpush && chmod +x railpush && sudo mv railpush /usr/local/bin/
+
+# Linux (arm64)
+curl -fsSL https://railpush.com/dl/railpush-linux-arm64 -o railpush && chmod +x railpush && sudo mv railpush /usr/local/bin/`} />
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">CLI Quick Start</h3>
+              <CodeBlock language="bash" filename="terminal" code={`# Login
+railpush login --host railpush.com
+
+# List your services
+railpush services list
+
+# Trigger a deploy
+railpush deploy <service-id>
+
+# View logs
+railpush logs <service-id> --tail 100
+
+# Manage environment variables
+railpush env list <service-id>
+railpush env set <service-id> DATABASE_URL=postgres://... NODE_ENV=production
+
+# Blueprint operations
+railpush blueprints list
+railpush blueprints sync <blueprint-id>
+
+# Database management
+railpush databases list
+railpush databases create --name mydb --engine postgresql --plan starter`} />
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">CLI Commands</h3>
+              <div className="overflow-x-auto mb-8">
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="border-b border-border-default">
+                      <th className="text-left py-2 pr-4 font-semibold">Command</th>
+                      <th className="text-left py-2 font-semibold">Description</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-content-secondary">
+                    {[
+                      ['railpush login', 'Authenticate and store credentials'],
+                      ['railpush logout', 'Remove stored credentials'],
+                      ['railpush whoami', 'Show current user info'],
+                      ['railpush services list', 'List all services'],
+                      ['railpush services get <id>', 'Show service details (JSON)'],
+                      ['railpush services create', 'Create a service (--name, --type, --repo)'],
+                      ['railpush services delete <id>', 'Delete a service'],
+                      ['railpush services restart <id>', 'Restart a running service'],
+                      ['railpush deploy <service-id>', 'Trigger a new deploy'],
+                      ['railpush deploys list <service-id>', 'List deploy history'],
+                      ['railpush logs <service-id>', 'View service logs (--tail N)'],
+                      ['railpush env list <service-id>', 'List environment variables'],
+                      ['railpush env set <service-id> K=V', 'Set environment variables'],
+                      ['railpush blueprints list', 'List all blueprints'],
+                      ['railpush blueprints sync <id>', 'Trigger blueprint sync'],
+                      ['railpush databases list', 'List all databases'],
+                      ['railpush databases create', 'Create a database (--name, --plan)'],
+                      ['railpush domains list <service-id>', 'List custom domains'],
+                      ['railpush domains add <sid> <domain>', 'Add a custom domain'],
+                    ].map(([cmd, desc]) => (
+                      <tr key={cmd} className="border-b border-border-subtle">
+                        <td className="py-2 pr-4 font-mono text-xs text-brand">{cmd}</td>
+                        <td className="py-2 font-sans text-sm">{desc}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* ── REST API ── */}
+              <h3 className="text-lg font-semibold mt-8 mb-3">REST API</h3>
+              <p className="text-content-secondary text-base leading-relaxed mb-6">
                 The RailPush API is a RESTful JSON API. All endpoints require a Bearer token from <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-content-primary text-xs font-mono">/api/v1/auth/login</code>.
               </p>
 
@@ -918,6 +1003,10 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'PATCH', path: '/api/v1/services/:id', desc: 'Update a service' },
                   { method: 'DELETE', path: '/api/v1/services/:id', desc: 'Delete a service' },
                   { method: 'POST', path: '/api/v1/services/:id/deploys', desc: 'Trigger a deploy' },
+                  { method: 'GET', path: '/api/v1/services/:id/logs', desc: 'Query service logs' },
+                  { method: 'GET', path: '/api/v1/services/:id/env-vars', desc: 'List env vars' },
+                  { method: 'PUT', path: '/api/v1/services/:id/env-vars', desc: 'Bulk update env vars' },
+                  { method: 'POST', path: '/api/v1/services/:id/custom-domains', desc: 'Add custom domain' },
                   { method: 'GET', path: '/api/v1/blueprints', desc: 'List blueprints' },
                   { method: 'POST', path: '/api/v1/blueprints', desc: 'Create a blueprint (auto-syncs)' },
                   { method: 'POST', path: '/api/v1/blueprints/:id/sync', desc: 'Trigger blueprint sync' },
@@ -928,6 +1017,7 @@ curl https://railpush.com/api/v1/services \\
                     <code className={`px-2 py-0.5 rounded text-xs font-mono font-bold ${
                       e.method === 'GET' ? 'bg-status-success/10 text-status-success' :
                       e.method === 'POST' ? 'bg-brand/10 text-brand' :
+                      e.method === 'PUT' ? 'bg-status-warning/10 text-status-warning' :
                       e.method === 'PATCH' ? 'bg-status-warning/10 text-status-warning' :
                       'bg-status-error/10 text-status-error'
                     }`}>{e.method}</code>
