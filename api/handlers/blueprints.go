@@ -949,20 +949,23 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			generated, genErr := ai.GenerateRenderYAMLFromRepo(tmpDir, bp.RepoURL, bp.Branch)
 			if genErr != nil {
 				log.Printf("Blueprint sync: OpenRouter generation failed blueprint=%s err=%v", bp.ID, genErr)
+				logLine("Blueprint AI error: " + genErr.Error())
 				if !repoFileExists && len(data) == 0 {
-					fail("failed to generate " + bp.FilePath + " with Blueprint AI")
+					fail("failed to generate " + bp.FilePath + " with Blueprint AI: " + genErr.Error())
 					return
 				}
 			} else {
 				var candidate RenderYAML
 				if parseErr := yaml.Unmarshal([]byte(generated), &candidate); parseErr != nil {
 					log.Printf("Blueprint sync: OpenRouter returned invalid YAML blueprint=%s err=%v", bp.ID, parseErr)
+					logLine("Blueprint AI returned invalid YAML: " + parseErr.Error())
 					if !repoFileExists && len(data) == 0 {
-						fail("Blueprint AI generated invalid YAML")
+						fail("Blueprint AI generated invalid YAML: " + parseErr.Error())
 						return
 					}
 				} else if len(candidate.Services) == 0 && len(candidate.Databases) == 0 && len(candidate.KeyValues) == 0 && len(candidate.EnvVarGroups) == 0 {
 					log.Printf("Blueprint sync: OpenRouter returned empty blueprint=%s", bp.ID)
+					logLine("Blueprint AI generated an empty blueprint (no services, databases, or key-value stores).")
 					if !repoFileExists && len(data) == 0 {
 						fail("Blueprint AI generated an empty blueprint")
 						return

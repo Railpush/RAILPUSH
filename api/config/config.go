@@ -234,7 +234,7 @@ func Load() *Config {
 			OpenRouterModel:  strings.TrimSpace(getEnv("OPENROUTER_MODEL", "minimax/minimax-m2.5")),
 			OpenRouterURL:    strings.TrimSpace(getEnv("OPENROUTER_URL", "https://openrouter.ai/api/v1/chat/completions")),
 
-			RequestTimeoutSeconds: getEnvInt("OPENROUTER_TIMEOUT_SECONDS", 45),
+			RequestTimeoutSeconds: getEnvInt("OPENROUTER_TIMEOUT_SECONDS", 120),
 
 			MaxScanFiles:   getEnvInt("BLUEPRINT_AI_MAX_SCAN_FILES", 120),
 			MaxFileBytes:   getEnvInt("BLUEPRINT_AI_MAX_FILE_BYTES", 20000),
