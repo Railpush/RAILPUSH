@@ -35,14 +35,10 @@ function formatSyncError(syncError: string | null): string | null {
   if (lower.includes('payment method required')) {
     return 'Payment method required (or insufficient credits). Open Billing to add/update a card or credits, then try syncing again.';
   }
-  if (lower.startsWith('billing error')) {
-    // If the backend included details (e.g. "billing error: <detail>") show them.
-    const idx = syncError.indexOf(':');
-    if (idx !== -1 && idx < syncError.length - 1) {
-      const detail = syncError.slice(idx + 1).trim();
-      if (detail) return `Billing error: ${detail}. Open Billing to fix payment/credits, then retry sync.`;
-    }
-    return 'Billing is blocking this blueprint sync. Open Billing to add/update a card or credits, then retry sync.';
+  if (lower.startsWith('billing error') || lower.includes('billing update failed')) {
+    // Legacy: older versions blocked sync on billing failures. This no longer happens,
+    // but stale statuses may still exist in the database. Prompt a re-sync.
+    return 'A previous sync encountered a billing issue that has been resolved. Click Sync to try again.';
   }
 
   if (lower === 'yaml_missing_ai_disabled') {

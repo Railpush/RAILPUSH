@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -684,25 +683,13 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		}
 		failMsg = msg
 	}
-	failBilling := func(err error) {
+	// warnBilling logs billing errors but does NOT abort the sync.
+	// Blueprint sync should never fail because of a billing issue — the platform
+	// reconciles billing asynchronously. Resources are created first; billing follows.
+	warnBilling := func(err error) {
 		if err != nil {
-			log.Printf("Blueprint sync billing error blueprint=%s err=%v", bp.ID, err)
+			log.Printf("Blueprint sync billing warning (non-fatal) blueprint=%s err=%v", bp.ID, err)
 		}
-		// Surface a safe, actionable message to users. Stripe errors should already be sanitized
-		// by the Stripe service; we still normalize whitespace and bound the length.
-		msg := "billing error"
-		if err != nil {
-			detail := strings.TrimSpace(err.Error())
-			detail = strings.ReplaceAll(detail, "\n", " ")
-			detail = strings.Join(strings.Fields(detail), " ")
-			if len(detail) > 280 {
-				detail = detail[:280] + "…"
-			}
-			if detail != "" {
-				msg = "billing error: " + detail
-			}
-		}
-		fail(msg)
 	}
 
 	// Stripe billing: blueprint sync can create paid resources, so we must bill (or block) here too.
@@ -1210,21 +1197,10 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		// Track for rollback before any external side-effects (e.g. billing).
 		st.createdDBIDs = append(st.createdDBIDs, db.ID)
 		if stripeSvc != nil && db.Plan != services.PlanFree {
-			bc, err := getBillingCustomer()
-			if err != nil || bc == nil {
-				if err == nil {
-					err = fmt.Errorf("billing customer not found")
-				}
-				failBilling(err)
-				return
-			}
-			if err := stripeSvc.AddSubscriptionItem(bc, db.WorkspaceID, "database", db.ID, db.Name, db.Plan); err != nil {
-				if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
-					fail("payment method required. Please add a default payment method in billing settings.")
-					return
-				}
-				failBilling(err)
-				return
+			if bc, err := getBillingCustomer(); err != nil || bc == nil {
+				warnBilling(err)
+			} else if err := stripeSvc.AddSubscriptionItem(bc, db.WorkspaceID, "database", db.ID, db.Name, db.Plan); err != nil {
+				warnBilling(err)
 			}
 		}
 
@@ -1279,21 +1255,10 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		// Track for rollback before any external side-effects (e.g. billing).
 		st.createdKVIDs = append(st.createdKVIDs, kv.ID)
 		if stripeSvc != nil && kv.Plan != services.PlanFree {
-			bc, err := getBillingCustomer()
-			if err != nil || bc == nil {
-				if err == nil {
-					err = fmt.Errorf("billing customer not found")
-				}
-				failBilling(err)
-				return
-			}
-			if err := stripeSvc.AddSubscriptionItem(bc, kv.WorkspaceID, "keyvalue", kv.ID, kv.Name, kv.Plan); err != nil {
-				if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
-					fail("payment method required. Please add a default payment method in billing settings.")
-					return
-				}
-				failBilling(err)
-				return
+			if bc, err := getBillingCustomer(); err != nil || bc == nil {
+				warnBilling(err)
+			} else if err := stripeSvc.AddSubscriptionItem(bc, kv.WorkspaceID, "keyvalue", kv.ID, kv.Name, kv.Plan); err != nil {
+				warnBilling(err)
 			}
 		}
 
@@ -1405,21 +1370,10 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			// Track for rollback before any external side-effects (e.g. billing).
 			st.createdServices = append(st.createdServices, svc)
 			if stripeSvc != nil && svc.Plan != services.PlanFree {
-				bc, err := getBillingCustomer()
-				if err != nil || bc == nil {
-					if err == nil {
-						err = fmt.Errorf("billing customer not found")
-					}
-					failBilling(err)
-					return
-				}
-				if err := stripeSvc.AddSubscriptionItem(bc, svc.WorkspaceID, "service", svc.ID, svc.Name, svc.Plan); err != nil {
-					if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
-						fail("payment method required. Please add a default payment method in billing settings.")
-						return
-					}
-					failBilling(err)
-					return
+				if bc, err := getBillingCustomer(); err != nil || bc == nil {
+					warnBilling(err)
+				} else if err := stripeSvc.AddSubscriptionItem(bc, svc.WorkspaceID, "service", svc.ID, svc.Name, svc.Plan); err != nil {
+					warnBilling(err)
 				}
 			}
 		} else {
@@ -1463,7 +1417,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				svc.Instances = 1
 			}
 
-			// Gate plan changes on Stripe success so users cannot upgrade resources without billing.
+			// Best-effort billing for plan changes — never blocks the sync.
 			oldPlanEffective := strings.ToLower(strings.TrimSpace(before.Plan))
 			if p, ok := services.NormalizePlan(before.Plan); ok {
 				oldPlanEffective = p
@@ -1471,25 +1425,13 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			if stripeSvc != nil && desiredPlan != oldPlanEffective {
 				if desiredPlan == services.PlanFree {
 					if err := stripeSvc.RemoveSubscriptionItem("service", svc.ID); err != nil {
-						failBilling(err)
-						return
+						warnBilling(err)
 					}
 				} else {
-					bc, err := getBillingCustomer()
-					if err != nil || bc == nil {
-						if err == nil {
-							err = fmt.Errorf("billing customer not found")
-						}
-						failBilling(err)
-						return
-					}
-					if err := stripeSvc.AddSubscriptionItem(bc, svc.WorkspaceID, "service", svc.ID, svc.Name, desiredPlan); err != nil {
-						if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
-							fail("payment method required. Please add a default payment method in billing settings.")
-							return
-						}
-						failBilling(err)
-						return
+					if bc, err := getBillingCustomer(); err != nil || bc == nil {
+						warnBilling(err)
+					} else if err := stripeSvc.AddSubscriptionItem(bc, svc.WorkspaceID, "service", svc.ID, svc.Name, desiredPlan); err != nil {
+						warnBilling(err)
 					}
 				}
 			}
