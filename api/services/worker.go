@@ -660,6 +660,28 @@ func (w *Worker) processJobKubernetes(job DeployJob, appendLog func(string)) {
 	}
 	env["PORT"] = fmt.Sprintf("%d", svc.Port)
 
+	// Warn about development-mode start commands that waste resources and crash in production.
+	if cmd := strings.ToLower(strings.TrimSpace(svc.StartCommand)); cmd != "" {
+		devPatterns := map[string]string{
+			"next dev":    "next start",
+			"nuxt dev":    "nuxt start",
+			"vite dev":    "vite preview",
+			"npm run dev": "npm start (with a production start script)",
+			"yarn dev":    "yarn start (with a production start script)",
+			"pnpm dev":    "pnpm start (with a production start script)",
+			"flask run --debug": "gunicorn",
+			"nodemon":     "node",
+		}
+		for pattern, suggestion := range devPatterns {
+			if strings.Contains(cmd, pattern) {
+				appendLog(fmt.Sprintf("WARNING: Your start command contains '%s' which runs in development mode. "+
+					"Dev mode uses significantly more CPU and memory, and is not suitable for production. "+
+					"Consider using '%s' instead.", pattern, suggestion))
+				break
+			}
+		}
+	}
+
 	kd, err := w.GetKubeDeployer()
 	if err != nil {
 		appendLog(fmt.Sprintf("ERROR: Failed to initialize Kubernetes client: %v", err))

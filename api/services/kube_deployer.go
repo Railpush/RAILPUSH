@@ -795,6 +795,19 @@ func (k *KubeDeployer) WaitForServiceReady(deploymentName string, svc *models.Se
 						if st.Name != "service" {
 							continue
 						}
+
+						// Detect OOMKilled: the container may still show Running (briefly)
+						// between restarts, so we check LastTerminationState regardless of
+						// current state. After 2+ OOM restarts it's clearly a memory issue.
+						if st.RestartCount >= 2 && st.LastTerminationState.Terminated != nil &&
+							st.LastTerminationState.Terminated.Reason == "OOMKilled" {
+							plan := "starter"
+							if svc != nil && svc.Plan != "" {
+								plan = svc.Plan
+							}
+							return fmt.Errorf("service pod is being OOMKilled (out of memory). Your app exceeds the memory limit for the '%s' plan. Try upgrading to a larger plan or optimizing memory usage", plan)
+						}
+
 						if st.State.Waiting == nil {
 							continue
 						}

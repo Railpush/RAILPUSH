@@ -507,14 +507,26 @@ export function CreateService() {
                           />
                         )}
                         {selectedType !== 'static' && form.runtime !== 'docker' && (
-                          <Input
-                            label="Start Command"
-                            value={form.start_command}
-                            onChange={(e) => setForm({ ...form, start_command: e.target.value })}
-                            placeholder={RUNTIME_PRESETS[form.runtime]?.start || 'npm start'}
-                            hint={RUNTIME_PRESETS[form.runtime]?.startHint || undefined}
-                            icon={<Terminal className="w-4 h-4" />}
-                          />
+                          <>
+                            <Input
+                              label="Start Command"
+                              value={form.start_command}
+                              onChange={(e) => setForm({ ...form, start_command: e.target.value })}
+                              placeholder={RUNTIME_PRESETS[form.runtime]?.start || 'npm start'}
+                              hint={RUNTIME_PRESETS[form.runtime]?.startHint || undefined}
+                              icon={<Terminal className="w-4 h-4" />}
+                            />
+                            {/\b(next dev|nuxt dev|vite dev|nodemon|flask run --debug|npm run dev|yarn dev|pnpm dev)\b/i.test(form.start_command) && (
+                              <div className="flex items-start gap-1.5 text-xs text-yellow-500 bg-yellow-500/10 border border-yellow-500/20 rounded-md px-3 py-2">
+                                <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                                <span>
+                                  <strong>Dev mode detected.</strong> Commands like <code className="text-[10px] bg-yellow-500/15 px-1 rounded">next dev</code> use
+                                  significantly more memory and CPU than production mode, and may crash with OOM errors.
+                                  Use a production command instead (e.g. <code className="text-[10px] bg-yellow-500/15 px-1 rounded">next start</code>).
+                                </span>
+                              </div>
+                            )}
+                          </>
                         )}
                         {form.runtime === 'docker' && (
                           <div className="flex items-start gap-1.5 text-xs text-content-tertiary px-1">
