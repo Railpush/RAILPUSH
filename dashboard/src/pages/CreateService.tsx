@@ -40,6 +40,19 @@ const runtimes = [
   { value: 'image', label: 'Pre-built Image', icon: Layers as RuntimeIcon },
 ];
 
+/** Runtime-aware build/start command presets. These match the backend auto-detection defaults
+ *  in kube_builder.go and builder.go so users see what will actually run. */
+const RUNTIME_PRESETS: Record<string, { build: string; start: string; buildHint: string; startHint: string }> = {
+  node:   { build: 'npm install && npm run build', start: 'npm start',                          buildHint: 'Install deps & build',             startHint: 'Runs the "start" script from package.json' },
+  python: { build: 'pip install -r requirements.txt', start: 'python app.py',                   buildHint: 'Install dependencies',              startHint: 'Gunicorn/uvicorn auto-detected if present' },
+  go:     { build: 'go build -o /app/server .',        start: './app/server',                    buildHint: 'Compile the Go binary',             startHint: 'Run the compiled binary' },
+  ruby:   { build: 'bundle install',                   start: 'bundle exec ruby app.rb',         buildHint: 'Install gems',                      startHint: 'Start the Ruby application' },
+  rust:   { build: 'cargo build --release',            start: './target/release/app',             buildHint: 'Compile in release mode',           startHint: 'Run the compiled binary' },
+  elixir: { build: 'mix deps.get && mix compile',      start: 'mix phx.server',                  buildHint: 'Fetch deps & compile',              startHint: 'Start Phoenix server' },
+  docker: { build: '',                                 start: '',                                 buildHint: 'Uses your Dockerfile',              startHint: 'Uses CMD/ENTRYPOINT from Dockerfile' },
+  image:  { build: '',                                 start: '',                                 buildHint: '',                                  startHint: '' },
+};
+
 /** Normalize a GitHub/Git URL to a proper https clone URL. */
 function normalizeRepoUrl(raw: string): string {
   let url = raw.trim();
@@ -220,7 +233,20 @@ export function CreateService() {
   };
 
   const handleSelectRuntime = (value: string) => {
-    setForm({ ...form, runtime: value });
+    const oldPreset = RUNTIME_PRESETS[form.runtime];
+    const newPreset = RUNTIME_PRESETS[value];
+
+    // Auto-fill build/start commands if the user hasn't customized them.
+    // "Not customized" = empty, or still matches the old runtime's preset.
+    const buildIsDefault = !form.build_command.trim() || form.build_command === oldPreset?.build;
+    const startIsDefault = !form.start_command.trim() || form.start_command === oldPreset?.start;
+
+    setForm({
+      ...form,
+      runtime: value,
+      build_command: buildIsDefault ? (newPreset?.build ?? '') : form.build_command,
+      start_command: startIsDefault ? (newPreset?.start ?? '') : form.start_command,
+    });
   }
 
   // Step 1: Choose type
@@ -470,21 +496,31 @@ export function CreateService() {
                       </div>
 
                       <div className="space-y-4">
-                        <Input
-                          label="Build Command"
-                          value={form.build_command}
-                          onChange={(e) => setForm({ ...form, build_command: e.target.value })}
-                          placeholder="npm install && npm run build"
-                          icon={<Terminal className="w-4 h-4" />}
-                        />
-                        {selectedType !== 'static' && (
+                        {form.runtime !== 'docker' && (
+                          <Input
+                            label="Build Command"
+                            value={form.build_command}
+                            onChange={(e) => setForm({ ...form, build_command: e.target.value })}
+                            placeholder={RUNTIME_PRESETS[form.runtime]?.build || 'npm install && npm run build'}
+                            hint={RUNTIME_PRESETS[form.runtime]?.buildHint || undefined}
+                            icon={<Terminal className="w-4 h-4" />}
+                          />
+                        )}
+                        {selectedType !== 'static' && form.runtime !== 'docker' && (
                           <Input
                             label="Start Command"
                             value={form.start_command}
                             onChange={(e) => setForm({ ...form, start_command: e.target.value })}
-                            placeholder="npm start"
+                            placeholder={RUNTIME_PRESETS[form.runtime]?.start || 'npm start'}
+                            hint={RUNTIME_PRESETS[form.runtime]?.startHint || undefined}
                             icon={<Terminal className="w-4 h-4" />}
                           />
+                        )}
+                        {form.runtime === 'docker' && (
+                          <div className="flex items-start gap-1.5 text-xs text-content-tertiary px-1">
+                            <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                            <span>Build and start commands are defined in your Dockerfile. RailPush will use your Dockerfile's CMD/ENTRYPOINT automatically.</span>
+                          </div>
                         )}
                         {selectedType === 'static' && (
                           <Input
@@ -492,7 +528,14 @@ export function CreateService() {
                             value={form.static_publish_path}
                             onChange={(e) => setForm({ ...form, static_publish_path: e.target.value })}
                             placeholder="./dist"
+                            hint="Directory containing your built static files (e.g. dist, build, public, out)"
                           />
+                        )}
+                        {!form.build_command && !form.start_command && form.runtime !== 'docker' && (
+                          <div className="flex items-start gap-1.5 text-xs text-content-tertiary px-1">
+                            <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                            <span>Leave blank to auto-detect from your repository. RailPush will inspect your code and choose the right commands.</span>
+                          </div>
                         )}
                       </div>
                     </div>
