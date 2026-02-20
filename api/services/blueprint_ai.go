@@ -22,7 +22,7 @@ type BlueprintAIGenerator struct {
 }
 
 func NewBlueprintAIGenerator(cfg *config.Config) *BlueprintAIGenerator {
-	timeout := 45 * time.Second
+	timeout := 120 * time.Second
 	if cfg != nil && cfg.BlueprintAI.RequestTimeoutSeconds > 0 {
 		timeout = time.Duration(cfg.BlueprintAI.RequestTimeoutSeconds) * time.Second
 	}
@@ -42,13 +42,6 @@ func (g *BlueprintAIGenerator) Available() bool {
 		strings.TrimSpace(g.Config.BlueprintAI.OpenRouterAPIKey) != "" &&
 		strings.TrimSpace(g.Config.BlueprintAI.OpenRouterModel) != "" &&
 		strings.TrimSpace(g.Config.BlueprintAI.OpenRouterURL) != ""
-}
-
-type blueprintAISnippet struct {
-	Path    string
-	Content string
-	Score   int
-	Size    int
 }
 
 type openRouterMessage struct {
@@ -74,6 +67,52 @@ type openRouterChatResponse struct {
 	} `json:"error"`
 }
 
+// configFileNames are files whose full content is sent to the AI.
+// These are the only files needed to determine runtime, dependencies, build commands, etc.
+var configFileNames = map[string]bool{
+	"dockerfile":          true,
+	"docker-compose.yml":  true,
+	"docker-compose.yaml": true,
+	"compose.yml":         true,
+	"compose.yaml":        true,
+	"package.json":        true,
+	"requirements.txt":    true,
+	"pyproject.toml":      true,
+	"go.mod":              true,
+	"go.sum":              false, // tree only
+	"cargo.toml":          true,
+	"gemfile":             true,
+	"composer.json":       true,
+	"pom.xml":             true,
+	"build.gradle":        true,
+	"procfile":            true,
+	"railway.toml":        true,
+	"vercel.json":         true,
+	"next.config.js":      true,
+	"next.config.ts":      true,
+	"next.config.mjs":     true,
+	"nuxt.config.js":      true,
+	"nuxt.config.ts":      true,
+	"vite.config.js":      true,
+	"vite.config.ts":      true,
+	"tsconfig.json":       true,
+	"webpack.config.js":   true,
+	"angular.json":        true,
+	"nest-cli.json":       true,
+	"mix.exs":             true,
+	"elixir.exs":          true,
+	"config.exs":          true,
+	"makefile":            true,
+	"cmakelists.txt":      true,
+	"railpush.yaml":       true,
+	"railpush.yml":        true,
+	"render.yaml":         true,
+	"render.yml":          true,
+	".env.example":        true,
+	"dot_env":             true,
+	"nixpacks.toml":       true,
+}
+
 func (g *BlueprintAIGenerator) GenerateRenderYAMLFromRepo(repoDir string, repoURL string, branch string) (string, error) {
 	if g == nil || !g.Available() {
 		return "", fmt.Errorf("blueprint ai unavailable")
@@ -83,53 +122,34 @@ func (g *BlueprintAIGenerator) GenerateRenderYAMLFromRepo(repoDir string, repoUR
 		return "", fmt.Errorf("missing repository path")
 	}
 
-	maxFiles := g.Config.BlueprintAI.MaxScanFiles
-	if maxFiles <= 0 {
-		maxFiles = 120
-	}
 	maxFileBytes := g.Config.BlueprintAI.MaxFileBytes
 	if maxFileBytes <= 0 {
 		maxFileBytes = 20000
 	}
-	maxPromptBytes := g.Config.BlueprintAI.MaxPromptBytes
-	if maxPromptBytes <= 0 {
-		maxPromptBytes = 180000
-	}
 
-	snippets, err := collectBlueprintAISnippets(repoDir, maxFiles, maxFileBytes)
+	// Collect the file tree and read only config files.
+	fileTree, configContents, err := collectRepoStructure(repoDir, maxFileBytes)
 	if err != nil {
 		return "", err
 	}
-	if len(snippets) == 0 {
-		return "", fmt.Errorf("no relevant source files found")
+	if len(fileTree) == 0 {
+		return "", fmt.Errorf("no files found in repository")
 	}
 
-	var fileList strings.Builder
-	var snippetBlock strings.Builder
-	remaining := maxPromptBytes
-
-	for _, s := range snippets {
-		fileList.WriteString("- ")
-		fileList.WriteString(s.Path)
-		fileList.WriteString("\n")
+	// Build the config files block.
+	var configBlock strings.Builder
+	for _, cf := range configContents {
+		configBlock.WriteString("## " + cf.Path + "\n```\n" + cf.Content + "\n```\n\n")
 	}
 
-	for _, s := range snippets {
-		block := "## " + s.Path + "\n```\n" + s.Content + "\n```\n\n"
-		if len(block) > remaining {
-			continue
-		}
-		snippetBlock.WriteString(block)
-		remaining -= len(block)
-		if remaining <= maxPromptBytes/5 {
-			break
-		}
-	}
+	systemPrompt := `You generate RailPush railpush.yaml (blueprint) files from repository structure.
+You will receive:
+1. The full file tree (paths only) — use this to understand the project structure, detect monorepos, and identify frameworks.
+2. The full content of key config files (package.json, Dockerfile, requirements.txt, etc.) — use these to determine runtime, dependencies, build/start commands, env vars, and database usage.
 
-	systemPrompt := `You generate RailPush railpush.yaml (blueprint) files from repository source.
-Return ONLY valid YAML, no markdown fences and no explanation.
+Return ONLY valid YAML, no markdown fences, no explanation.
 
-Full schema:
+Schema:
 
 services:
   - name: <required string>
@@ -143,27 +163,18 @@ services:
     dockerContext: <optional, docker build context directory>
     dockerCommand: <optional, overrides container CMD>
     rootDir: <optional, monorepo subdirectory containing the app>
-    staticPublishPath: <required for type=static, e.g. ./dist or ./build>
-    schedule: <required for type=cron, cron expression e.g. "*/5 * * * *">
-    port: <int, default 10000, required for web/pserv/static>
+    staticPublishPath: <required for type=static, e.g. ./dist or ./build or ./out>
+    schedule: <required for type=cron, cron expression>
+    port: <int, default 10000>
     autoDeploy: true|false
     plan: free|starter|standard|pro
     numInstances: <int, default 1>
     healthCheckPath: <optional, e.g. /healthz>
-    preDeployCommand: <optional, runs before deploy e.g. "npm run migrate">
-    domains:
-      - <custom domain string, e.g. app.example.com>
+    preDeployCommand: <optional, runs before deploy e.g. "npx prisma migrate deploy">
     disk:
       name: <string>
-      mountPath: <string, e.g. /data>
+      mountPath: <string>
       sizeGB: <int, default 10>
-    buildFilter:
-      paths:
-        - <paths that trigger a build, e.g. src/**>
-      ignoredPaths:
-        - <paths to ignore, e.g. docs/**>
-    image:
-      url: <pre-built image URL, use with runtime=image>
     envVars:
       - key: <ENV_NAME>
         value: <literal value>
@@ -171,23 +182,15 @@ services:
         generateValue: true
       - key: DATABASE_URL
         fromDatabase:
-          name: <database name from databases section>
-          property: connectionString|host|port|user|password|database
+          name: <database name>
+          property: connectionString
       - key: <ENV_NAME>
-        fromService:
-          name: <service name from services section>
-          type: <service type>
-          property: host|port|hostport|connectionString
-          envVarKey: <optional, read an env var from the referenced service>
-      - key: <ENV_NAME>
-        fromGroup: <env var group name from envVarGroups section>
+        fromGroup: <env var group name>
 
 databases:
   - name: <required string>
     plan: free|starter|standard|pro
     postgresMajorVersion: <int, default 16>
-    databaseName: <optional, defaults to name>
-    user: <optional, defaults to name>
 
 keyValues:
   - name: <required string>
@@ -201,27 +204,24 @@ envVarGroups:
         value: <value>
 
 Rules:
-- Infer a practical, deployable configuration from the detected source files.
-- Include at least one service.
-- Plan values MUST be one of: free, starter, standard, pro. If unsure use starter.
-- Never invent custom plan names.
-- Prefer runtime=image only when a pre-built image URL is explicitly present; otherwise infer the standard runtime from source (node, python, go, etc.).
-- If the project uses a database (e.g. DATABASE_URL, pg, prisma, sqlalchemy, gorm, sequelize, typeorm, knex, diesel), add a databases entry and wire it via fromDatabase with property connectionString.
-- If the project uses Redis (e.g. REDIS_URL, ioredis, redis, bull, celery broker), add a keyValues entry.
-- Use generateValue: true for secrets like SESSION_SECRET, JWT_SECRET, API_KEY, SECRET_KEY_BASE.
-- Use preDeployCommand for migration commands when detected (e.g. "npx prisma migrate deploy", "python manage.py migrate", "bundle exec rake db:migrate").
-- For monorepos with multiple apps, set rootDir for each service.
-- For static sites (React, Vue, Svelte, Next.js export), use type=static with the correct staticPublishPath.
-- For type=static, omit startCommand (static sites are served by the built image).
-- For cron jobs, use type=cron with a valid cron schedule expression.
-- Keep values conservative and production-safe.`
+- Infer runtime from config files: package.json=node, requirements.txt/pyproject.toml=python, go.mod=go, Cargo.toml=rust, Gemfile=ruby, mix.exs=elixir.
+- If a Dockerfile exists, prefer runtime=docker unless it's a simple single-stage build for a known runtime.
+- For Next.js: use runtime=node (NOT static), buildCommand="npm install && npm run build", startCommand="npm start", port=3000.
+- For static sites (React CRA, Vue, plain HTML): use type=static with the correct staticPublishPath.
+- Detect database usage from deps (pg, prisma, sqlalchemy, typeorm, knex, diesel, gorm, sequelize, mongoose) and add a databases entry with fromDatabase env var.
+- Detect Redis usage from deps (ioredis, redis, bull, celery) and add a keyValues entry.
+- Use generateValue: true for secrets (SESSION_SECRET, JWT_SECRET, API_KEY, SECRET_KEY_BASE, ENCRYPTION_KEY).
+- Look at .env.example/dot_env for required env var names. Use generateValue for secrets, leave others as placeholder comments.
+- Plan values MUST be one of: free, starter, standard, pro. Default to starter.
+- Keep configuration conservative and production-safe.
+- Include at least one service.`
 
 	userPrompt := fmt.Sprintf(
-		"Repository URL: %s\nBranch: %s\n\nRepository file list:\n%s\n\nRelevant file contents:\n%s",
+		"Repository: %s (branch: %s)\n\n## File Tree\n```\n%s```\n\n## Config File Contents\n%s",
 		strings.TrimSpace(repoURL),
 		strings.TrimSpace(branch),
-		fileList.String(),
-		snippetBlock.String(),
+		strings.Join(fileTree, "\n")+"\n",
+		configBlock.String(),
 	)
 
 	reqBody := openRouterChatRequest{
@@ -280,7 +280,15 @@ Rules:
 	return content + "\n", nil
 }
 
-func collectBlueprintAISnippets(repoDir string, maxFiles int, maxFileBytes int) ([]blueprintAISnippet, error) {
+type configFile struct {
+	Path    string
+	Content string
+}
+
+// collectRepoStructure walks the repo and returns:
+// 1. fileTree: a list of all file paths (for the AI to understand structure)
+// 2. configContents: full content of config files (package.json, Dockerfile, etc.)
+func collectRepoStructure(repoDir string, maxFileBytes int) ([]string, []configFile, error) {
 	skipDirs := map[string]struct{}{
 		".git":         {},
 		"node_modules": {},
@@ -291,74 +299,57 @@ func collectBlueprintAISnippets(repoDir string, maxFiles int, maxFileBytes int) 
 		".nuxt":        {},
 		"coverage":     {},
 		".cache":       {},
-	}
-	exactPriority := map[string]int{
-		"dockerfile":          1,
-		"railpush.yaml":       1,
-		"railpush.yml":        1,
-		"render.yaml":         1,
-		"render.yml":          1,
-		"docker-compose.yml":  2,
-		"docker-compose.yaml": 2,
-		"package.json":        3,
-		"requirements.txt":    3,
-		"pyproject.toml":      3,
-		"go.mod":              3,
-		"cargo.toml":          3,
-		"gemfile":             3,
-		"composer.json":       3,
-		"pom.xml":             3,
-		"build.gradle":        3,
-		"procfile":            4,
-		"railway.toml":        4,
-		"vercel.json":         4,
-	}
-	extPriority := map[string]int{
-		".yaml": 5,
-		".yml":  5,
-		".toml": 6,
-		".json": 6,
-		".js":   7,
-		".ts":   7,
-		".jsx":  7,
-		".tsx":  7,
-		".py":   7,
-		".go":   7,
-		".rb":   7,
-		".rs":   7,
-		".php":  7,
-		".java": 7,
-		".cs":   7,
-		".sh":   8,
-		".md":   9,
+		"__pycache__":  {},
+		".tox":         {},
+		".venv":        {},
+		"venv":         {},
+		"target":       {},  // Rust/Java
+		"bin":          {},
+		"obj":          {},  // .NET
 	}
 
-	var snippets []blueprintAISnippet
+	// Files to skip from the tree entirely (noise).
+	skipFiles := map[string]bool{
+		"package-lock.json": true,
+		"pnpm-lock.yaml":   true,
+		"yarn.lock":        true,
+		"go.sum":           true,
+		"cargo.lock":       true,
+		"composer.lock":    true,
+		"gemfile.lock":     true,
+		"poetry.lock":      true,
+	}
+
+	var fileTree []string
+	var configs []configFile
+
 	err := filepath.WalkDir(repoDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if _, skip := skipDirs[name]; skip {
+			if _, skip := skipDirs[strings.ToLower(name)]; skip {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
 		lowerName := strings.ToLower(name)
-		if strings.HasPrefix(lowerName, ".env") ||
-			strings.Contains(lowerName, "secret") ||
-			strings.Contains(lowerName, "token") ||
-			strings.Contains(lowerName, "id_rsa") ||
+
+		// Skip secret files entirely.
+		if strings.HasPrefix(lowerName, ".env") && lowerName != ".env.example" {
+			return nil
+		}
+		if strings.Contains(lowerName, "id_rsa") ||
 			strings.HasSuffix(lowerName, ".pem") ||
 			strings.HasSuffix(lowerName, ".key") ||
 			strings.HasSuffix(lowerName, ".crt") {
 			return nil
 		}
 
-		info, ierr := d.Info()
-		if ierr != nil || info.Size() <= 0 || info.Size() > int64(maxFileBytes) {
+		// Skip lock files from tree (they just add noise).
+		if skipFiles[lowerName] {
 			return nil
 		}
 
@@ -367,52 +358,66 @@ func collectBlueprintAISnippets(repoDir string, maxFiles int, maxFileBytes int) 
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
-		ext := strings.ToLower(filepath.Ext(lowerName))
 
-		score := 100
-		if p, ok := exactPriority[lowerName]; ok {
-			score = p
-		} else if p, ok := extPriority[ext]; ok {
-			score = p
-		} else {
-			return nil
+		// Add to file tree (path only).
+		fileTree = append(fileTree, rel)
+
+		// If it's a config file, read its content.
+		if include, ok := configFileNames[lowerName]; ok && include {
+			info, ierr := d.Info()
+			if ierr != nil || info.Size() <= 0 || info.Size() > int64(maxFileBytes) {
+				return nil
+			}
+			data, rerr := os.ReadFile(path)
+			if rerr != nil {
+				return nil
+			}
+			content := strings.TrimSpace(string(data))
+			if content != "" {
+				configs = append(configs, configFile{Path: rel, Content: content})
+			}
 		}
 
-		data, rerr := os.ReadFile(path)
-		if rerr != nil {
-			return nil
-		}
-		content := strings.TrimSpace(string(data))
-		if content == "" {
-			return nil
-		}
-
-		snippets = append(snippets, blueprintAISnippet{
-			Path:    rel,
-			Content: content,
-			Score:   score,
-			Size:    len(content),
-		})
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	sort.Slice(snippets, func(i, j int) bool {
-		if snippets[i].Score != snippets[j].Score {
-			return snippets[i].Score < snippets[j].Score
+	// Sort configs: Dockerfile and compose files first, then package managers, then others.
+	configPriority := map[string]int{
+		"dockerfile":          1,
+		"docker-compose.yml":  2,
+		"docker-compose.yaml": 2,
+		"compose.yml":         2,
+		"compose.yaml":        2,
+		"package.json":        3,
+		"requirements.txt":    3,
+		"pyproject.toml":      3,
+		"go.mod":              3,
+		"cargo.toml":          3,
+		"gemfile":             3,
+		"composer.json":       3,
+		"mix.exs":             3,
+		"pom.xml":             3,
+		"build.gradle":        3,
+		"procfile":            4,
+		".env.example":        5,
+		"dot_env":             5,
+	}
+	sort.Slice(configs, func(i, j int) bool {
+		pi := configPriority[strings.ToLower(filepath.Base(configs[i].Path))]
+		pj := configPriority[strings.ToLower(filepath.Base(configs[j].Path))]
+		if pi == 0 {
+			pi = 10
 		}
-		if snippets[i].Size != snippets[j].Size {
-			return snippets[i].Size < snippets[j].Size
+		if pj == 0 {
+			pj = 10
 		}
-		return snippets[i].Path < snippets[j].Path
+		return pi < pj
 	})
 
-	if len(snippets) > maxFiles {
-		snippets = snippets[:maxFiles]
-	}
-	return snippets, nil
+	return fileTree, configs, nil
 }
 
 func extractOpenRouterContent(raw any) string {
