@@ -473,6 +473,45 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 		})
 	}
 
+	// Docker-in-Docker sidecar: inject when the service needs Docker daemon access.
+	containers := []corev1.Container{container}
+	if svc.DockerAccess {
+		podVolumes = append(podVolumes, corev1.Volume{
+			Name:         "dind-storage",
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		})
+
+		// Point the app container at the sidecar's Docker daemon.
+		containers[0].Env = append(containers[0].Env, corev1.EnvVar{
+			Name: "DOCKER_HOST", Value: "tcp://localhost:2375",
+		})
+
+		dindContainer := corev1.Container{
+			Name:  "dind",
+			Image: "docker:27-dind",
+			SecurityContext: &corev1.SecurityContext{
+				Privileged: boolPtr(true),
+			},
+			Env: []corev1.EnvVar{
+				{Name: "DOCKER_TLS_CERTDIR", Value: ""}, // disable TLS for localhost
+			},
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: "dind-storage", MountPath: "/var/lib/docker"},
+			},
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("500m"),
+					corev1.ResourceMemory: resource.MustParse("512Mi"),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("2"),
+					corev1.ResourceMemory: resource.MustParse("4Gi"),
+				},
+			},
+		}
+		containers = append(containers, dindContainer)
+	}
+
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -491,13 +530,13 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 					PriorityClassName:            "railpush-critical",
 					TerminationGracePeriodSeconds: &terminationGrace,
 					Volumes:                       podVolumes,
-					Containers:                    []corev1.Container{container},
+					Containers:                    containers,
 				},
 			},
 		},
 	}
 
-	applyTenantSecurityContext(&dep.Spec.Template.Spec, &dep.Spec.Template.Spec.Containers[0], k.strictTenantPodSecurity())
+	applyTenantSecurityContext(&dep.Spec.Template.Spec, &dep.Spec.Template.Spec.Containers[0], k.strictTenantPodSecurity(), svc.DockerAccess)
 
 	// Probes for HTTP-ish service types only.
 	switch serviceType {

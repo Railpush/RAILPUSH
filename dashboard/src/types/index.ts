@@ -73,6 +73,7 @@ export interface Service {
   health_check_path: string;
   port: number;
   auto_deploy: boolean;
+  docker_access: boolean;
   is_suspended: boolean;
   max_shutdown_delay: number;
   pre_deploy_command: string;

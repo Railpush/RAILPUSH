@@ -329,6 +329,7 @@ func (h *WebhookHandler) GitHubWebhook(w http.ResponseWriter, r *http.Request) {
 				Schedule:          baseService.Schedule,
 				Plan:              baseService.Plan,
 				Instances:         1,
+				DockerAccess:      baseService.DockerAccess,
 			}
 			if err := models.CreateService(candidate); err != nil {
 				log.Printf("preview create failed: %v", err)

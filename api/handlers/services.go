@@ -330,6 +330,9 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	if v, ok := updates["auto_deploy"].(bool); ok {
 		svc.AutoDeploy = v
 	}
+	if v, ok := updates["docker_access"].(bool); ok {
+		svc.DockerAccess = v
+	}
 	if v, ok := updates["plan"].(string); ok {
 		planProvided = true
 		if p, ok := services.NormalizePlan(v); ok {

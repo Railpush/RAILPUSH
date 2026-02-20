@@ -223,6 +223,7 @@ export function ServiceSettings() {
     pre_deploy_command: '',
     health_check_path: '/healthz',
     auto_deploy: true,
+    docker_access: false,
   });
 
   useEffect(() => {
@@ -238,6 +239,7 @@ export function ServiceSettings() {
           pre_deploy_command: s.pre_deploy_command || '',
           health_check_path: s.health_check_path || '/healthz',
           auto_deploy: s.auto_deploy,
+          docker_access: s.docker_access ?? false,
         });
       })
       .catch(() => {})
@@ -333,6 +335,30 @@ export function ServiceSettings() {
                       name="auto_deploy"
                       checked={formData.auto_deploy === opt.value}
                       onChange={() => setFormData({ ...formData, auto_deploy: opt.value })}
+                      className="mt-0.5 accent-brand"
+                    />
+                    <div>
+                      <div className="text-sm font-medium text-content-primary">{opt.label}</div>
+                      <div className="text-xs text-content-secondary">{opt.desc}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-content-primary mb-2">Docker Access</label>
+              <div className="space-y-2">
+                {[
+                  { value: false, label: 'Disabled', desc: 'Standard container isolation (recommended)' },
+                  { value: true, label: 'Enabled', desc: 'Injects Docker-in-Docker sidecar for services that need to run Docker commands' },
+                ].map((opt) => (
+                  <label key={String(opt.value)} className="flex items-start gap-3 p-3 rounded-md hover:bg-surface-tertiary cursor-pointer transition-colors">
+                    <input
+                      type="radio"
+                      name="docker_access"
+                      checked={formData.docker_access === opt.value}
+                      onChange={() => setFormData({ ...formData, docker_access: opt.value })}
                       className="mt-0.5 accent-brand"
                     />
                     <div>

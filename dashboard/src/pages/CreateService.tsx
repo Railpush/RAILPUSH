@@ -104,6 +104,7 @@ export function CreateService() {
     start_command: '',
     port: '10000',
     auto_deploy: true,
+    docker_access: false,
     plan: 'free',
     schedule: '',
     static_publish_path: './dist',
@@ -204,6 +205,7 @@ export function CreateService() {
         start_command: form.start_command,
         port: parseInt(form.port, 10) || 10000,
         auto_deploy: form.auto_deploy,
+        docker_access: form.docker_access,
         plan: form.plan,
         schedule: selectedType === 'cron' ? form.schedule : undefined,
         static_publish_path: selectedType === 'static' ? form.static_publish_path : undefined,
@@ -553,6 +555,30 @@ export function CreateService() {
                     </div>
                   </div>
                 )}
+
+                <div className="pt-4 border-t border-border-default/50">
+                  <label className="block text-sm font-medium text-content-primary mb-2">Docker Access</label>
+                  <div className="space-y-2">
+                    {[
+                      { value: false, label: 'Disabled', desc: 'Standard container isolation (recommended)' },
+                      { value: true, label: 'Enabled', desc: 'Injects Docker-in-Docker sidecar for services that need to run Docker commands' },
+                    ].map((opt) => (
+                      <label key={String(opt.value)} className="flex items-start gap-3 p-3 rounded-md hover:bg-surface-tertiary cursor-pointer transition-colors">
+                        <input
+                          type="radio"
+                          name="docker_access"
+                          checked={form.docker_access === opt.value}
+                          onChange={() => setForm({ ...form, docker_access: opt.value })}
+                          className="mt-0.5 accent-brand"
+                        />
+                        <div>
+                          <div className="text-sm font-medium text-content-primary">{opt.label}</div>
+                          <div className="text-xs text-content-secondary">{opt.desc}</div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
               </>
             )}
 

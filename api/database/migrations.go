@@ -369,4 +369,7 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 
 	// Sync log: stores detailed step-by-step sync output so users can see why sync failed.
 	`ALTER TABLE blueprints ADD COLUMN IF NOT EXISTS sync_log TEXT`,
+
+	// Docker-in-Docker sidecar support: services that need Docker daemon access (e.g., pentagi).
+	`ALTER TABLE services ADD COLUMN IF NOT EXISTS docker_access BOOLEAN DEFAULT FALSE`,
 }

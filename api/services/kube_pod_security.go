@@ -76,17 +76,20 @@ func ensureWritableTmp(pod *corev1.PodSpec, c *corev1.Container) {
 // - allowPrivilegeEscalation=false + privileged=false (container-level)
 // - capabilities.drop: NET_RAW, MKNOD, SYS_CHROOT, SETFCAP (container-level)
 // - root filesystem writable, container's default UID (usually 0)
-func applyTenantSecurityContext(pod *corev1.PodSpec, c *corev1.Container, strict bool) {
+func applyTenantSecurityContext(pod *corev1.PodSpec, c *corev1.Container, strict bool, dockerAccess ...bool) {
+	hasDinD := len(dockerAccess) > 0 && dockerAccess[0]
 	if pod != nil {
 		if pod.SecurityContext == nil {
 			pod.SecurityContext = &corev1.PodSecurityContext{}
 		}
-		if pod.SecurityContext.SeccompProfile == nil {
+		// When Docker-in-Docker sidecar is present, skip seccomp profile — DinD needs unconfined.
+		if !hasDinD && pod.SecurityContext.SeccompProfile == nil {
 			pod.SecurityContext.SeccompProfile = &corev1.SeccompProfile{
 				Type: corev1.SeccompProfileTypeRuntimeDefault,
 			}
 		}
-		if strict {
+		// When DinD sidecar is present, skip pod-level UID/GID constraints — the sidecar must run as root.
+		if strict && !hasDinD {
 			if pod.SecurityContext.RunAsNonRoot == nil {
 				pod.SecurityContext.RunAsNonRoot = boolPtr(true)
 			}
