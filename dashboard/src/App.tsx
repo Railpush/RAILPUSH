@@ -60,7 +60,7 @@ function IncidentsRedirect() {
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
-  const [session, setSession] = useState<{ user: User; workspace?: { id: string; name: string } } | null>(null);
+  const [session, setSession] = useState<{ user: User; workspace?: { id: string; name: string }; github_connected?: boolean } | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -95,6 +95,7 @@ function App() {
       user,
       workspace,
       isOps: role === 'admin' || role === 'ops',
+      githubConnected: session?.github_connected === true,
       refresh: refreshSession,
     };
   }, [refreshSession, session]);

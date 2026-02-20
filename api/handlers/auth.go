@@ -354,7 +354,15 @@ func (h *AuthHandler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws, _ := models.GetWorkspaceByOwner(userID)
-	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{"user": user, "workspace": ws})
+
+	// Expose whether the user has linked a GitHub account (token is json:"-").
+	githubConnected := user.GitHubAccessToken != ""
+
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"user":             user,
+		"workspace":        ws,
+		"github_connected": githubConnected,
+	})
 }
 
 func (h *AuthHandler) GetBlueprintAISettings(w http.ResponseWriter, r *http.Request) {

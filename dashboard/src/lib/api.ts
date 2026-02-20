@@ -43,7 +43,7 @@ export const auth = {
     request<{ status: string }>('/auth/verify', { method: 'POST', body: JSON.stringify({ token }) }),
   resendVerification: (email: string) =>
     request<{ status: string }>('/auth/verify/resend', { method: 'POST', body: JSON.stringify({ email }) }),
-  getUser: () => request<{ user: User; workspace?: { id: string; name: string } }>('/auth/user'),
+  getUser: () => request<{ user: User; workspace?: { id: string; name: string }; github_connected?: boolean }>('/auth/user'),
   loginGithub: () => { window.location.href = `${BASE}/auth/github`; },
   logout: async () => {
     try {

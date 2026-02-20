@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, type ComponentType } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Globe, FileText, Lock, Cog, Clock, Database, Key, ArrowLeft, Search, GitBranch, Link, ChevronRight, Terminal, Code, Box, Layers } from 'lucide-react';
+import { Globe, FileText, Lock, Cog, Clock, Database, Key, ArrowLeft, Search, GitBranch, Link, ChevronRight, Terminal, Code, Box, Layers, Info } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import type { ServiceType, Runtime, GitHubRepo } from '../types';
 import { cn } from '../lib/utils';
 import { UpgradePromptModal } from '../components/billing/UpgradePromptModal';
+import { useSession } from '../lib/session';
 
 const serviceTypes = [
   { type: 'web' as ServiceType, icon: Globe, label: 'Web Service', desc: 'HTTP service with public URL', color: '#4351E8' },
@@ -39,9 +40,44 @@ const runtimes = [
   { value: 'image', label: 'Pre-built Image', icon: Layers as RuntimeIcon },
 ];
 
+/** Normalize a GitHub/Git URL to a proper https clone URL. */
+function normalizeRepoUrl(raw: string): string {
+  let url = raw.trim();
+  // Handle github.com shorthand (user/repo)
+  if (/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(url)) {
+    url = `https://github.com/${url}`;
+  }
+  // Handle git@ SSH URLs → https
+  if (url.startsWith('git@github.com:')) {
+    url = url.replace('git@github.com:', 'https://github.com/');
+  }
+  // Strip .git suffix for display consistency
+  if (url.endsWith('.git')) {
+    url = url.slice(0, -4);
+  }
+  // Ensure https:// prefix
+  if (url.includes('github.com') && !url.startsWith('http')) {
+    url = `https://${url}`;
+  }
+  return url;
+}
+
+/** Check if a URL looks like a valid Git repository URL. */
+function isValidRepoUrl(url: string): boolean {
+  if (!url.trim()) return true; // empty is ok (not filled yet)
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' || u.protocol === 'http:';
+  } catch {
+    // Allow user/repo shorthand
+    return /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(url.trim());
+  }
+}
+
 export function CreateService() {
   const navigate = useNavigate();
   const { type: preselectedType } = useParams<{ type: string }>();
+  const { githubConnected } = useSession();
   const [step, setStep] = useState(preselectedType ? 2 : 1);
   const [selectedType, setSelectedType] = useState<string>(preselectedType || '');
   const [upgradePrompt, setUpgradePrompt] = useState<{ open: boolean; message: string }>({ open: false, message: '' });
@@ -62,8 +98,8 @@ export function CreateService() {
     maxmemory_policy: 'allkeys-lru',
   });
 
-  // GitHub repo picker state
-  const [repoMode, setRepoMode] = useState<'github' | 'manual'>('github');
+  // GitHub repo picker state — default to manual URL input (public repos work without GitHub OAuth)
+  const [repoMode, setRepoMode] = useState<'github' | 'manual'>('manual');
   const [repos, setRepos] = useState<GitHubRepo[]>([]);
   const [reposLoading, setReposLoading] = useState(false);
   const [repoSearch, setRepoSearch] = useState('');
@@ -85,12 +121,12 @@ export function CreateService() {
     }
   }, [preselectedType, selectedType]);
 
-  // Load repos when entering step 2 for a non-database type
+  // Load repos only when user explicitly switches to github picker mode
   useEffect(() => {
-    if (step === 2 && !isDatabase && repoMode === 'github') {
+    if (step === 2 && !isDatabase && repoMode === 'github' && githubConnected) {
       loadRepos();
     }
-  }, [step, repoMode, isDatabase]);
+  }, [step, repoMode, isDatabase, githubConnected]);
 
   async function loadRepos() {
     setReposLoading(true);
@@ -143,11 +179,12 @@ export function CreateService() {
         return;
       }
 
+      const repoUrl = isImageRuntime ? '' : normalizeRepoUrl(form.repo_url);
       await servicesApi.create({
         name: form.name,
         type: selectedType as ServiceType,
         runtime: form.runtime as Runtime,
-        repo_url: isImageRuntime ? '' : form.repo_url,
+        repo_url: repoUrl,
         image_url: isImageRuntime ? form.image_url : undefined,
         branch: form.branch,
         build_command: form.build_command,
@@ -337,29 +374,49 @@ export function CreateService() {
                     <div className="space-y-4">
                       <div className="flex items-center justify-between">
                         <label className="block text-sm font-medium text-content-primary">Repository</label>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (repoMode === 'github') {
-                              setRepoMode('manual');
-                              setSelectedRepo(null);
-                            } else {
-                              setRepoMode('github');
-                              if (repos.length === 0 && !reposLoading) loadRepos();
-                            }
-                          }}
-                          className="inline-flex items-center gap-1 text-xs text-brand hover:text-brand/80 transition-colors"
-                        >
-                          {repoMode === 'github' ? (
-                            <><Link className="w-3 h-3" /> Enter URL manually</>
-                          ) : (
-                            <><GitBranch className="w-3 h-3" /> Pick from GitHub</>
-                          )}
-                        </button>
+                        {githubConnected && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (repoMode === 'github') {
+                                setRepoMode('manual');
+                                setSelectedRepo(null);
+                              } else {
+                                setRepoMode('github');
+                                if (repos.length === 0 && !reposLoading) loadRepos();
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 text-xs text-brand hover:text-brand/80 transition-colors"
+                          >
+                            {repoMode === 'github' ? (
+                              <><Link className="w-3 h-3" /> Enter URL manually</>
+                            ) : (
+                              <><GitBranch className="w-3 h-3" /> Pick from GitHub</>
+                            )}
+                          </button>
+                        )}
                       </div>
 
-                      {/* GitHub Repo Picker (Simplified styling) */}
-                      {repoMode === 'github' ? (
+                      {/* Primary: paste a repo URL (works for any public repo without GitHub sign-in) */}
+                      {repoMode === 'manual' ? (
+                        <div className="space-y-2">
+                          <Input
+                            value={form.repo_url}
+                            onChange={(e) => setForm({ ...form, repo_url: e.target.value })}
+                            placeholder="https://github.com/user/repo"
+                            hint={
+                              !isValidRepoUrl(form.repo_url)
+                                ? 'Enter a valid repository URL (e.g. https://github.com/user/repo)'
+                                : undefined
+                            }
+                          />
+                          <div className="flex items-start gap-1.5 text-xs text-content-tertiary">
+                            <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                            <span>Public repositories deploy without GitHub sign-in. For private repos, <button type="button" onClick={() => { if (githubConnected) { setRepoMode('github'); if (repos.length === 0 && !reposLoading) loadRepos(); } else { window.location.href = '/api/auth/github'; } }} className="text-brand hover:text-brand/80 underline underline-offset-2">{githubConnected ? 'pick from your repos' : 'connect GitHub'}</button>.</span>
+                          </div>
+                        </div>
+                      ) : (
+                        /* Secondary: GitHub repo picker (only for connected users) */
                         <div className="space-y-2">
                           {!selectedRepo ? (
                             <div className="relative">
@@ -390,12 +447,6 @@ export function CreateService() {
                             </div>
                           )}
                         </div>
-                      ) : (
-                        <Input
-                          value={form.repo_url}
-                          onChange={(e) => setForm({ ...form, repo_url: e.target.value })}
-                          placeholder="https://github.com/user/repo"
-                        />
                       )}
 
                       <div className="grid grid-cols-2 gap-4">

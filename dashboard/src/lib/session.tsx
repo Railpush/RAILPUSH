@@ -7,6 +7,7 @@ export type WorkspaceInfo = { id: string; name: string };
 export type Session = {
   user: User;
   workspace?: WorkspaceInfo;
+  github_connected?: boolean;
 };
 
 type SessionContextValue = {
@@ -14,6 +15,7 @@ type SessionContextValue = {
   user: User | null;
   workspace: WorkspaceInfo | null;
   isOps: boolean;
+  githubConnected: boolean;
   refresh: () => Promise<void>;
 };
 
