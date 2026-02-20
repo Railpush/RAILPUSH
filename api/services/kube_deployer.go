@@ -438,6 +438,7 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 					Annotations: podAnnotations,
 				},
 				Spec: corev1.PodSpec{
+					PriorityClassName:            "railpush-critical",
 					TerminationGracePeriodSeconds: &terminationGrace,
 					Containers:                    []corev1.Container{container},
 				},

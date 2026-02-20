@@ -109,7 +109,8 @@ func (k *KubeDeployer) RunOneOffJob(oneOffJobID string, svc *models.Service, com
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
+					PriorityClassName: "railpush-critical",
+					RestartPolicy:     corev1.RestartPolicyNever,
 					Containers: []corev1.Container{
 						{
 							Name:            "oneoff",
@@ -277,7 +278,8 @@ func (k *KubeDeployer) RunPreDeployJob(deployID string, svc *models.Service, ima
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
+					PriorityClassName: "railpush-critical",
+					RestartPolicy:     corev1.RestartPolicyNever,
 					Containers: []corev1.Container{
 						{
 							Name:            "predeploy",

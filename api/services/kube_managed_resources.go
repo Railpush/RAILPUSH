@@ -341,6 +341,7 @@ func (k *KubeDeployer) EnsureManagedDatabase(db *models.ManagedDatabase, passwor
 					Labels: labels,
 				},
 				Spec: corev1.PodSpec{
+					PriorityClassName:            "railpush-critical",
 					TerminationGracePeriodSeconds: func() *int64 { t := int64(60); return &t }(),
 					SecurityContext: &corev1.PodSecurityContext{
 						FSGroup:      &fsg,
@@ -606,6 +607,7 @@ func (k *KubeDeployer) EnsureManagedKeyValue(kv *models.ManagedKeyValue, passwor
 					Labels: labels,
 				},
 				Spec: corev1.PodSpec{
+					PriorityClassName:            "railpush-critical",
 					TerminationGracePeriodSeconds: func() *int64 { t := int64(30); return &t }(),
 					Containers: []corev1.Container{
 						{

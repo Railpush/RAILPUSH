@@ -473,7 +473,8 @@ fi
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{Labels: labels},
 					Spec: corev1.PodSpec{
-						RestartPolicy: corev1.RestartPolicyNever,
+						PriorityClassName: "railpush-critical",
+						RestartPolicy:     corev1.RestartPolicyNever,
 						Volumes: []corev1.Volume{
 							{
 								Name: "workspace",

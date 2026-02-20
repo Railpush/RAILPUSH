@@ -6,7 +6,7 @@
 
 ## 1. Overview
 
-**RailPush** is a single-server PaaS that replicates the core Render.com experience on your own Linux machine. Developers connect a GitHub repo, define a build/start command (or Dockerfile), and RailPush handles building, deploying, TLS termination, routing, zero-downtime rollouts, and log aggregation — all from a web dashboard or a `render.yaml` Blueprint file.
+**RailPush** is a single-server PaaS that replicates the core Render.com experience on your own Linux machine. Developers connect a GitHub repo, define a build/start command (or Dockerfile), and RailPush handles building, deploying, TLS termination, routing, zero-downtime rollouts, and log aggregation — all from a web dashboard or a `railpush.yaml` Blueprint file.
 
 ### 1.1 Design Principles
 
@@ -14,7 +14,7 @@
 - **Single-server first, cluster-ready later**: v1 targets one Linux host. Architecture uses abstractions (container runtime interface, reverse-proxy config API) that allow future migration to Kubernetes/Nomad.
 - **Convention over configuration**: Sensible defaults (port 10000, auto-detect language, zero-config TLS).
 - **Git-native**: Push to deploy. Every commit on the watched branch triggers a build pipeline.
-- **Blueprint-driven**: A `render.yaml` in the repo root defines the entire infrastructure stack.
+- **Blueprint-driven**: A `railpush.yaml` in the repo root defines the entire infrastructure stack.
 
 ### 1.2 Target Environment
 
@@ -79,7 +79,7 @@
 | **Deploy Engine** | Pulls built image, runs new container, performs health check, swaps traffic (zero-downtime), tears down old container. |
 | **Router Manager** | Generates and hot-reloads Caddy configuration (upstream mappings, TLS certs, custom domains). |
 | **Scheduler** | Cron engine. Triggers container runs on schedule. Enforces single-run guarantee. |
-| **Blueprint Parser** | Parses `render.yaml`, diffs against current state, produces a deploy plan. |
+| **Blueprint Parser** | Parses `railpush.yaml`, diffs against current state, produces a deploy plan. |
 | **Log Collector** | Tails container stdout/stderr, stores in rotating log files, streams to dashboard via WebSocket. |
 | **System DB** | PostgreSQL database storing all platform metadata (services, deploys, env vars, users). |
 
@@ -153,7 +153,7 @@ GitHub Push → Webhook → Enqueue Build → Clone Repo → Detect Build Strate
     │
     ├── Dockerfile found ────→ docker build (BuildKit)
     │
-    ├── render.yaml.buildCommand ────→ Buildpack-style build in runtime image
+    ├── railpush.yaml.buildCommand ────→ Buildpack-style build in runtime image
     │
     └── Auto-detect language ────→ Select base image → Install deps → Build
            │
@@ -226,7 +226,7 @@ Build Output → OCI Image → Tagged: registry.local/<service>:<commit-sha>
 |---|---|
 | Git push | Auto-deploy on push to watched branch (configurable) |
 | Manual | Dashboard button or API call |
-| Blueprint sync | Changes to `render.yaml` trigger redeploy of affected services |
+| Blueprint sync | Changes to `railpush.yaml` trigger redeploy of affected services |
 | Image update | Manual trigger for `runtime: image` services |
 | Rollback | Redeploy a previous successful deploy's image |
 
@@ -309,17 +309,17 @@ my-frontend.example.com {
 
 ### 7.1 Overview
 
-A `render.yaml` file in the repo root defines the full stack. On push, the Blueprint Parser:
+A `railpush.yaml` file in the repo root defines the full stack. On push, the Blueprint Parser:
 
-1. Reads and validates `render.yaml`.
+1. Reads and validates `railpush.yaml`.
 2. Diffs against the current deployed state.
 3. Produces a change plan (create/update/delete services).
 4. Applies changes (with user approval for destructive changes in dashboard).
 
-### 7.2 render.yaml Schema
+### 7.2 railpush.yaml Schema
 
 ```yaml
-# render.yaml — Full example
+# railpush.yaml — Full example
 
 services:
   # Web Service
@@ -805,8 +805,8 @@ railpush env set --service my-app KEY=value KEY2=value2
 railpush env unset --service my-app KEY
 
 # Blueprints
-railpush blueprint validate render.yaml
-railpush blueprint apply render.yaml
+railpush blueprint validate railpush.yaml
+railpush blueprint apply railpush.yaml
 railpush blueprint sync
 
 # Shell
@@ -1067,7 +1067,7 @@ notification_channels (id, workspace_id, type, config_json, created_at)
 
 ### Phase 4 — Blueprints
 
-- [ ] `render.yaml` parser + validator
+- [ ] `railpush.yaml` parser + validator
 - [ ] Blueprint CRUD in dashboard
 - [ ] Diff engine (current state vs desired state)
 - [ ] Apply engine (create/update/delete resources)
@@ -1137,7 +1137,7 @@ These are explicitly out of scope for the initial release:
 
 RailPush aims for **behavioral compatibility** with Render.com:
 
-- `render.yaml` files written for Render.com should work on RailPush with minimal changes.
+- Blueprint files written for Render.com should work on RailPush with minimal changes.
 - Environment variable names (`PORT`, `RENDER`, `RENDER_*`) match Render's conventions.
 - Deploy lifecycle (build → pre-deploy → start → health check) matches Render's sequence.
 - Service types and their behaviors match Render's documentation.

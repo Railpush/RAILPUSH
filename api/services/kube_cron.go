@@ -127,8 +127,9 @@ func (k *KubeDeployer) DeployCronJob(deployID string, svc *models.Service, image
 							Annotations: podAnnotations,
 						},
 						Spec: corev1.PodSpec{
-							RestartPolicy: corev1.RestartPolicyNever,
-							Containers:    []corev1.Container{container},
+							PriorityClassName: "railpush-critical",
+							RestartPolicy:     corev1.RestartPolicyNever,
+							Containers:        []corev1.Container{container},
 						},
 					},
 				},

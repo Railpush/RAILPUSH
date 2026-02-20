@@ -232,7 +232,7 @@ export function CreateBlueprint() {
                 value={form.repo_url}
                 onChange={(e) => setForm({ ...form, repo_url: e.target.value })}
                 placeholder="https://github.com/user/repo"
-                hint="The repository containing your render.yaml file"
+                hint="The repository containing your railpush.yaml file"
               />
             )}
           </div>
