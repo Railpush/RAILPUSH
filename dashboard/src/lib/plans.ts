@@ -40,8 +40,8 @@ export const PLAN_SPECS: PlanSpec[] = [
     features: [
       'Always-on services',
       'Custom domains',
+      'Per-minute billing — only pay for active time',
       'Background workers and cron jobs',
-      'Project and environment grouping',
     ],
   },
   {
@@ -54,7 +54,7 @@ export const PLAN_SPECS: PlanSpec[] = [
     description: 'For growing applications',
     features: [
       'More CPU and memory per service',
-      'Managed PostgreSQL and key value stores',
+      'Per-minute billing — prorated to the second',
       'Autoscaling policy support',
       'Blueprint-driven provisioning',
     ],
@@ -71,9 +71,9 @@ export const PLAN_SPECS: PlanSpec[] = [
     description: 'For higher-throughput production apps',
     features: [
       'Highest compute tier currently available',
+      'Per-minute billing — full month capped at plan price',
       'Advanced autoscaling configurations',
       'Workspace-level audit logs',
-      'Best fit for sustained traffic',
     ],
   },
 ];

@@ -348,4 +348,22 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_billing_invoices_customer_created ON billing_invoices(billing_customer_id, created_at DESC)`,
+
+	// Usage tracking for per-minute billing. Records start/stop events for each resource.
+	// A resource is "active" when its latest event is "start". The hourly reporter
+	// calculates active minutes between last_reported_at and now, reports them to Stripe,
+	// and updates last_reported_at.
+	`CREATE TABLE IF NOT EXISTS resource_usage_events (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		resource_type VARCHAR(50) NOT NULL,
+		resource_id UUID NOT NULL,
+		event VARCHAR(20) NOT NULL,
+		occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_resource_usage_events_resource ON resource_usage_events(resource_type, resource_id, occurred_at DESC)`,
+
+	// Tracks per-resource metered billing state. Each resource with a metered subscription
+	// item gets a row here so the hourly reporter knows where to send usage records.
+	`ALTER TABLE billing_items ADD COLUMN IF NOT EXISTS is_metered BOOLEAN NOT NULL DEFAULT FALSE`,
+	`ALTER TABLE billing_items ADD COLUMN IF NOT EXISTS last_usage_reported_at TIMESTAMPTZ`,
 }

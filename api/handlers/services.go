@@ -626,6 +626,10 @@ func (h *ServiceHandler) SuspendService(w http.ResponseWriter, r *http.Request) 
 	// Set is_suspended flag
 	models.SetServiceSuspended(id, true)
 	models.UpdateServiceStatus(id, "suspended", svc.ContainerID, svc.HostPort)
+	// Record usage stop for metered billing (stops accruing per-minute charges).
+	if models.IsBillingItemMetered("service", id) {
+		_ = models.RecordUsageEvent("service", id, "stop")
+	}
 	services.Audit(svc.WorkspaceID, userID, "service.suspended", "service", id, nil)
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "suspended"})
 }
@@ -647,6 +651,10 @@ func (h *ServiceHandler) ResumeService(w http.ResponseWriter, r *http.Request) {
 	}
 	models.SetServiceSuspended(id, false)
 	models.UpdateServiceStatus(id, "deploying", svc.ContainerID, svc.HostPort)
+	// Record usage start for metered billing (resumes per-minute charges).
+	if models.IsBillingItemMetered("service", id) {
+		_ = models.RecordUsageEvent("service", id, "start")
+	}
 	go func() {
 		if h.Config.Kubernetes.Enabled {
 			desired := int32(1)

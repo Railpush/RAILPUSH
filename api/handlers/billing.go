@@ -192,12 +192,15 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 	}
 
 	type BillingLineItem struct {
-		ResourceType string `json:"resource_type"`
-		ResourceID   string `json:"resource_id"`
-		ResourceName string `json:"resource_name"`
-		Plan         string `json:"plan"`
-		MonthlyCost  int    `json:"monthly_cost"`
-		StripeLinked bool   `json:"stripe_linked"`
+		ResourceType  string `json:"resource_type"`
+		ResourceID    string `json:"resource_id"`
+		ResourceName  string `json:"resource_name"`
+		Plan          string `json:"plan"`
+		MonthlyCost   int    `json:"monthly_cost"`
+		StripeLinked  bool   `json:"stripe_linked"`
+		IsMetered     bool   `json:"is_metered"`
+		ActiveMinutes int64  `json:"active_minutes,omitempty"`
+		ProratedCost  int    `json:"prorated_cost,omitempty"`
 	}
 
 	type BillingOverview struct {
@@ -296,21 +299,48 @@ func (h *BillingHandler) GetBillingOverview(w http.ResponseWriter, r *http.Reque
 
 		items, err := models.ListBillingItemsByCustomer(bc.ID)
 		if err == nil {
+			now := time.Now()
+			// Use the start of the current billing month (approximate: 30 days ago or subscription start).
+			monthStart := now.AddDate(0, 0, -30)
+			totalMinutesInMonth := int64(now.Sub(monthStart).Minutes())
+			if totalMinutesInMonth < 1 {
+				totalMinutesInMonth = 1
+			}
+
 			for _, item := range items {
 				cost := planCost(item.Plan)
 				if planRank(item.Plan) > planRank(overview.CurrentPlan) {
 					overview.CurrentPlan = item.Plan
 				}
 				stripeLinked := strings.TrimSpace(item.StripeSubscriptionItemID) != "" && strings.TrimSpace(item.StripePriceID) != ""
-				overview.Items = append(overview.Items, BillingLineItem{
+				isMetered := models.IsBillingItemMetered(item.ResourceType, item.ResourceID)
+
+				lineItem := BillingLineItem{
 					ResourceType: item.ResourceType,
 					ResourceID:   item.ResourceID,
 					ResourceName: item.ResourceName,
 					Plan:         item.Plan,
 					MonthlyCost:  cost,
 					StripeLinked: stripeLinked,
-				})
-				overview.MonthlyTotal += cost
+					IsMetered:    isMetered,
+				}
+
+				if isMetered {
+					// Calculate active minutes this billing period for prorated display.
+					activeMin, _ := models.CalcActiveMinutesSince(item.ResourceType, item.ResourceID, monthStart, now)
+					lineItem.ActiveMinutes = activeMin
+					// Prorated cost = (active_minutes / total_minutes_in_month) * monthly_cost
+					if activeMin >= totalMinutesInMonth {
+						lineItem.ProratedCost = cost // full month
+					} else {
+						lineItem.ProratedCost = int(float64(cost) * float64(activeMin) / float64(totalMinutesInMonth))
+					}
+					overview.MonthlyTotal += lineItem.ProratedCost
+				} else {
+					overview.MonthlyTotal += cost
+				}
+
+				overview.Items = append(overview.Items, lineItem)
 				if !stripeLinked {
 					overview.UnsyncedCount += 1
 					overview.UnsyncedTotal += cost

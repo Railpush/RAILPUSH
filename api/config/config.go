@@ -33,6 +33,13 @@ type StripeConfig struct {
 	PriceStarter  string
 	PriceStandard string
 	PricePro      string
+	// Metered prices for per-minute billing. When set, new resources use metered
+	// subscription items instead of flat-rate. Each price should be created in Stripe
+	// with usage_type=metered, aggregate_usage=sum, and unit_amount_decimal set to
+	// the per-minute cost in cents (e.g. 0.016203703704 for $7/mo ÷ 43200 min).
+	MeteredPriceStarter  string
+	MeteredPriceStandard string
+	MeteredPricePro      string
 }
 
 type OpsConfig struct {
@@ -300,11 +307,14 @@ func Load() *Config {
 			EncryptionKey: getEnv("ENCRYPTION_KEY", ""),
 		},
 		Stripe: StripeConfig{
-			SecretKey:     getEnv("STRIPE_SECRET_KEY", ""),
-			WebhookSecret: getEnv("STRIPE_WEBHOOK_SECRET", ""),
-			PriceStarter:  getEnv("STRIPE_PRICE_STARTER", ""),
-			PriceStandard: getEnv("STRIPE_PRICE_STANDARD", ""),
-			PricePro:      getEnv("STRIPE_PRICE_PRO", ""),
+			SecretKey:            getEnv("STRIPE_SECRET_KEY", ""),
+			WebhookSecret:        getEnv("STRIPE_WEBHOOK_SECRET", ""),
+			PriceStarter:         getEnv("STRIPE_PRICE_STARTER", ""),
+			PriceStandard:        getEnv("STRIPE_PRICE_STANDARD", ""),
+			PricePro:             getEnv("STRIPE_PRICE_PRO", ""),
+			MeteredPriceStarter:  getEnv("STRIPE_METERED_PRICE_STARTER", ""),
+			MeteredPriceStandard: getEnv("STRIPE_METERED_PRICE_STANDARD", ""),
+			MeteredPricePro:      getEnv("STRIPE_METERED_PRICE_PRO", ""),
 		},
 		Ops: OpsConfig{
 			AlertWebhookToken: getEnv("ALERT_WEBHOOK_TOKEN", ""),

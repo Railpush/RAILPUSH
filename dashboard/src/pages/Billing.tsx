@@ -167,6 +167,17 @@ function formatCreditReason(reason: string | null | undefined): string {
   return cleaned || 'Credit adjustment';
 }
 
+function formatMinutes(minutes: number): string {
+  if (minutes < 60) return `${minutes}m`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h < 24) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  const d = Math.floor(h / 24);
+  const rh = h % 24;
+  if (rh > 0) return `${d}d ${rh}h`;
+  return `${d}d`;
+}
+
 function usagePercent(used: number, included: number) {
   if (included <= 0) return 0;
   return Math.min(100, Math.round((used / included) * 100));
@@ -305,16 +316,17 @@ export function Billing() {
   const groupedCharges = useMemo(() => {
     const grouped = new Map<string, { label: string; total: number; items: BillingLineItem[] }>();
     stripeLinkedItems.forEach((item) => {
+      const effectiveCost = item.is_metered && item.prorated_cost != null ? item.prorated_cost : item.monthly_cost;
       const key = item.resource_type;
       const existing = grouped.get(key);
       if (existing) {
-        existing.total += item.monthly_cost;
+        existing.total += effectiveCost;
         existing.items.push(item);
         return;
       }
       grouped.set(key, {
         label: resourceLabel(key),
-        total: item.monthly_cost,
+        total: effectiveCost,
         items: [item],
       });
     });
@@ -715,8 +727,22 @@ export function Billing() {
                                 <div className="flex items-center gap-2">
                                   <span className="text-content-primary">{item.resource_name}</span>
                                   <span className="text-content-tertiary uppercase text-[10px]">{item.plan}</span>
+                                  {item.is_metered && (
+                                    <span className="px-1.5 py-0.5 rounded bg-brand/10 text-brand text-[10px] font-medium border border-brand/20">
+                                      {item.active_minutes != null ? `${formatMinutes(item.active_minutes)} active` : 'metered'}
+                                    </span>
+                                  )}
                                 </div>
-                                <span className={cn('font-mono text-content-secondary')}>{formatCurrency(item.monthly_cost)}</span>
+                                <div className="flex items-center gap-2">
+                                  {item.is_metered && item.prorated_cost != null && item.prorated_cost !== item.monthly_cost ? (
+                                    <>
+                                      <span className="font-mono text-content-tertiary line-through">{formatCurrency(item.monthly_cost)}</span>
+                                      <span className="font-mono text-content-secondary">{formatCurrency(item.prorated_cost)}</span>
+                                    </>
+                                  ) : (
+                                    <span className={cn('font-mono text-content-secondary')}>{formatCurrency(item.monthly_cost)}</span>
+                                  )}
+                                </div>
                               </div>
                             ))}
                           </div>

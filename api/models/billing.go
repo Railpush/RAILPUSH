@@ -232,6 +232,28 @@ func UpdateBillingItem(bi *BillingItem) error {
 	return err
 }
 
+// SetBillingItemMetered marks a billing item as metered (per-minute usage tracking).
+func SetBillingItemMetered(billingItemID string, metered bool) error {
+	_, err := database.DB.Exec(
+		"UPDATE billing_items SET is_metered=$1, last_usage_reported_at=CASE WHEN $1 THEN NOW() ELSE last_usage_reported_at END, updated_at=NOW() WHERE id=$2",
+		metered, billingItemID,
+	)
+	return err
+}
+
+// IsBillingItemMetered returns whether a billing item uses metered pricing.
+func IsBillingItemMetered(resourceType, resourceID string) bool {
+	var metered bool
+	err := database.DB.QueryRow(
+		"SELECT COALESCE(is_metered, false) FROM billing_items WHERE resource_type=$1 AND resource_id=$2",
+		resourceType, resourceID,
+	).Scan(&metered)
+	if err != nil {
+		return false
+	}
+	return metered
+}
+
 func CountResourcesByWorkspaceAndPlan(workspaceID, resourceType, plan string) (int, error) {
 	var count int
 	var err error

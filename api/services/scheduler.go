@@ -17,11 +17,12 @@ import (
 )
 
 type Scheduler struct {
-	Config      *config.Config
-	stop        chan struct{}
-	parser      cron.Parser
-	lastCleanup time.Time
-	lastBackup  time.Time
+	Config        *config.Config
+	stop          chan struct{}
+	parser        cron.Parser
+	lastCleanup   time.Time
+	lastBackup    time.Time
+	lastUsageSync time.Time
 }
 
 func NewScheduler(cfg *config.Config) *Scheduler {
@@ -41,6 +42,7 @@ func (s *Scheduler) Start() {
 				s.checkCronJobs()
 				s.cleanupStaleData()
 				s.runNightlyBackups()
+				s.reportMeteredUsage()
 			case <-s.stop:
 				ticker.Stop()
 				return
@@ -101,6 +103,72 @@ func (s *Scheduler) cleanupStaleData() {
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		log.Printf("Scheduler: cleaned up %d old webhook events", n)
+	}
+}
+
+// reportMeteredUsage reports accumulated usage minutes to Stripe for all active metered billing items.
+// Runs every hour. For each metered billing item, calculates active minutes since last report and
+// sends a usage record to Stripe. This is what drives per-minute billing.
+func (s *Scheduler) reportMeteredUsage() {
+	// Run every hour.
+	if time.Since(s.lastUsageSync) < time.Hour {
+		return
+	}
+	s.lastUsageSync = time.Now()
+
+	if s.Config == nil || strings.TrimSpace(s.Config.Stripe.SecretKey) == "" {
+		return
+	}
+
+	// Only run if metered prices are configured.
+	hasMeterPrices := strings.TrimSpace(s.Config.Stripe.MeteredPriceStarter) != "" ||
+		strings.TrimSpace(s.Config.Stripe.MeteredPriceStandard) != "" ||
+		strings.TrimSpace(s.Config.Stripe.MeteredPricePro) != ""
+	if !hasMeterPrices {
+		return
+	}
+
+	items, err := models.ListActiveMeteredBillingItems()
+	if err != nil {
+		log.Printf("Scheduler: metered usage: failed to list items: %v", err)
+		return
+	}
+	if len(items) == 0 {
+		return
+	}
+
+	stripeSvc := NewStripeService(s.Config)
+	now := time.Now()
+	reported := 0
+
+	for _, item := range items {
+		since := item.CreatedAt
+		if item.LastUsageReportedAt != nil {
+			since = *item.LastUsageReportedAt
+		}
+
+		minutes, err := models.CalcActiveMinutesSince(item.ResourceType, item.ResourceID, since, now)
+		if err != nil {
+			log.Printf("Scheduler: metered usage: calc failed resource=%s/%s err=%v", item.ResourceType, item.ResourceID, err)
+			continue
+		}
+		if minutes <= 0 {
+			// Still update the checkpoint so we don't recalculate the same window.
+			_ = models.UpdateBillingItemLastUsageReported(item.ID, now)
+			continue
+		}
+
+		if err := stripeSvc.ReportUsageMinutes(item.StripeSubscriptionItemID, minutes, now); err != nil {
+			log.Printf("Scheduler: metered usage: report failed resource=%s/%s minutes=%d err=%v", item.ResourceType, item.ResourceID, minutes, err)
+			continue
+		}
+
+		_ = models.UpdateBillingItemLastUsageReported(item.ID, now)
+		reported++
+	}
+
+	if reported > 0 {
+		log.Printf("Scheduler: metered usage: reported usage for %d/%d items", reported, len(items))
 	}
 }
 

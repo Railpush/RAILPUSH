@@ -252,6 +252,9 @@ export interface BillingLineItem {
   plan: string;
   monthly_cost: number;
   stripe_linked?: boolean;
+  is_metered?: boolean;
+  active_minutes?: number;
+  prorated_cost?: number;
 }
 
 export interface BillingInvoice {

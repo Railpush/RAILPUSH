@@ -1,6 +1,7 @@
 package services
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"github.com/stripe/stripe-go/v81/setupintent"
 	"github.com/stripe/stripe-go/v81/subscription"
 	"github.com/stripe/stripe-go/v81/subscriptionitem"
+	"github.com/stripe/stripe-go/v81/usagerecord"
 	"github.com/stripe/stripe-go/v81/webhook"
 )
 
@@ -113,6 +115,55 @@ func (s *StripeService) PlanForPriceID(priceID string) string {
 	default:
 		return ""
 	}
+}
+
+// MeteredBillingEnabled returns true when at least one metered price ID is configured.
+// When enabled, new resources use per-minute metered subscription items instead of flat-rate.
+func (s *StripeService) MeteredBillingEnabled() bool {
+	if s == nil || s.Config == nil {
+		return false
+	}
+	return strings.TrimSpace(s.Config.Stripe.MeteredPriceStarter) != "" ||
+		strings.TrimSpace(s.Config.Stripe.MeteredPriceStandard) != "" ||
+		strings.TrimSpace(s.Config.Stripe.MeteredPricePro) != ""
+}
+
+// MeteredPriceIDForPlan returns the metered Stripe price ID for the given plan.
+// Returns empty string if metered billing is not configured for that plan.
+func (s *StripeService) MeteredPriceIDForPlan(plan string) string {
+	if s == nil || s.Config == nil {
+		return ""
+	}
+	switch plan {
+	case "starter":
+		return strings.TrimSpace(s.Config.Stripe.MeteredPriceStarter)
+	case "standard":
+		return strings.TrimSpace(s.Config.Stripe.MeteredPriceStandard)
+	case "pro":
+		return strings.TrimSpace(s.Config.Stripe.MeteredPricePro)
+	default:
+		return ""
+	}
+}
+
+// ReportUsageMinutes reports usage (in minutes) to Stripe for a metered subscription item.
+// This is called hourly by the scheduler for active resources.
+func (s *StripeService) ReportUsageMinutes(subscriptionItemID string, minutes int64, timestamp time.Time) error {
+	if minutes <= 0 {
+		return nil
+	}
+	params := &stripe.UsageRecordParams{
+		SubscriptionItem: stripe.String(subscriptionItemID),
+		Quantity:         stripe.Int64(minutes),
+		Timestamp:        stripe.Int64(timestamp.Unix()),
+		Action:           stripe.String("increment"),
+	}
+	_, err := usagerecord.New(params)
+	if err != nil {
+		log.Printf("Stripe: report usage failed sub_item=%s minutes=%d err=%v", subscriptionItemID, minutes, err)
+		return fmt.Errorf("usage report failed: %w", err)
+	}
+	return nil
 }
 
 func sanitizeStripeMessage(msg string) string {
@@ -547,6 +598,8 @@ func (s *StripeService) PreviewInvoice(stripeCustomerID, stripeSubscriptionID st
 }
 
 // AddSubscriptionItem adds a resource to the user's subscription. Creates a subscription if one doesn't exist.
+// When metered billing is enabled (STRIPE_METERED_PRICE_* env vars set), creates individual metered
+// subscription items per resource for per-minute billing. Otherwise falls back to flat-rate quantity billing.
 func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspaceID, resourceType, resourceID, name, plan string) error {
 	if bc == nil || strings.TrimSpace(bc.ID) == "" {
 		return fmt.Errorf("billing customer not found")
@@ -580,7 +633,15 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 		}
 	}
 
-	priceID := s.PriceIDForPlan(plan)
+	// Determine which pricing model to use: metered (per-minute) or flat-rate.
+	useMetered := false
+	priceID := ""
+	if meteredPrice := s.MeteredPriceIDForPlan(plan); meteredPrice != "" {
+		useMetered = true
+		priceID = meteredPrice
+	} else {
+		priceID = s.PriceIDForPlan(plan)
+	}
 	if priceID == "" {
 		return fmt.Errorf("paid plan pricing isn't configured yet. please contact support")
 	}
@@ -589,13 +650,17 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 	// subscriptions when invoice amount_due is 0 (Stripe customer balance covers it).
 	defaultPMID, _ := s.getDefaultPaymentMethod(bc)
 
-	// If no subscription exists, create one
+	// If no subscription exists, create one.
 	if bc.StripeSubscriptionID == "" {
+		itemParams := &stripe.SubscriptionItemsParams{
+			Price: stripe.String(priceID),
+		}
+		if !useMetered {
+			itemParams.Quantity = stripe.Int64(1)
+		}
 		subParams := &stripe.SubscriptionParams{
-			Customer: stripe.String(bc.StripeCustomerID),
-			Items: []*stripe.SubscriptionItemsParams{
-				{Price: stripe.String(priceID), Quantity: stripe.Int64(1)},
-			},
+			Customer:          stripe.String(bc.StripeCustomerID),
+			Items:             []*stripe.SubscriptionItemsParams{itemParams},
 			CollectionMethod:  stripe.String(string(stripe.SubscriptionCollectionMethodChargeAutomatically)),
 			PaymentBehavior:   stripe.String("error_if_incomplete"),
 			OffSession:        stripe.Bool(true),
@@ -617,7 +682,7 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 			return fmt.Errorf("billing update failed. please try again")
 		}
 
-		// Save the first subscription item
+		// Save the first subscription item.
 		if len(sub.Items.Data) > 0 {
 			bi := &models.BillingItem{
 				BillingCustomerID:        bc.ID,
@@ -632,11 +697,57 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 				log.Printf("Stripe: failed to save billing item resource=%s/%s err=%v", resourceType, resourceID, err)
 				return fmt.Errorf("billing update failed. please try again")
 			}
+			if useMetered {
+				models.SetBillingItemMetered(bi.ID, true)
+			}
+		}
+		// Record "start" usage event for metered resources.
+		if useMetered {
+			_ = models.RecordUsageEvent(resourceType, resourceID, "start")
 		}
 		return nil
 	}
 
-	// Subscription exists. Stripe allows only one item per price; use quantity for multiple resources.
+	// ── Subscription exists ──
+
+	if useMetered {
+		// Metered billing: create a NEW subscription item per resource (not shared by quantity).
+		// Each resource gets its own metered item so usage can be reported individually.
+		siParams := &stripe.SubscriptionItemParams{
+			Subscription: stripe.String(bc.StripeSubscriptionID),
+			Price:        stripe.String(priceID),
+			// Metered items don't set quantity; usage records determine the charge.
+		}
+		si, err := subscriptionitem.New(siParams)
+		if err != nil {
+			log.Printf("Stripe: add metered subscription item failed sub=%s price=%s resource=%s/%s err=%v", bc.StripeSubscriptionID, priceID, resourceType, resourceID, err)
+			return stripeUserError(err)
+		}
+
+		bi := &models.BillingItem{
+			BillingCustomerID:        bc.ID,
+			StripeSubscriptionItemID: si.ID,
+			StripePriceID:            priceID,
+			ResourceType:             resourceType,
+			ResourceID:               resourceID,
+			ResourceName:             name,
+			Plan:                     plan,
+		}
+		if err := models.CreateBillingItem(bi); err != nil {
+			if _, delErr := subscriptionitem.Del(si.ID, &stripe.SubscriptionItemParams{}); delErr != nil {
+				log.Printf("Stripe: CRITICAL orphaned metered subscription item si=%s resource=%s/%s — manual cleanup required: %v", si.ID, resourceType, resourceID, delErr)
+			}
+			log.Printf("Stripe: failed to save metered billing item resource=%s/%s err=%v", resourceType, resourceID, err)
+			return fmt.Errorf("billing update failed. please try again")
+		}
+		models.SetBillingItemMetered(bi.ID, true)
+		_ = models.RecordUsageEvent(resourceType, resourceID, "start")
+		return nil
+	}
+
+	// ── Flat-rate billing (legacy path) ──
+
+	// Stripe allows only one item per price; use quantity for multiple resources.
 	existingSubItemID, err := models.FindBillingSubscriptionItemIDByCustomerAndPrice(bc.ID, priceID)
 	if err != nil {
 		log.Printf("Stripe: failed to lookup existing subscription item customer=%s price=%s err=%v", bc.ID, priceID, err)
@@ -732,6 +843,7 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 }
 
 // RemoveSubscriptionItem removes a resource's billing item. Cancels the subscription if no items remain.
+// For metered items, records a "stop" usage event and reports final usage before deletion.
 func (s *StripeService) RemoveSubscriptionItem(resourceType, resourceID string) error {
 	bi, err := models.GetBillingItemByResource(resourceType, resourceID)
 	if err != nil {
@@ -740,6 +852,14 @@ func (s *StripeService) RemoveSubscriptionItem(resourceType, resourceID string) 
 	}
 	if bi == nil {
 		return nil // no billing item for this resource
+	}
+
+	isMetered := models.IsBillingItemMetered(resourceType, resourceID)
+
+	// For metered items: record "stop" event and report final usage before removing.
+	if isMetered {
+		_ = models.RecordUsageEvent(resourceType, resourceID, "stop")
+		s.reportFinalUsageForResource(bi)
 	}
 
 	subItemID := strings.TrimSpace(bi.StripeSubscriptionItemID)
@@ -754,44 +874,53 @@ func (s *StripeService) RemoveSubscriptionItem(resourceType, resourceID string) 
 		return fmt.Errorf("billing update failed. please try again")
 	}
 
-	remaining, countErr := models.CountBillingItemsBySubscriptionItemID(subItemID)
-	if countErr != nil {
-		// Best-effort: if we can't count, do not change Stripe; restore DB row to avoid underbilling.
-		_ = models.CreateBillingItem(bi)
-		log.Printf("Stripe: failed to count remaining billing items sub_item=%s err=%v", subItemID, countErr)
-		return fmt.Errorf("billing update failed. please try again")
-	}
-
-	if remaining <= 0 {
-		// Last resource on this plan: delete the Stripe subscription item.
+	if isMetered {
+		// Metered items: each resource has its own subscription item — always delete it.
 		if _, err := subscriptionitem.Del(subItemID, &stripe.SubscriptionItemParams{}); err != nil {
 			var se *stripe.Error
 			if errors.As(err, &se) && se.HTTPStatusCode == 404 {
-				// Already gone; treat as success.
+				// Already gone.
 			} else {
-				log.Printf("Stripe: delete subscription item failed sub_item=%s resource=%s/%s err=%v", subItemID, resourceType, resourceID, err)
+				log.Printf("Stripe: delete metered subscription item failed sub_item=%s resource=%s/%s err=%v", subItemID, resourceType, resourceID, err)
 				_ = models.CreateBillingItem(bi)
 				return stripeUserError(err)
 			}
 		}
+	} else {
+		// Flat-rate items: shared subscription item by quantity.
+		remaining, countErr := models.CountBillingItemsBySubscriptionItemID(subItemID)
+		if countErr != nil {
+			_ = models.CreateBillingItem(bi)
+			log.Printf("Stripe: failed to count remaining billing items sub_item=%s err=%v", subItemID, countErr)
+			return fmt.Errorf("billing update failed. please try again")
+		}
+
+		if remaining <= 0 {
+			if _, err := subscriptionitem.Del(subItemID, &stripe.SubscriptionItemParams{}); err != nil {
+				var se *stripe.Error
+				if errors.As(err, &se) && se.HTTPStatusCode == 404 {
+					// Already gone.
+				} else {
+					log.Printf("Stripe: delete subscription item failed sub_item=%s resource=%s/%s err=%v", subItemID, resourceType, resourceID, err)
+					_ = models.CreateBillingItem(bi)
+					return stripeUserError(err)
+				}
+			}
 		} else {
-			// Still have resources on this plan: set quantity to remaining.
 			siParams := &stripe.SubscriptionItemParams{
 				Quantity:          stripe.Int64(int64(remaining)),
-				// See note above: avoid invoice spam during frequent quantity adjustments.
 				ProrationBehavior: stripe.String("create_prorations"),
 			}
 			if _, err := subscriptionitem.Update(subItemID, siParams); err != nil {
 				var se *stripe.Error
 				if errors.As(err, &se) && se.HTTPStatusCode == 404 {
-					// Missing item means no billing; restore DB so it can be re-added later.
-				log.Printf("Stripe: subscription item missing during quantity update sub_item=%s resource=%s/%s", subItemID, resourceType, resourceID)
-				_ = models.CreateBillingItem(bi)
-				return fmt.Errorf("billing update failed. please try again")
+					log.Printf("Stripe: subscription item missing during quantity update sub_item=%s resource=%s/%s", subItemID, resourceType, resourceID)
+				} else {
+					log.Printf("Stripe: update quantity failed sub_item=%s qty=%d resource=%s/%s err=%v", subItemID, remaining, resourceType, resourceID, err)
+					_ = models.CreateBillingItem(bi)
+					return stripeUserError(err)
+				}
 			}
-			log.Printf("Stripe: update quantity failed sub_item=%s qty=%d resource=%s/%s err=%v", subItemID, remaining, resourceType, resourceID, err)
-			_ = models.CreateBillingItem(bi)
-			return stripeUserError(err)
 		}
 	}
 
@@ -801,7 +930,6 @@ func (s *StripeService) RemoveSubscriptionItem(resourceType, resourceID string) 
 		return nil // non-critical
 	}
 	if len(items) == 0 {
-		// Look up the billing customer to get the subscription ID
 		var subID string
 		row := database.DB.QueryRow("SELECT COALESCE(stripe_subscription_id,'') FROM billing_customers WHERE id=$1", bi.BillingCustomerID)
 		if row.Scan(&subID) == nil && subID != "" {
@@ -814,6 +942,39 @@ func (s *StripeService) RemoveSubscriptionItem(resourceType, resourceID string) 
 		}
 	}
 	return nil
+}
+
+// reportFinalUsageForResource reports any unreported usage minutes for a metered resource.
+func (s *StripeService) reportFinalUsageForResource(bi *models.BillingItem) {
+	if bi == nil || strings.TrimSpace(bi.StripeSubscriptionItemID) == "" {
+		return
+	}
+	// Determine the "since" timestamp: use last_usage_reported_at from DB.
+	var since time.Time
+	var lastReported sql.NullTime
+	_ = database.DB.QueryRow(
+		"SELECT last_usage_reported_at FROM billing_items WHERE id=$1", bi.ID,
+	).Scan(&lastReported)
+	if lastReported.Valid {
+		since = lastReported.Time
+	} else {
+		since = bi.CreatedAt
+	}
+
+	now := time.Now()
+	minutes, err := models.CalcActiveMinutesSince(bi.ResourceType, bi.ResourceID, since, now)
+	if err != nil {
+		log.Printf("Stripe: failed to calc final usage resource=%s/%s err=%v", bi.ResourceType, bi.ResourceID, err)
+		return
+	}
+	if minutes <= 0 {
+		return
+	}
+	if err := s.ReportUsageMinutes(bi.StripeSubscriptionItemID, minutes, now); err != nil {
+		log.Printf("Stripe: failed to report final usage resource=%s/%s minutes=%d err=%v", bi.ResourceType, bi.ResourceID, minutes, err)
+	} else {
+		log.Printf("Stripe: reported final usage resource=%s/%s minutes=%d", bi.ResourceType, bi.ResourceID, minutes)
+	}
 }
 
 // UpdateSubscriptionItemPlan changes the plan tier for an existing resource's billing item.
