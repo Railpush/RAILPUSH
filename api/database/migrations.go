@@ -380,4 +380,8 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 
 	// Database init scripts: run SQL once when a managed database is first provisioned.
 	`ALTER TABLE managed_databases ADD COLUMN IF NOT EXISTS init_script TEXT DEFAULT ''`,
+
+	// External access: unique TCP port per database proxied by nginx ingress controller.
+	`ALTER TABLE managed_databases ADD COLUMN IF NOT EXISTS external_port INT`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_databases_external_port ON managed_databases(external_port) WHERE external_port IS NOT NULL`,
 }

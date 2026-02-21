@@ -12,6 +12,7 @@
 #
 # Firewall:
 # - Ensure ingress nodes allow inbound 80/tcp + 443/tcp from the internet.
+# - External database access uses TCP ports 20000-25000. Open this range on ingress nodes.
 # - If scraping controller metrics via hostNetwork port 10254, allow 10254/tcp from other cluster nodes (or from Prometheus node(s)).
 
 controller:
@@ -24,6 +25,9 @@ controller:
   # This avoids scary browser TLS warnings for "unknown" *.apps.<domain> hosts.
   extraArgs:
     default-ssl-certificate: "railpush/apps-wildcard-tls"
+    # TCP proxy for external database access. The ConfigMap is managed by the
+    # RailPush control plane (entries added/removed during DB provisioning/deletion).
+    tcp-services-configmap: "ingress-nginx/tcp-services"
 
   # Real client IP support when the console is proxied behind Cloudflare.
   #

@@ -8,9 +8,11 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 const (
@@ -197,6 +199,93 @@ func (k *KubeDeployer) ensureTenantNetpolGlobal(ctx context.Context) error {
 	return k.upsertNetworkPolicy(ctx, ns, np)
 }
 
+// ensureTenantNetpolDatabaseExternal allows ingress-nginx controller pods and flannel
+// node IPs to reach managed-database pods on port 5432 (TCP proxy for external access).
+// This is the database counterpart of ensureTenantNetpolGlobal (which covers only
+// component=service). Workspace isolation still applies — this only opens the nginx→db
+// path so the TCP proxy can forward connections.
+func (k *KubeDeployer) ensureTenantNetpolDatabaseExternal(ctx context.Context) error {
+	ns := k.namespace()
+	var nodeFlannelIPs []string
+	if k != nil && k.Client != nil {
+		if nodes, err := k.Client.CoreV1().Nodes().List(ctx, metav1.ListOptions{}); err == nil && nodes != nil {
+			for _, n := range nodes.Items {
+				cidrs := n.Spec.PodCIDRs
+				if len(cidrs) == 0 && strings.TrimSpace(n.Spec.PodCIDR) != "" {
+					cidrs = []string{n.Spec.PodCIDR}
+				}
+				for _, ip := range podCIDRBaseIPs(cidrs) {
+					if ip == nil {
+						continue
+					}
+					ones := 32
+					if ip.To4() == nil {
+						ones = 128
+					}
+					nodeFlannelIPs = append(nodeFlannelIPs, fmt.Sprintf("%s/%d", ip.String(), ones))
+				}
+			}
+		}
+	}
+	sort.Strings(nodeFlannelIPs)
+
+	from := []networkingv1.NetworkPolicyPeer{
+		{
+			NamespaceSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"kubernetes.io/metadata.name": "ingress-nginx",
+				},
+			},
+			PodSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app.kubernetes.io/name":      "ingress-nginx",
+					"app.kubernetes.io/component": "controller",
+				},
+			},
+		},
+	}
+	for _, cidr := range nodeFlannelIPs {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" {
+			continue
+		}
+		from = append(from, networkingv1.NetworkPolicyPeer{
+			IPBlock: &networkingv1.IPBlock{CIDR: cidr},
+		})
+	}
+
+	pgPort := intstr.FromInt(5432)
+	tcp := corev1.ProtocolTCP
+	np := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "rp-allow-ingress-nginx-databases",
+			Namespace: ns,
+			Labels: map[string]string{
+				rpLabelManagedBy: rpManagedByValue,
+				rpLabelComponent: "tenant-isolation",
+			},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					rpLabelManagedBy: rpManagedByValue,
+					rpLabelComponent: "managed-database",
+				},
+			},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+			Ingress: []networkingv1.NetworkPolicyIngressRule{
+				{
+					From: from,
+					Ports: []networkingv1.NetworkPolicyPort{
+						{Port: &pgPort, Protocol: &tcp},
+					},
+				},
+			},
+		},
+	}
+	return k.upsertNetworkPolicy(ctx, ns, np)
+}
+
 func (k *KubeDeployer) ensureTenantNetpolWorkspace(ctx context.Context, workspaceID string) error {
 	workspaceID = strings.TrimSpace(workspaceID)
 	if workspaceID == "" {
@@ -259,6 +348,9 @@ func (k *KubeDeployer) EnsureTenantNetworkPolicies(ctx context.Context, workspac
 		return k.EnsureTenantNetworkPolicies(cctx, workspaceID)
 	}
 	if err := k.ensureTenantNetpolGlobal(ctx); err != nil {
+		return err
+	}
+	if err := k.ensureTenantNetpolDatabaseExternal(ctx); err != nil {
 		return err
 	}
 	return k.ensureTenantNetpolWorkspace(ctx, workspaceID)

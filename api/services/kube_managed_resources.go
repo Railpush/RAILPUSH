@@ -148,6 +148,71 @@ func kubeManagedKeyValueStorage(plan string) resource.Quantity {
 	}
 }
 
+const (
+	tcpServicesConfigMapName = "tcp-services"
+	ingressNginxNamespace    = "ingress-nginx"
+)
+
+// SetTCPServiceEntry adds or updates an entry in the ingress-nginx tcp-services ConfigMap.
+// The ConfigMap maps external ports to internal services: "<port>": "<namespace>/<svc>:<targetPort>".
+// This enables nginx to TCP-proxy external connections to in-cluster database services.
+func (k *KubeDeployer) SetTCPServiceEntry(ctx context.Context, externalPort int, internalSvc string, targetPort int) error {
+	if k == nil || k.Client == nil {
+		return fmt.Errorf("kube deployer not initialized")
+	}
+	ns := ingressNginxNamespace
+	key := fmt.Sprintf("%d", externalPort)
+	value := fmt.Sprintf("%s/%s:%d", k.namespace(), internalSvc, targetPort)
+
+	cm, err := k.Client.CoreV1().ConfigMaps(ns).Get(ctx, tcpServicesConfigMapName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		cm = &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tcpServicesConfigMapName,
+				Namespace: ns,
+			},
+			Data: map[string]string{key: value},
+		}
+		_, err = k.Client.CoreV1().ConfigMaps(ns).Create(ctx, cm, metav1.CreateOptions{})
+		return err
+	}
+	if err != nil {
+		return fmt.Errorf("get tcp-services configmap: %w", err)
+	}
+	if cm.Data == nil {
+		cm.Data = map[string]string{}
+	}
+	cm.Data[key] = value
+	_, err = k.Client.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{})
+	return err
+}
+
+// RemoveTCPServiceEntry removes an entry from the ingress-nginx tcp-services ConfigMap.
+func (k *KubeDeployer) RemoveTCPServiceEntry(ctx context.Context, externalPort int) error {
+	if k == nil || k.Client == nil {
+		return fmt.Errorf("kube deployer not initialized")
+	}
+	ns := ingressNginxNamespace
+	key := fmt.Sprintf("%d", externalPort)
+
+	cm, err := k.Client.CoreV1().ConfigMaps(ns).Get(ctx, tcpServicesConfigMapName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil // nothing to remove
+	}
+	if err != nil {
+		return fmt.Errorf("get tcp-services configmap: %w", err)
+	}
+	if cm.Data == nil {
+		return nil
+	}
+	if _, exists := cm.Data[key]; !exists {
+		return nil
+	}
+	delete(cm.Data, key)
+	_, err = k.Client.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{})
+	return err
+}
+
 func (k *KubeDeployer) EnsureManagedDatabase(db *models.ManagedDatabase, password string) (string, error) {
 	if k == nil || k.Client == nil {
 		return "", fmt.Errorf("kube deployer not initialized")

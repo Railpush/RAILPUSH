@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -191,16 +192,25 @@ func (h *DatabaseHandler) GetDatabase(w http.ResponseWriter, r *http.Request) {
 			}
 			type DatabaseResponse struct {
 				models.ManagedDatabase
-				Password    string `json:"password"`
-				InternalURL string `json:"internal_url"`
-				ExternalURL string `json:"external_url"`
-				PSQLCommand string `json:"psql_command"`
+				Password        string `json:"password"`
+				InternalURL     string `json:"internal_url"`
+				ExternalURL     string `json:"external_url"`
+				ExternalPSQL    string `json:"external_psql_command"`
+				PSQLCommand     string `json:"psql_command"`
+			}
+			// External URL uses the allocated TCP proxy port (if available).
+			externalURL := ""
+			externalPSQL := ""
+			if db.ExternalPort > 0 {
+				externalURL = "postgresql://" + db.Username + ":" + pw + "@" + externalHost + ":" + intToStr(db.ExternalPort) + "/" + db.DBName + "?sslmode=require"
+				externalPSQL = "PGPASSWORD=" + pw + " psql -h " + externalHost + " -p " + intToStr(db.ExternalPort) + " -U " + db.Username + " " + db.DBName
 			}
 			resp := DatabaseResponse{
 				ManagedDatabase: *db,
 				Password:        pw,
 				InternalURL:     "postgresql://" + db.Username + ":" + pw + "@" + db.Host + ":" + intToStr(db.Port) + "/" + db.DBName,
-				ExternalURL:     "postgresql://" + db.Username + ":" + pw + "@" + externalHost + ":" + intToStr(db.Port) + "/" + db.DBName,
+				ExternalURL:     externalURL,
+				ExternalPSQL:    externalPSQL,
 				PSQLCommand:     "PGPASSWORD=" + pw + " psql -h " + db.Host + " -p " + intToStr(db.Port) + " -U " + db.Username + " " + db.DBName,
 			}
 			utils.RespondJSON(w, http.StatusOK, resp)
@@ -363,6 +373,12 @@ func (h *DatabaseHandler) DeleteDatabase(w http.ResponseWriter, r *http.Request)
 	if h.Config != nil && h.Config.Kubernetes.Enabled && h.Worker != nil {
 		if kd, err := h.Worker.GetKubeDeployer(); err == nil && kd != nil {
 			_ = kd.DeleteManagedDatabaseResources(db.ID)
+			// Remove TCP proxy entry so the external port is freed.
+			if db.ExternalPort > 0 {
+				ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+				_ = kd.RemoveTCPServiceEntry(ctx, db.ExternalPort)
+				cancel()
+			}
 		}
 	}
 

@@ -2,6 +2,7 @@ package models
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/railpush/api/database"
@@ -16,6 +17,7 @@ type ManagedDatabase struct {
 	ContainerID       string    `json:"container_id"`
 	Host              string    `json:"host"`
 	Port              int       `json:"port"`
+	ExternalPort      int       `json:"external_port"`
 	DBName            string    `json:"db_name"`
 	Username          string    `json:"username"`
 	EncryptedPassword string    `json:"-"`
@@ -35,10 +37,14 @@ func CreateManagedDatabase(d *ManagedDatabase) error {
 func GetManagedDatabase(id string) (*ManagedDatabase, error) {
 	d := &ManagedDatabase{}
 	var standbyReplicaID sql.NullString
-	err := database.DB.QueryRow("SELECT id, COALESCE(workspace_id::text,''), name, COALESCE(plan,'starter'), COALESCE(pg_version,16), COALESCE(container_id,''), COALESCE(host,'localhost'), COALESCE(port,5432), COALESCE(db_name,''), COALESCE(username,''), COALESCE(encrypted_password,''), COALESCE(status,'creating'), COALESCE(ha_enabled,false), COALESCE(ha_strategy,'none'), standby_replica_id::text, COALESCE(init_script,''), created_at FROM managed_databases WHERE id=$1", id).Scan(
-		&d.ID, &d.WorkspaceID, &d.Name, &d.Plan, &d.PGVersion, &d.ContainerID, &d.Host, &d.Port, &d.DBName, &d.Username, &d.EncryptedPassword, &d.Status, &d.HAEnabled, &d.HAStrategy, &standbyReplicaID, &d.InitScript, &d.CreatedAt)
+	var externalPort sql.NullInt64
+	err := database.DB.QueryRow("SELECT id, COALESCE(workspace_id::text,''), name, COALESCE(plan,'starter'), COALESCE(pg_version,16), COALESCE(container_id,''), COALESCE(host,'localhost'), COALESCE(port,5432), external_port, COALESCE(db_name,''), COALESCE(username,''), COALESCE(encrypted_password,''), COALESCE(status,'creating'), COALESCE(ha_enabled,false), COALESCE(ha_strategy,'none'), standby_replica_id::text, COALESCE(init_script,''), created_at FROM managed_databases WHERE id=$1", id).Scan(
+		&d.ID, &d.WorkspaceID, &d.Name, &d.Plan, &d.PGVersion, &d.ContainerID, &d.Host, &d.Port, &externalPort, &d.DBName, &d.Username, &d.EncryptedPassword, &d.Status, &d.HAEnabled, &d.HAStrategy, &standbyReplicaID, &d.InitScript, &d.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
+	}
+	if externalPort.Valid {
+		d.ExternalPort = int(externalPort.Int64)
 	}
 	if standbyReplicaID.Valid && standbyReplicaID.String != "" {
 		d.StandbyReplicaID = &standbyReplicaID.String
@@ -51,7 +57,7 @@ func ListManagedDatabases() ([]ManagedDatabase, error) {
 }
 
 func ListManagedDatabasesByWorkspace(workspaceID string) ([]ManagedDatabase, error) {
-	query := "SELECT id, COALESCE(workspace_id::text,''), name, COALESCE(plan,'starter'), COALESCE(pg_version,16), COALESCE(container_id,''), COALESCE(host,'localhost'), COALESCE(port,5432), COALESCE(db_name,''), COALESCE(username,''), COALESCE(status,'creating'), COALESCE(ha_enabled,false), COALESCE(ha_strategy,'none'), standby_replica_id::text, COALESCE(init_script,''), created_at FROM managed_databases"
+	query := "SELECT id, COALESCE(workspace_id::text,''), name, COALESCE(plan,'starter'), COALESCE(pg_version,16), COALESCE(container_id,''), COALESCE(host,'localhost'), COALESCE(port,5432), external_port, COALESCE(db_name,''), COALESCE(username,''), COALESCE(status,'creating'), COALESCE(ha_enabled,false), COALESCE(ha_strategy,'none'), standby_replica_id::text, COALESCE(init_script,''), created_at FROM managed_databases"
 	var (
 		rows *sql.Rows
 		err  error
@@ -69,8 +75,12 @@ func ListManagedDatabasesByWorkspace(workspaceID string) ([]ManagedDatabase, err
 	for rows.Next() {
 		var d ManagedDatabase
 		var standbyReplicaID sql.NullString
-		if err := rows.Scan(&d.ID, &d.WorkspaceID, &d.Name, &d.Plan, &d.PGVersion, &d.ContainerID, &d.Host, &d.Port, &d.DBName, &d.Username, &d.Status, &d.HAEnabled, &d.HAStrategy, &standbyReplicaID, &d.InitScript, &d.CreatedAt); err != nil {
+		var externalPort sql.NullInt64
+		if err := rows.Scan(&d.ID, &d.WorkspaceID, &d.Name, &d.Plan, &d.PGVersion, &d.ContainerID, &d.Host, &d.Port, &externalPort, &d.DBName, &d.Username, &d.Status, &d.HAEnabled, &d.HAStrategy, &standbyReplicaID, &d.InitScript, &d.CreatedAt); err != nil {
 			return nil, err
+		}
+		if externalPort.Valid {
+			d.ExternalPort = int(externalPort.Int64)
 		}
 		if standbyReplicaID.Valid && standbyReplicaID.String != "" {
 			d.StandbyReplicaID = &standbyReplicaID.String
@@ -105,6 +115,38 @@ func UpdateManagedDatabaseHA(id string, enabled bool, strategy string, standbyRe
 		"UPDATE managed_databases SET ha_enabled=$1, ha_strategy=$2, standby_replica_id=NULLIF($3,'')::uuid WHERE id=$4",
 		enabled, strategy, derefOrEmpty(standbyReplicaID), id,
 	)
+	return err
+}
+
+// AllocateExternalPort assigns the next free external TCP port from the range
+// [20000, 25000) and stores it atomically. Returns the allocated port.
+func AllocateExternalPort(dbID string) (int, error) {
+	const minPort, maxPort = 20000, 25000
+	var port int
+	err := database.DB.QueryRow(`
+		UPDATE managed_databases
+		SET external_port = (
+			SELECT p FROM generate_series($1::int, $2::int) AS p
+			WHERE p NOT IN (SELECT external_port FROM managed_databases WHERE external_port IS NOT NULL)
+			ORDER BY p LIMIT 1
+		)
+		WHERE id = $3 AND external_port IS NULL
+		RETURNING external_port`, minPort, maxPort-1, dbID).Scan(&port)
+	if err != nil {
+		return 0, fmt.Errorf("allocate external port: %w", err)
+	}
+	return port, nil
+}
+
+// SetExternalPort updates the external_port for a database (used during backfill).
+func SetExternalPort(dbID string, port int) error {
+	_, err := database.DB.Exec("UPDATE managed_databases SET external_port=$1 WHERE id=$2", port, dbID)
+	return err
+}
+
+// ClearExternalPort removes the external_port assignment (used on deletion).
+func ClearExternalPort(dbID string) error {
+	_, err := database.DB.Exec("UPDATE managed_databases SET external_port=NULL WHERE id=$1", dbID)
 	return err
 }
 
