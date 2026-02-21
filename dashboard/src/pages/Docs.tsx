@@ -1231,7 +1231,7 @@ curl -X POST https://apps.railpush.com/api/v1/auth/api-keys \\
 
               <h3 className="text-lg font-semibold mt-8 mb-3">2. Install the MCP Server</h3>
               <CodeBlock language="bash" filename="terminal" code={`# Clone the repo and build
-git clone https://github.com/muniravila-dotcom/RAILPUSH.git
+git clone https://github.com/Railpush/RAILPUSH.git
 cd RAILPUSH/mcp
 npm install
 npm run build`} />
