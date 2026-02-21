@@ -93,18 +93,6 @@ const features = [
     description:
       'Cron jobs with retries, logs, and per-job alerting—visible alongside your apps.',
   },
-  {
-    icon: Code,
-    title: 'Blueprints (IaC)',
-    description:
-      'Declare your entire stack in a single YAML file. Push to deploy services, databases, and env vars atomically.',
-  },
-  {
-    icon: Plug,
-    title: 'MCP for AI agents',
-    description:
-      'Let Claude, ChatGPT, and Cursor manage your infra through natural language with our built-in MCP server.',
-  },
 ];
 
 const steps = [
@@ -258,6 +246,7 @@ export function Landing() {
   const [scrolled, setScrolled] = useState(false);
 
   const featuresReveal = useScrollReveal();
+  const mcpReveal = useScrollReveal();
   const domainReveal = useScrollReveal();
   const stepsReveal = useScrollReveal();
   const terminalReveal = useScrollReveal();
@@ -443,6 +432,115 @@ export function Landing() {
                 <p className="text-sm text-content-secondary leading-relaxed">{f.description}</p>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── MCP Showcase ─────────────────────────────── */}
+      <section className="py-32 px-6 bg-surface-secondary relative overflow-hidden" ref={mcpReveal.ref}>
+        {/* Subtle gradient accent */}
+        <div
+          className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] pointer-events-none opacity-30"
+          style={{
+            background:
+              'radial-gradient(ellipse, rgba(99,102,241,0.2) 0%, transparent 70%)',
+          }}
+        />
+        <div className="max-w-6xl mx-auto relative z-10">
+          <div className="grid lg:grid-cols-2 gap-12 items-center">
+            {/* Left — Copy */}
+            <div className={mcpReveal.isVisible ? 'animate-slide-up-landing' : 'opacity-0'}>
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-brand/30 bg-brand/10 mb-6">
+                <Plug className="w-3.5 h-3.5 text-brand" />
+                <span className="text-xs font-semibold text-brand uppercase tracking-wider">New</span>
+              </div>
+              <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-4">
+                Your infrastructure,{' '}
+                <span className="text-gradient-brand">one conversation away</span>
+              </h2>
+              <p className="text-content-secondary text-lg leading-relaxed mb-8">
+                The RailPush MCP server gives AI agents full control of your platform. Deploy services, scale databases, debug failures, and manage secrets — all through natural language in Claude, ChatGPT, or Cursor.
+              </p>
+              <div className="space-y-4 mb-8">
+                {[
+                  { label: '50 tools', desc: 'covering every platform capability' },
+                  { label: 'Works everywhere', desc: 'Claude Desktop, Claude Code, Cursor, and any MCP client' },
+                  { label: 'Secure by default', desc: 'API key auth with full RBAC — revoke anytime' },
+                ].map((item) => (
+                  <div key={item.label} className="flex items-start gap-3">
+                    <div className="w-5 h-5 rounded-full bg-brand/10 flex items-center justify-center mt-0.5 shrink-0">
+                      <Check className="w-3 h-3 text-brand" />
+                    </div>
+                    <div>
+                      <span className="text-sm font-semibold text-content-primary">{item.label}</span>
+                      <span className="text-sm text-content-secondary"> — {item.desc}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => navigate('/docs#mcp')}
+                  className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-white font-medium px-5 py-2.5 rounded-lg transition-colors text-sm"
+                >
+                  Get started
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => navigate('/settings')}
+                  className="inline-flex items-center gap-2 border border-border-default hover:border-border-hover text-content-primary font-medium px-5 py-2.5 rounded-lg transition-colors text-sm"
+                >
+                  Create API key
+                </button>
+              </div>
+            </div>
+
+            {/* Right — Terminal demo */}
+            <div className={mcpReveal.isVisible ? 'animate-scale-in delay-200' : 'opacity-0'}>
+              <div className="rounded-xl border border-border-default bg-[#0d1117] overflow-hidden shadow-2xl shadow-black/40">
+                <div className="flex items-center gap-2 px-4 py-2.5 border-b border-white/5 bg-white/[0.02]">
+                  <div className="w-3 h-3 rounded-full bg-[#ff5f57]" />
+                  <div className="w-3 h-3 rounded-full bg-[#febc2e]" />
+                  <div className="w-3 h-3 rounded-full bg-[#28c840]" />
+                  <span className="ml-2 text-[11px] text-white/30 font-mono">Claude</span>
+                </div>
+                <div className="p-5 font-mono text-[13px] leading-relaxed space-y-4">
+                  <div>
+                    <span className="text-blue-400">You:</span>
+                    <span className="text-white/80"> Deploy the api service from staging branch</span>
+                  </div>
+                  <div>
+                    <span className="text-emerald-400">Claude:</span>
+                    <span className="text-white/60"> I'll trigger a deploy for the api service from the staging branch.</span>
+                  </div>
+                  <div className="pl-4 border-l-2 border-brand/30 text-white/40 text-xs">
+                    <div>{'>'} trigger_deploy(service_id="api-svc", branch="staging")</div>
+                    <div className="text-emerald-400/70 mt-1">{'>'} Deploy d7f2a1b started — building image...</div>
+                  </div>
+                  <div className="pt-2 border-t border-white/5">
+                    <span className="text-blue-400">You:</span>
+                    <span className="text-white/80"> Create a database called analytics and connect it</span>
+                  </div>
+                  <div>
+                    <span className="text-emerald-400">Claude:</span>
+                    <span className="text-white/60"> Done. Created the database and set DATABASE_URL on the api service.</span>
+                  </div>
+                  <div className="pl-4 border-l-2 border-brand/30 text-white/40 text-xs">
+                    <div>{'>'} create_database(name="analytics", plan="starter")</div>
+                    <div>{'>'} set_env_vars(service_id="api-svc", env_vars=[...])</div>
+                    <div className="text-emerald-400/70 mt-1">{'>'} postgresql://analytics:***@internal:5432/analytics</div>
+                  </div>
+                  <div className="pt-2 border-t border-white/5">
+                    <span className="text-blue-400">You:</span>
+                    <span className="text-white/80"> Scale it to 3 instances and enable autoscaling</span>
+                  </div>
+                  <div>
+                    <span className="text-emerald-400">Claude:</span>
+                    <span className="text-white/60"> Scaled to 3 instances with autoscaling (3–6, 70% CPU target).</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
