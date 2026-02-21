@@ -56,7 +56,19 @@ func ParseUserIDFromToken(cfg *config.Config, tokenStr string) (string, error) {
 }
 
 func AuthenticateRequest(cfg *config.Config, r *http.Request) (string, error) {
-	return ParseUserIDFromToken(cfg, extractTokenFromRequest(r))
+	tokenStr := extractTokenFromRequest(r)
+	// First try JWT.
+	userID, err := ParseUserIDFromToken(cfg, tokenStr)
+	if err == nil {
+		return userID, nil
+	}
+	// Fall back to API key lookup.
+	if tokenStr != "" {
+		if uid, kerr := models.ResolveAPIKey(tokenStr); kerr == nil && uid != "" {
+			return uid, nil
+		}
+	}
+	return "", err
 }
 
 func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {

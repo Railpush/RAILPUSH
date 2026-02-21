@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/railpush/api/database"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type User struct {
@@ -157,6 +158,34 @@ func ListAPIKeys(userID string) ([]APIKey, error) {
 		keys = append(keys, k)
 	}
 	return keys, nil
+}
+
+// ResolveAPIKey checks a raw API key against all stored hashes and returns the
+// owning user ID if a match is found.  Returns ("", nil) when no match.
+func ResolveAPIKey(rawKey string) (string, error) {
+	rows, err := database.DB.Query(
+		"SELECT user_id, key_hash, expires_at FROM api_keys",
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	now := time.Now()
+	for rows.Next() {
+		var userID, hash string
+		var expiresAt sql.NullTime
+		if err := rows.Scan(&userID, &hash, &expiresAt); err != nil {
+			return "", err
+		}
+		if expiresAt.Valid && expiresAt.Time.Before(now) {
+			continue // expired
+		}
+		if bcrypt.CompareHashAndPassword([]byte(hash), []byte(rawKey)) == nil {
+			return userID, nil
+		}
+	}
+	return "", nil
 }
 
 func GetUserGitHubToken(userID string) (string, error) {
