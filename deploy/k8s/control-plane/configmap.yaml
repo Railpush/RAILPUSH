@@ -13,6 +13,8 @@ data:
   DEPLOY_DOMAIN: "apps.railpush.com"
   # Disable legacy Caddy-based routing in Kubernetes (we use ingress-nginx instead).
   DEPLOY_DISABLE_ROUTER: "true"
+  # DNS-only hostname for external database connections (bypasses Cloudflare proxy).
+  DB_EXTERNAL_HOST: "db.railpush.com"
 
   # Enable Kubernetes runtime for customer services.
   KUBE_ENABLED: "true"

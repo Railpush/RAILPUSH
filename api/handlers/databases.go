@@ -199,11 +199,17 @@ func (h *DatabaseHandler) GetDatabase(w http.ResponseWriter, r *http.Request) {
 				PSQLCommand     string `json:"psql_command"`
 			}
 			// External URL uses the allocated TCP proxy port (if available).
+			// DB_EXTERNAL_HOST is a DNS-only record (no Cloudflare proxy) pointing to
+			// the ingress node IP. Falls back to the control plane domain if not set.
+			dbExtHost := strings.TrimSpace(h.Config.ControlPlane.DBExternalHost)
+			if dbExtHost == "" {
+				dbExtHost = externalHost
+			}
 			externalURL := ""
 			externalPSQL := ""
-			if db.ExternalPort > 0 {
-				externalURL = "postgresql://" + db.Username + ":" + pw + "@" + externalHost + ":" + intToStr(db.ExternalPort) + "/" + db.DBName + "?sslmode=require"
-				externalPSQL = "PGPASSWORD=" + pw + " psql -h " + externalHost + " -p " + intToStr(db.ExternalPort) + " -U " + db.Username + " " + db.DBName
+			if db.ExternalPort > 0 && dbExtHost != "" {
+				externalURL = "postgresql://" + db.Username + ":" + pw + "@" + dbExtHost + ":" + intToStr(db.ExternalPort) + "/" + db.DBName + "?sslmode=require"
+				externalPSQL = "PGPASSWORD=" + pw + " psql -h " + dbExtHost + " -p " + intToStr(db.ExternalPort) + " -U " + db.Username + " " + db.DBName
 			}
 			resp := DatabaseResponse{
 				ManagedDatabase: *db,
