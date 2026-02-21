@@ -311,60 +311,87 @@ my-frontend.example.com {
 
 A `railpush.yaml` file in the repo root defines the full stack. On push, the Blueprint Parser:
 
-1. Reads and validates `railpush.yaml`.
-2. Diffs against the current deployed state.
-3. Produces a change plan (create/update/delete services).
-4. Applies changes (with user approval for destructive changes in dashboard).
+1. Reads and validates `railpush.yaml` (falls back to `render.yaml` if not found).
+2. If neither file exists, the system can auto-generate one via AI analysis of the repo.
+3. Performs preflight validation (duplicate names, domain conflicts, service adoption).
+4. Provisions resources atomically: databases first, then key-value stores, then services.
+5. Resolves all cross-service env var references before deploying.
+6. On any failure, the entire sync is rolled back (no partial infrastructure).
 
 ### 7.2 railpush.yaml Schema
 
+The YAML has four top-level keys. All are optional arrays. The field names below match
+the exact `yaml:` struct tags in the Go parser — these are the only fields accepted.
+
 ```yaml
-# railpush.yaml — Full example
+# railpush.yaml — Complete reference
+# Every field shown. See defaults and notes below.
 
 services:
-  # Web Service
-  - type: web
-    name: my-api
-    runtime: node
-    repo: https://github.com/user/my-app  # optional, defaults to current repo
-    branch: main
-    buildCommand: npm install && npm run build
-    startCommand: npm start
-    healthCheckPath: /healthz
+  # ── Web Service (publicly accessible, gets an Ingress + TLS) ──
+  - type: web                                    # required: web, pserv, worker, cron, static
+    name: my-api                                 # required: unique within the blueprint
+    runtime: node                                # node, python, go, ruby, rust, docker, elixir, static, image
+    repo: https://github.com/user/my-app         # optional: defaults to blueprint repo
+    branch: main                                 # optional: defaults to blueprint branch
+    buildCommand: npm install && npm run build    # optional
+    startCommand: npm start                      # optional (ignored for static sites)
+    port: 3000                                   # optional: default 10000
+    plan: starter                                # optional: free, starter, standard, pro (default: starter)
+    numInstances: 1                              # optional: default 1 (0 = suspended)
+    healthCheckPath: /healthz                    # optional: enables HTTP health probes
+    preDeployCommand: npx prisma migrate deploy  # optional: runs before each deploy
+    autoDeploy: true                             # optional: auto-deploy on push (default: true)
+    dockerfilePath: ./Dockerfile                 # optional: custom Dockerfile path
+    dockerContext: .                              # optional: Docker build context directory
+    dockerCommand: node server.js                # optional: overrides container CMD
+    rootDir: ./services/api                      # optional: monorepo subdirectory
+    domains:                                     # optional: custom domains
+      - api.example.com
+    disk:                                        # optional: persistent disk
+      name: uploads
+      mountPath: /var/data/uploads
+      sizeGB: 10                                 # default: 10
+    buildFilter:                                 # optional: only trigger builds on matching paths
+      paths:
+        - src/**
+      ignoredPaths:
+        - docs/**
+    image:                                       # optional: deploy a prebuilt image (skips build)
+      url: docker.io/myorg/myapp:latest
     envVars:
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
         fromDatabase:
           name: my-db
-          property: connectionString
+          property: connectionString             # connectionString, host, port, user, password, database
       - key: REDIS_URL
         fromService:
           type: keyvalue
           name: my-cache
-          property: connectionString
-      - key: API_SECRET
-        sync: false  # prompt user for value on first deploy
-    autoscaling:
-      enabled: false  # v1: manual scaling only
-      instances: 1
-    disk:
-      name: uploads
-      mountPath: /var/data/uploads
-      sizeGB: 10
-    maxShutdownDelaySeconds: 60
+          property: connectionString             # host, port, hostport, connectionString
+      - key: SECRET_KEY
+        generateValue: true                      # auto-generates a 32-char random string
+      - key: SHARED_SECRET
+        fromService:
+          type: web
+          name: other-service
+          envVarKey: SECRET_KEY                   # copies the value of another service's env var
+      - fromGroup: shared-config                 # imports all vars from a shared env group
 
-  # Private Service
+  # ── Private Service (ClusterIP only, no Ingress — internal access only) ──
   - type: pserv
     name: internal-api
     runtime: docker
     dockerfilePath: ./services/internal/Dockerfile
     dockerContext: ./services/internal
+    port: 3000
     envVars:
       - key: PORT
         value: "3000"
 
-  # Background Worker
+  # ── Background Worker (no Service, no Ingress — runs start command only) ──
   - type: worker
     name: task-processor
     runtime: python
@@ -377,95 +404,152 @@ services:
           name: my-cache
           property: connectionString
 
-  # Cron Job
+  # ── Cron Job (K8s CronJob, concurrencyPolicy: Forbid, backoffLimit: 0) ──
   - type: cron
     name: daily-cleanup
     runtime: node
     buildCommand: npm install
     startCommand: node scripts/cleanup.js
-    schedule: "0 3 * * *"  # 3 AM daily
-    maxRunTimeSeconds: 3600
+    schedule: "0 3 * * *"                        # required for cron: standard cron expression
+    plan: starter
 
-  # Static Site
+  # ── Static Site (built and served via nginx, gets Ingress + TLS) ──
   - type: static
     name: my-frontend
     buildCommand: npm install && npm run build
-    staticPublishPath: ./dist
-    headers:
-      - path: /*
-        name: X-Frame-Options
-        value: DENY
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
-
-  # Key Value (Redis)
-  - type: keyvalue
-    name: my-cache
-    plan: standard
-    maxmemoryPolicy: allkeys-lru
-    ipAllowList: []  # internal only
+    staticPublishPath: ./dist                    # required for static: build output directory
 
 databases:
-  - name: my-db
-    plan: standard
-    postgresMajorVersion: 16
-    ipAllowList: []  # internal only
+  - name: my-db                                  # required: unique identifier
+    plan: standard                               # optional: free, starter, standard, pro (default: starter)
+    postgresMajorVersion: 16                     # optional: default 16
+    databaseName: myapp                          # optional: custom DB name (defaults to resource name)
+    user: myapp                                  # optional: custom username (defaults to resource name)
 
-envGroups:
-  - name: shared-config
+keyValues:
+  - name: my-cache                               # required: unique identifier
+    plan: standard                               # optional: free, starter, standard, pro (default: starter)
+    maxmemoryPolicy: allkeys-lru                 # optional: default allkeys-lru
+
+envVarGroups:
+  - name: shared-config                          # required: unique identifier
     envVars:
       - key: APP_ENV
         value: production
       - key: SENTRY_DSN
-        sync: false
-
-projects:
-  - name: my-app
-    environments:
-      - name: production
-        protectedByDefault: true
-      - name: staging
+        value: https://example@sentry.io/123
 ```
 
 ### 7.3 Service Type Reference
 
-| Field | web | pserv | worker | cron | static | keyvalue |
-|---|---|---|---|---|---|---|
-| `name` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `runtime` | ✅ | ✅ | ✅ | ✅ | n/a | n/a |
-| `buildCommand` | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
-| `startCommand` | ✅ | ✅ | ✅ | ✅ | n/a | n/a |
-| `healthCheckPath` | ✅ | ✅ | n/a | n/a | n/a | n/a |
-| `schedule` | n/a | n/a | n/a | ✅ | n/a | n/a |
-| `staticPublishPath` | n/a | n/a | n/a | n/a | ✅ | n/a |
-| `disk` | ✅ | ✅ | ✅ | n/a | n/a | n/a |
-| `envVars` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `autoscaling` | ✅ | ✅ | ✅ | n/a | n/a | n/a |
-| `preDeployCommand` | ✅ | ✅ | ✅ | n/a | n/a | n/a |
-| `maxShutdownDelaySeconds` | ✅ | ✅ | ✅ | n/a | n/a | n/a |
+Key-value stores and databases are NOT defined under `services`. They have their own
+top-level sections (`keyValues` and `databases`).
 
-### 7.4 Cross-Service References
+| Field | web | pserv | worker | cron | static |
+|---|---|---|---|---|---|
+| `name` | required | required | required | required | required |
+| `type` | required | required | required | required | required |
+| `runtime` | yes | yes | yes | yes | n/a |
+| `repo` | optional | optional | optional | optional | optional |
+| `branch` | optional | optional | optional | optional | optional |
+| `buildCommand` | yes | yes | yes | yes | yes |
+| `startCommand` | yes | yes | yes | yes | ignored |
+| `port` | yes (default: 10000) | yes (default: 10000) | n/a | n/a | n/a |
+| `plan` | yes | yes | yes | yes | yes |
+| `numInstances` | yes (default: 1) | yes (default: 1) | yes (default: 1) | n/a | n/a |
+| `healthCheckPath` | yes | yes | n/a | n/a | n/a |
+| `preDeployCommand` | yes | yes | yes | n/a | n/a |
+| `autoDeploy` | yes | yes | yes | yes | yes |
+| `schedule` | n/a | n/a | n/a | required | n/a |
+| `staticPublishPath` | n/a | n/a | n/a | n/a | required |
+| `dockerfilePath` | yes | yes | yes | yes | n/a |
+| `dockerContext` | yes | yes | yes | yes | n/a |
+| `dockerCommand` | yes | yes | yes | yes | n/a |
+| `rootDir` | yes | yes | yes | yes | yes |
+| `domains` | yes | n/a | n/a | n/a | yes |
+| `disk` | yes | yes | yes | n/a | n/a |
+| `buildFilter` | yes | yes | yes | yes | yes |
+| `image` | yes | yes | yes | n/a | n/a |
+| `envVars` | yes | yes | yes | yes | yes |
+
+### 7.4 Kubernetes Resources Generated
+
+Understanding what K8s resources each service type creates:
+
+| K8s Resource | web | pserv | worker | cron | static |
+|---|---|---|---|---|---|
+| Deployment | yes | yes | yes | no | yes |
+| CronJob | no | no | no | yes | no |
+| Service (ClusterIP) | yes | yes | no | no | yes |
+| Ingress (public URL) | yes | no | no | no | yes |
+| Secret (env vars) | yes | yes | yes | yes | yes |
+| PVC (persistent disk) | if disk set | if disk set | if disk set | no | no |
+| PodDisruptionBudget | if instances > 1 | if instances > 1 | if instances > 1 | no | no |
+| NetworkPolicy | yes (per workspace) | yes (per workspace) | yes (per workspace) | yes | yes |
+
+Managed databases create: StatefulSet + 2 Services (ClusterIP + Headless) + 2 Secrets (auth + TLS) + PVC.
+Managed key-value stores create: StatefulSet + 2 Services (ClusterIP + Headless) + Secret (auth) + PVC.
+
+### 7.5 Resource Limits by Plan
+
+| Plan | CPU Request | CPU Limit | Memory Request | Memory Limit | Monthly Cost |
+|---|---|---|---|---|---|
+| `free` | 100m | 250m | 256Mi | 512Mi | $0 |
+| `starter` | 500m | 1 | 512Mi | 1Gi | $7 |
+| `standard` | 1 | 2 | 2Gi | 4Gi | $25 |
+| `pro` | 2 | 4 | 4Gi | 8Gi | $85 |
+
+Database storage: free=1Gi, starter=5Gi, standard=20Gi, pro=100Gi.
+Redis storage: free=1Gi, starter=2Gi, standard=5Gi, pro=10Gi.
+
+### 7.6 Cross-Service References
 
 ```yaml
-# Reference another service's property
-fromService:
-  type: web | pserv | worker | keyvalue
-  name: <service-name>
-  property: host | port | connectionString | hostport
-
 # Reference a database property
-fromDatabase:
-  name: <database-name>
-  property: connectionString | host | port | user | password | databaseName
+- key: DATABASE_URL
+  fromDatabase:
+    name: <database-name>
+    property: connectionString  # or: host, port, user, password, database
 
-# Reference another service's env var
-fromService:
-  type: web
-  name: my-api
-  envVarKey: SOME_VAR
+# Reference another service's property
+- key: API_URL
+  fromService:
+    type: web                   # web, pserv, worker, keyvalue
+    name: <service-name>
+    property: host              # or: port, hostport, connectionString
+
+# Copy an env var value from another service
+- key: SHARED_SECRET
+  fromService:
+    type: web
+    name: my-api
+    envVarKey: SECRET_KEY
+
+# Auto-generate a random 32-char secret
+- key: JWT_SECRET
+  generateValue: true
+
+# Import all vars from a shared env group
+- fromGroup: shared-config
 ```
+
+### 7.7 Defaults Applied During Sync
+
+| Field | Default Value |
+|---|---|
+| `type` | `web` |
+| `port` | `10000` |
+| `plan` | `starter` |
+| `numInstances` | `1` |
+| `branch` | inherited from blueprint |
+| `repo` | inherited from blueprint |
+| `autoDeploy` | `true` |
+| `disk.sizeGB` | `10` |
+| `postgresMajorVersion` | `16` |
+| `maxmemoryPolicy` | `allkeys-lru` |
+
+Plan aliases are accepted: `hobby`/`basic`/`small` -> `starter`, `medium` -> `standard`,
+`professional`/`business`/`enterprise`/`team` -> `pro`, `trial` -> `free`.
 
 ---
 

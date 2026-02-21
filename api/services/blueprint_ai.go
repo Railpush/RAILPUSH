@@ -149,55 +149,73 @@ You will receive:
 
 Return ONLY valid YAML, no markdown fences, no explanation.
 
-Schema:
+Schema (these are the exact accepted field names):
 
-services:
-  - name: <required string>
-    type: web|worker|cron|static|pserv
+services:                                         # Array of services
+  - name: <required string>                       # unique within blueprint
+    type: web|worker|cron|static|pserv            # default: web
     runtime: docker|node|python|go|ruby|rust|elixir|static|image
-    repo: <repo-url>
-    branch: <branch>
+    repo: <repo-url>                              # defaults to blueprint repo
+    branch: <branch>                              # defaults to blueprint branch
     buildCommand: <optional string>
-    startCommand: <optional string>
+    startCommand: <optional string>               # ignored for static sites
     dockerfilePath: <optional, path to Dockerfile>
     dockerContext: <optional, docker build context directory>
     dockerCommand: <optional, overrides container CMD>
     rootDir: <optional, monorepo subdirectory containing the app>
     staticPublishPath: <required for type=static, e.g. ./dist or ./build or ./out>
     schedule: <required for type=cron, cron expression>
-    port: <int, default 10000>
-    autoDeploy: true|false
-    plan: free|starter|standard|pro
-    numInstances: <int, default 1>
-    healthCheckPath: <optional, e.g. /healthz>
+    port: <int, default 10000>                    # web and pserv only
+    autoDeploy: true|false                        # default: true
+    plan: free|starter|standard|pro               # default: starter
+    numInstances: <int, default 1>                # 0 = suspended
+    healthCheckPath: <optional, e.g. /healthz>    # web and pserv only
     preDeployCommand: <optional, runs before deploy e.g. "npx prisma migrate deploy">
-    disk:
+    domains:                                      # optional, custom domain strings
+      - example.com
+    disk:                                         # optional, persistent storage
       name: <string>
       mountPath: <string>
       sizeGB: <int, default 10>
+    buildFilter:                                  # optional, trigger builds on matching paths
+      paths: [<glob patterns>]
+      ignoredPaths: [<glob patterns>]
+    image:                                        # optional, deploy prebuilt image (skips build)
+      url: <image URL>
     envVars:
       - key: <ENV_NAME>
         value: <literal value>
       - key: <ENV_NAME>
-        generateValue: true
+        generateValue: true                       # random 32-char string
       - key: DATABASE_URL
         fromDatabase:
           name: <database name>
-          property: connectionString
+          property: connectionString              # or: host, port, user, password, database
       - key: <ENV_NAME>
-        fromGroup: <env var group name>
+        fromService:
+          name: <service name>
+          type: web|pserv|worker|keyvalue
+          property: host|port|hostport|connectionString
+      - key: <ENV_NAME>
+        fromService:
+          name: <service name>
+          type: web
+          envVarKey: <KEY>                         # copies another service's env var value
+      - fromGroup: <env var group name>           # imports all vars from a shared group
 
-databases:
+databases:                                        # Array of PostgreSQL instances
   - name: <required string>
-    plan: free|starter|standard|pro
+    plan: free|starter|standard|pro               # default: starter
     postgresMajorVersion: <int, default 16>
+    databaseName: <optional, custom DB name>
+    user: <optional, custom username>
 
-keyValues:
+keyValues:                                        # Array of Redis instances
   - name: <required string>
-    plan: free|starter|standard|pro
+    plan: free|starter|standard|pro               # default: starter
     maxmemoryPolicy: <optional, default allkeys-lru>
 
-envVarGroups:
+envVarGroups:                                     # Array of shared env var groups
   - name: <required string>
     envVars:
       - key: <ENV_NAME>
@@ -213,6 +231,9 @@ Rules:
 - Use generateValue: true for secrets (SESSION_SECRET, JWT_SECRET, API_KEY, SECRET_KEY_BASE, ENCRYPTION_KEY).
 - Look at .env.example/dot_env for required env var names. Use generateValue for secrets, leave others as placeholder comments.
 - Plan values MUST be one of: free, starter, standard, pro. Default to starter.
+- Key-value stores go under "keyValues:" (top-level), NOT under "services:".
+- Databases go under "databases:" (top-level), NOT under "services:".
+- Do NOT use fields that are not in the schema above (e.g. no "autoscaling", "maxShutdownDelaySeconds", "maxRunTimeSeconds", "headers", "routes", "ipAllowList", "projects").
 - Keep configuration conservative and production-safe.
 - Include at least one service.`
 

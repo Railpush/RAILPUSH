@@ -427,7 +427,14 @@ DB_NAME=mydb`} />
     runtime: node
     buildCommand: npm install && npm run build
     startCommand: npm start
+    port: 3000
+    plan: starter
+    numInstances: 1
+    healthCheckPath: /healthz
+    autoDeploy: true
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: DATABASE_URL
         fromDatabase:
           name: my-db
@@ -439,21 +446,47 @@ DB_NAME=mydb`} />
           property: connectionString
       - key: SECRET_KEY
         generateValue: true
+      - fromGroup: shared-config
 
   - type: worker
     name: my-worker
     runtime: node
+    buildCommand: npm install
     startCommand: npm run worker
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: my-db
+          property: connectionString
+
+  - type: cron
+    name: nightly-cleanup
+    runtime: node
+    buildCommand: npm install
+    startCommand: node scripts/cleanup.js
+    schedule: "0 3 * * *"
+    plan: starter
+
+  - type: static
+    name: my-frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
 
 databases:
   - name: my-db
-    postgresMajorVersion: 16
     plan: starter
+    postgresMajorVersion: 16
 
 keyValues:
   - name: my-cache
     plan: starter
-    maxmemoryPolicy: allkeys-lru`} />
+    maxmemoryPolicy: allkeys-lru
+
+envVarGroups:
+  - name: shared-config
+    envVars:
+      - key: APP_ENV
+        value: production`} />
             </section>
 
             {/* ── Blueprint Spec ──────────────────────────── */}
@@ -500,29 +533,30 @@ keyValues:
                   </thead>
                   <tbody className="text-content-secondary">
                     {[
-                      ['name', 'String', 'Yes', 'Unique service name'],
-                      ['type', 'String', 'Yes', 'web, pserv, worker, cron, static'],
-                      ['runtime', 'String', 'Yes*', 'node, python, go, ruby, rust, docker, static'],
+                      ['name', 'String', 'Yes', 'Unique service name within the blueprint'],
+                      ['type', 'String', 'No', 'web (default), pserv, worker, cron, static'],
+                      ['runtime', 'String', 'Yes*', 'node, python, go, ruby, rust, docker, elixir, static, image'],
                       ['repo', 'String', 'No', 'Repository URL (defaults to blueprint repo)'],
                       ['branch', 'String', 'No', 'Git branch (defaults to blueprint branch)'],
                       ['buildCommand', 'String', 'No', 'Build command'],
-                      ['startCommand', 'String', 'No', 'Start command'],
+                      ['startCommand', 'String', 'No', 'Start command (ignored for static sites)'],
                       ['dockerCommand', 'String', 'No', 'Docker CMD override'],
                       ['dockerfilePath', 'String', 'No', 'Custom Dockerfile path'],
                       ['dockerContext', 'String', 'No', 'Docker build context directory'],
                       ['rootDir', 'String', 'No', 'Root directory for monorepos'],
-                      ['port', 'Int', 'No', 'HTTP port (default: 10000)'],
-                      ['plan', 'String', 'No', 'starter, standard, pro'],
-                      ['numInstances', 'Int', 'No', 'Instance count (default: 1)'],
-                      ['healthCheckPath', 'String', 'No', 'Health check endpoint'],
+                      ['port', 'Int', 'No', 'HTTP port (default: 10000, web/pserv only)'],
+                      ['plan', 'String', 'No', 'free, starter (default), standard, pro'],
+                      ['numInstances', 'Int', 'No', 'Instance count (default: 1, 0 = suspended)'],
+                      ['healthCheckPath', 'String', 'No', 'Health check endpoint (web/pserv only)'],
                       ['preDeployCommand', 'String', 'No', 'Run before deploy (migrations, etc.)'],
-                      ['staticPublishPath', 'String', 'No', 'Build output dir (static sites)'],
-                      ['schedule', 'String', 'No', 'Cron expression (cron jobs only)'],
+                      ['staticPublishPath', 'String', 'No', 'Build output dir (required for static)'],
+                      ['schedule', 'String', 'No', 'Cron expression (required for cron)'],
                       ['autoDeploy', 'Bool', 'No', 'Auto-deploy on push (default: true)'],
                       ['envVars', 'Array', 'No', 'Environment variables'],
-                      ['domains', 'Array', 'No', 'Custom domain strings'],
-                      ['disk', 'Object', 'No', 'Persistent disk configuration'],
-                      ['image', 'Object', 'No', 'Prebuilt image to deploy'],
+                      ['domains', 'Array', 'No', 'Custom domain strings (web/static only)'],
+                      ['disk', 'Object', 'No', 'Persistent disk: { name, mountPath, sizeGB }'],
+                      ['buildFilter', 'Object', 'No', 'Build triggers: { paths, ignoredPaths }'],
+                      ['image', 'Object', 'No', 'Prebuilt image: { url }'],
                     ].map(([field, type, req, desc]) => (
                       <tr key={field} className="border-b border-border-subtle">
                         <td className="py-2 pr-4 font-mono text-xs text-brand">{field}</td>
@@ -581,8 +615,8 @@ keyValues:
                     </tr>
                   </thead>
                   <tbody className="text-content-secondary">
-                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs text-brand">name</td><td className="py-2 pr-4">String</td><td className="py-2">Database identifier (required)</td></tr>
-                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs text-brand">plan</td><td className="py-2 pr-4">String</td><td className="py-2">starter, standard, pro</td></tr>
+                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs text-brand">name</td><td className="py-2 pr-4">String</td><td className="py-2">Database identifier (required, unique)</td></tr>
+                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs text-brand">plan</td><td className="py-2 pr-4">String</td><td className="py-2">free (1Gi), starter (5Gi), standard (20Gi), pro (100Gi). Default: starter</td></tr>
                     <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs text-brand">postgresMajorVersion</td><td className="py-2 pr-4">Int</td><td className="py-2">PostgreSQL version (default: 16)</td></tr>
                     <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs text-brand">databaseName</td><td className="py-2 pr-4">String</td><td className="py-2">Custom DB name (defaults to resource name)</td></tr>
                     <tr><td className="py-2 pr-4 font-mono text-xs text-brand">user</td><td className="py-2 pr-4">String</td><td className="py-2">Custom username (defaults to resource name)</td></tr>
@@ -607,6 +641,79 @@ keyValues:
     image:
       url: docker.io/myorg/myapp:latest
     port: 3000`} />
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Key-Value (Redis) Fields</h3>
+              <div className="overflow-x-auto mb-8">
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="border-b border-border-default">
+                      <th className="text-left py-2 pr-4 font-semibold">Field</th>
+                      <th className="text-left py-2 pr-4 font-semibold">Type</th>
+                      <th className="text-left py-2 font-semibold">Description</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-content-secondary">
+                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs text-brand">name</td><td className="py-2 pr-4">String</td><td className="py-2">Redis instance identifier (required, unique)</td></tr>
+                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs text-brand">plan</td><td className="py-2 pr-4">String</td><td className="py-2">free (1Gi), starter (2Gi), standard (5Gi), pro (10Gi). Default: starter</td></tr>
+                    <tr><td className="py-2 pr-4 font-mono text-xs text-brand">maxmemoryPolicy</td><td className="py-2 pr-4">String</td><td className="py-2">Redis eviction policy (default: allkeys-lru)</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Resource Limits by Plan</h3>
+              <div className="overflow-x-auto mb-8">
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="border-b border-border-default">
+                      <th className="text-left py-2 pr-4 font-semibold">Plan</th>
+                      <th className="text-left py-2 pr-4 font-semibold">CPU</th>
+                      <th className="text-left py-2 pr-4 font-semibold">Memory</th>
+                      <th className="text-left py-2 font-semibold">Price</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-content-secondary">
+                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs">free</td><td className="py-2 pr-4">100m - 250m</td><td className="py-2 pr-4">256Mi - 512Mi</td><td className="py-2">$0/mo</td></tr>
+                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs">starter</td><td className="py-2 pr-4">500m - 1</td><td className="py-2 pr-4">512Mi - 1Gi</td><td className="py-2">$7/mo</td></tr>
+                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs">standard</td><td className="py-2 pr-4">1 - 2</td><td className="py-2 pr-4">2Gi - 4Gi</td><td className="py-2">$25/mo</td></tr>
+                    <tr><td className="py-2 pr-4 font-mono text-xs">pro</td><td className="py-2 pr-4">2 - 4</td><td className="py-2 pr-4">4Gi - 8Gi</td><td className="py-2">$85/mo</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Defaults Applied</h3>
+              <div className="overflow-x-auto mb-8">
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="border-b border-border-default">
+                      <th className="text-left py-2 pr-4 font-semibold">Field</th>
+                      <th className="text-left py-2 font-semibold">Default</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-content-secondary">
+                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs">type</td><td className="py-2">web</td></tr>
+                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs">port</td><td className="py-2">10000</td></tr>
+                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs">plan</td><td className="py-2">starter</td></tr>
+                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs">numInstances</td><td className="py-2">1</td></tr>
+                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs">autoDeploy</td><td className="py-2">true</td></tr>
+                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs">disk.sizeGB</td><td className="py-2">10</td></tr>
+                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs">postgresMajorVersion</td><td className="py-2">16</td></tr>
+                    <tr><td className="py-2 pr-4 font-mono text-xs">maxmemoryPolicy</td><td className="py-2">allkeys-lru</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Build Filter</h3>
+              <CodeBlock filename="build filter example" code={`services:
+  - type: web
+    name: my-api
+    runtime: node
+    buildFilter:
+      paths:
+        - src/**
+        - package.json
+      ignoredPaths:
+        - docs/**
+        - "*.md"`} />
             </section>
 
             {/* ── Environment Variables ────────────────────── */}
