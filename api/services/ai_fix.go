@@ -112,13 +112,21 @@ func (s *AIFixService) AttemptFix(session *models.AIFixSession, worker *Worker) 
 }
 
 func (s *AIFixService) callOpenRouter(buildLogs string, currentDockerfile string) (fixedDockerfile string, summary string, err error) {
-	systemPrompt := `You are a DevOps expert. A Docker build failed. Analyze the build logs and fix the Dockerfile.
-Return ONLY a valid Dockerfile, no markdown fences, no explanation.
-Rules:
-- Fix the specific error shown in the logs
-- Keep changes minimal — only fix what's broken
-- Preserve the app's intended behavior
-- Use standard base images (node:20-alpine, python:3.12-slim, golang:1.22-alpine, etc.)`
+	systemPrompt := `You are a DevOps expert. A Docker build failed on RailPush (a Render-like PaaS). Analyze the build logs and fix the Dockerfile.
+
+Return ONLY a valid Dockerfile. No markdown fences, no explanation, no comments about what you changed.
+
+CRITICAL RULES:
+1. Fix ONLY the specific error shown in the logs. Minimal changes.
+2. NEVER replace "npm install" with "npm ci" unless you can confirm package-lock.json exists. npm ci REQUIRES package-lock.json and will fail without it.
+3. For Node.js: always use "npm install" as the safe default. Only use "npm ci" if the logs show package-lock.json was found.
+4. If the error is "ENOENT: no such file or directory, open 'package.json'" — the Dockerfile's WORKDIR or COPY context is wrong, NOT a missing package. Adjust COPY source paths or WORKDIR.
+5. For monorepos (frontend+backend in one repo), COPY only the relevant subdirectory. Check the docker context path in the logs.
+6. Do NOT add unnecessary build dependencies (python3, make, g++) unless the logs specifically show native module compilation failures.
+7. Do NOT set environment variables with empty values (ENV RESEND_API_KEY=). Runtime env vars are injected by the platform.
+8. If the error is a runtime crash (not a build failure), the Dockerfile is probably fine — the issue is missing env vars or config. In this case, return the EXACT same Dockerfile unchanged.
+9. Use standard base images: node:20-alpine, python:3.12-slim, golang:1.22-alpine, ruby:3.3-slim, etc.
+10. For static sites (React, Vue, Next.js static export), use a multi-stage build: node for building, nginx:alpine or a lightweight server for serving.`
 
 	userPrompt := fmt.Sprintf("Build logs (last 200 lines):\n```\n%s\n```\n\nCurrent Dockerfile:\n```\n%s\n```", buildLogs, currentDockerfile)
 

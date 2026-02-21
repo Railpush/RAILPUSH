@@ -169,7 +169,15 @@ func (k *KubeDeployer) BuildImageWithKaniko(deployID string, svc *models.Service
 				return fmt.Errorf("update git token secret: %w", err)
 			}
 		} else if apierrors.IsNotFound(err) {
-			if _, err := k.Client.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
+			if _, err := k.Client.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); apierrors.IsAlreadyExists(err) {
+				// Race: another worker created it between our Get and Create. Fetch and update.
+				if existing, err := k.Client.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{}); err == nil && existing != nil {
+					sec.ResourceVersion = existing.ResourceVersion
+					if _, err := k.Client.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
+						return fmt.Errorf("update git token secret (retry): %w", err)
+					}
+				}
+			} else if err != nil {
 				return fmt.Errorf("create git token secret: %w", err)
 			}
 		} else if err != nil {
@@ -323,6 +331,31 @@ if [ -n "${RAILPUSH_BASE_IMAGE:-}" ] && _validate_image_ref "$RAILPUSH_BASE_IMAG
   BASE_IMAGE_NODE="$RAILPUSH_BASE_IMAGE"
   BASE_IMAGE_PYTHON="$RAILPUSH_BASE_IMAGE"
   BASE_IMAGE_GO="$RAILPUSH_BASE_IMAGE"
+fi
+
+# Pre-check: for Node.js runtimes, verify package.json exists in the docker context.
+if [ "$RUNTIME" = "static" ] || [ "$RUNTIME" = "node" ]; then
+  PKG_CHECK_DIR="$(dirname "$DOCKERFILE_PATH")"
+  [ "$PKG_CHECK_DIR" = "." ] && PKG_CHECK_DIR="$DOCKER_CONTEXT"
+  if [ ! -f "$PKG_CHECK_DIR/package.json" ] && [ ! -f "package.json" ]; then
+    echo ""
+    echo "========================================================================"
+    echo "WARNING: No package.json found in the build context."
+    echo ""
+    echo "  Docker context: $DOCKER_CONTEXT"
+    echo "  Dockerfile:     $DOCKERFILE_PATH"
+    echo ""
+    echo "  If your project uses a monorepo layout (e.g. frontend/ and backend/"
+    echo "  subdirectories), set 'rootDir' or 'dockerContext' in your"
+    echo "  railpush.yaml to the directory containing package.json."
+    echo ""
+    echo "  Example:"
+    echo "    services:"
+    echo "      - name: my-frontend"
+    echo "        rootDir: frontend"
+    echo "========================================================================"
+    echo ""
+  fi
 fi
 
 if [ "$RUNTIME" = "static" ] && [ ! -f "$DOCKERFILE_PATH" ]; then

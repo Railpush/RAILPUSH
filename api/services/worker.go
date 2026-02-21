@@ -423,6 +423,7 @@ func (w *Worker) processJob(job DeployJob) {
 		}
 		if err != nil {
 			appendLog(fmt.Sprintf("ERROR: Build failed: %v", err))
+			appendBuildHints(deploy.BuildLog, appendLog)
 			w.failDeploy(deploy, svc)
 			return
 		}
@@ -695,6 +696,7 @@ func (w *Worker) processJobKubernetes(job DeployJob, appendLog func(string)) {
 		appendLog("==> Starting Kubernetes build job...")
 		if err := kd.BuildImageWithKaniko(deploy.ID, svc, svc.RepoURL, svc.Branch, deploy.CommitSHA, svc.DockerContext, svc.DockerfilePath, imageTag, job.GitHubToken, deploy.DockerfileOverride, appendLog); err != nil {
 			appendLog(fmt.Sprintf("ERROR: Build failed: %v", err))
+			appendBuildHints(deploy.BuildLog, appendLog)
 			w.failDeploy(deploy, svc)
 			return
 		}
@@ -1037,6 +1039,53 @@ func (w *Worker) resolveGitHubToken(deploy *models.Deploy, svc *models.Service) 
 		return ""
 	}
 	return t
+}
+
+// appendBuildHints scans the build log for common error patterns and appends
+// actionable fix suggestions. Helps users self-serve instead of filing support tickets.
+func appendBuildHints(buildLog string, appendLog func(string)) {
+	if appendLog == nil || buildLog == "" {
+		return
+	}
+	lower := strings.ToLower(buildLog)
+	var hints []string
+
+	// Missing package.json — wrong docker context or rootDir
+	if strings.Contains(lower, "enoent") && strings.Contains(lower, "package.json") {
+		hints = append(hints, "HINT: package.json not found. Your build context may point to the wrong directory. Set 'rootDir' or 'dockerContext' in your railpush.yaml to the folder containing package.json.")
+	}
+	// npm ci without lock file
+	if strings.Contains(lower, "npm ci can only install") && strings.Contains(lower, "package-lock.json") {
+		hints = append(hints, "HINT: npm ci requires a package-lock.json file. Either add one to your repo (run 'npm install' locally and commit the lock file) or change your build command to 'npm install'.")
+	}
+	// Missing env var at runtime (common crash)
+	if strings.Contains(lower, "missing") && (strings.Contains(lower, "api key") || strings.Contains(lower, "api_key") || strings.Contains(lower, "secret")) {
+		hints = append(hints, "HINT: Your app is crashing because a required environment variable (API key/secret) is missing. Set it in the RailPush dashboard under Environment > Environment Variables.")
+	}
+	// Python missing module
+	if strings.Contains(lower, "modulenotfounderror") || strings.Contains(lower, "no module named") {
+		hints = append(hints, "HINT: A Python module is missing. Ensure your requirements.txt lists all dependencies, and your Dockerfile runs 'pip install -r requirements.txt'.")
+	}
+	// Port already in use / EADDRINUSE
+	if strings.Contains(lower, "eaddrinuse") || strings.Contains(lower, "address already in use") {
+		hints = append(hints, "HINT: Port conflict. Ensure your app listens on the port specified in your service config (default: 10000). Use the PORT environment variable: process.env.PORT or os.environ['PORT'].")
+	}
+	// Permission denied on file
+	if strings.Contains(lower, "permission denied") && (strings.Contains(lower, "chmod") || strings.Contains(lower, "/app/") || strings.Contains(lower, "eacces")) {
+		hints = append(hints, "HINT: Permission denied. If your Dockerfile uses a non-root user, ensure file ownership is correct (use 'COPY --chown=...' or 'RUN chown ...').")
+	}
+	// Out of memory
+	if strings.Contains(lower, "out of memory") || strings.Contains(lower, "javascript heap") || strings.Contains(lower, "enomem") {
+		hints = append(hints, "HINT: Build ran out of memory. Try adding 'NODE_OPTIONS=--max-old-space-size=4096' as a build environment variable, or upgrade to a larger plan.")
+	}
+	// Dockerfile not found
+	if strings.Contains(lower, "error: could not find or read dockerfile") || (strings.Contains(lower, "no such file") && strings.Contains(lower, "dockerfile")) {
+		hints = append(hints, "HINT: Dockerfile not found. Check that 'dockerfilePath' in your railpush.yaml points to the correct location relative to the repo root.")
+	}
+
+	for _, h := range hints {
+		appendLog(h)
+	}
 }
 
 func (w *Worker) failDeploy(deploy *models.Deploy, svc *models.Service) {

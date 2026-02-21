@@ -775,7 +775,12 @@ func (k *KubeDeployer) WaitForServiceReady(deploymentName string, svc *models.Se
 
 	// If the Pod is failing (CrashLoopBackOff, ImagePullBackOff, etc), surface that quickly.
 	// Otherwise workers tend to time out after minutes with an unhelpful "ready=0" message.
-	missingEnvVarRe := regexp.MustCompile(`Missing required environment variable:\s*([A-Za-z_][A-Za-z0-9_]*)`)
+	// Match various "missing env var" patterns from common frameworks:
+	// - "Missing required environment variable: FOO"
+	// - "Missing API key" / "API key is required"
+	// - "Error: secret key not set" etc.
+	missingEnvVarRe := regexp.MustCompile(`(?i)Missing required environment variable:\s*([A-Za-z_][A-Za-z0-9_]*)`)
+	missingKeyRe := regexp.MustCompile(`(?i)(?:missing|required|not set|not found|undefined|empty)\s+(?:api[_ ]?key|secret[_ ]?key|token|password|database[_ ]?url|connection[_ ]?string)`)
 
 	deadline := time.Now().Add(5 * time.Minute)
 	for {
@@ -877,6 +882,9 @@ func (k *KubeDeployer) WaitForServiceReady(deploymentName string, svc *models.Se
 									m := missingEnvVarRe.FindStringSubmatch(ln)
 									if len(m) == 2 && strings.TrimSpace(m[1]) != "" {
 										return fmt.Errorf("service pod is crashing: missing required environment variable %s (set it in Environment Variables and redeploy)", strings.TrimSpace(m[1]))
+									}
+									if missingKeyRe.MatchString(ln) {
+										return fmt.Errorf("service pod is crashing: %s — set the required API key or secret in Environment Variables and redeploy", strings.TrimSpace(ln))
 									}
 								}
 
