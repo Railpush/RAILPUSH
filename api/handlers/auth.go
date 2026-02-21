@@ -423,6 +423,19 @@ func (h *AuthHandler) UpdateBlueprintAISettings(w http.ResponseWriter, r *http.R
 	})
 }
 
+func (h *AuthHandler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	keys, err := models.ListAPIKeys(userID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to list api keys")
+		return
+	}
+	if keys == nil {
+		keys = []models.APIKey{}
+	}
+	utils.RespondJSON(w, http.StatusOK, keys)
+}
+
 func (h *AuthHandler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r)
 	var req struct {

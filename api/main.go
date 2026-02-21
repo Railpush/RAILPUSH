@@ -211,6 +211,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/auth/user", auth.GetCurrentUser).Methods("GET")
 	authed.HandleFunc("/settings/blueprint-ai", auth.GetBlueprintAISettings).Methods("GET")
 	authed.HandleFunc("/settings/blueprint-ai", auth.UpdateBlueprintAISettings).Methods("PUT")
+	authed.HandleFunc("/auth/api-keys", auth.ListAPIKeys).Methods("GET")
 	authed.HandleFunc("/auth/api-keys", auth.CreateAPIKey).Methods("POST")
 	authed.HandleFunc("/auth/api-keys/{id}", auth.DeleteAPIKey).Methods("DELETE")
 
