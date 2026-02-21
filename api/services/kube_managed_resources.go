@@ -737,7 +737,8 @@ func (k *KubeDeployer) DeleteManagedDatabaseResources(dbID string) error {
 	ns := k.namespace()
 	name := kubeManagedDatabaseName(id)
 	headlessSvcName := name + "-headless"
-	secName := name + "-auth"
+	authSecName := name + "-auth"
+	tlsSecName := name + "-tls"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -745,7 +746,8 @@ func (k *KubeDeployer) DeleteManagedDatabaseResources(dbID string) error {
 	_ = k.Client.AppsV1().StatefulSets(ns).Delete(ctx, name, metav1.DeleteOptions{})
 	_ = k.Client.CoreV1().Services(ns).Delete(ctx, name, metav1.DeleteOptions{})
 	_ = k.Client.CoreV1().Services(ns).Delete(ctx, headlessSvcName, metav1.DeleteOptions{})
-	_ = k.Client.CoreV1().Secrets(ns).Delete(ctx, secName, metav1.DeleteOptions{})
+	_ = k.Client.CoreV1().Secrets(ns).Delete(ctx, authSecName, metav1.DeleteOptions{})
+	_ = k.Client.CoreV1().Secrets(ns).Delete(ctx, tlsSecName, metav1.DeleteOptions{})
 
 	// Best-effort: delete PVCs created by the StatefulSet.
 	selector := "railpush.com/database-id=" + id
@@ -808,14 +810,24 @@ func (k *KubeDeployer) RunDatabaseInitScript(db *models.ManagedDatabase, passwor
 
 	// Use a short-lived pod that runs psql with the init script.
 	// The password is injected via the existing auth Secret (never embedded in pod args).
+	// The init script is passed as an env var and piped to psql via stdin to avoid
+	// shell injection — no user content is ever interpreted by sh.
+	if db == nil {
+		return fmt.Errorf("database is nil")
+	}
 	podName := name + "-init"
 	authSecretName := name + "-auth"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// Clean up any previous init pod (best-effort).
+	// Clean up any previous init pod (best-effort) and wait until it's gone.
 	_ = k.Client.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{})
-	time.Sleep(2 * time.Second)
+	for i := 0; i < 15; i++ {
+		if _, err := k.Client.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); apierrors.IsNotFound(err) {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -828,8 +840,10 @@ func (k *KubeDeployer) RunDatabaseInitScript(db *models.ManagedDatabase, passwor
 				{
 					Name:  "init",
 					Image: fmt.Sprintf("postgres:%d-alpine", db.PGVersion),
+					// Write the init script from env var to a temp file, then run via psql -f.
+					// Using printenv avoids shell expansion of $, backticks, etc. in the SQL.
 					Command: []string{"sh", "-c",
-						fmt.Sprintf("psql \"postgresql://$PGUSER:$PGPASSWORD@%s:5432/$PGDATABASE?sslmode=require\" -c %q", host, initScript),
+						fmt.Sprintf("printenv INIT_SQL > /tmp/init.sql && psql -h %s -p 5432 -f /tmp/init.sql", host),
 					},
 					Env: []corev1.EnvVar{
 						{Name: "PGUSER", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
@@ -841,6 +855,8 @@ func (k *KubeDeployer) RunDatabaseInitScript(db *models.ManagedDatabase, passwor
 						{Name: "PGDATABASE", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
 							LocalObjectReference: corev1.LocalObjectReference{Name: authSecretName}, Key: "POSTGRES_DB",
 						}}},
+						{Name: "PGSSLMODE", Value: "require"},
+						{Name: "INIT_SQL", Value: initScript},
 					},
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{

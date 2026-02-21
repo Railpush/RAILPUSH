@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,6 +16,11 @@ import (
 
 	"github.com/railpush/api/models"
 )
+
+// validDockerImageRef matches valid Docker image references: registry/repo:tag or repo@sha256:...
+// Rejects shell metacharacters ($, `, \, ;, |, &, newlines, etc.) to prevent injection
+// in generated Dockerfiles.
+var validDockerImageRef = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$`)
 
 func int32Ptr(v int32) *int32 { return &v }
 func int64Ptr(v int64) *int64 { return &v }
@@ -142,10 +148,33 @@ func (k *KubeDeployer) BuildImageWithKaniko(deployID string, svc *models.Service
 	}
 
 	// Store GitHub token in a short-lived Secret (avoid embedding sensitive values in Job specs).
+	// The Secret MUST be created before the Job, otherwise the pod's SecretKeyRef will fail
+	// and the Job dies immediately (BackoffLimit=0).
 	githubToken = strings.TrimSpace(githubToken)
 	secretName := ""
 	if githubToken != "" {
 		secretName = jobName + "-git"
+		sec := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      secretName,
+				Namespace: ns,
+				Labels:    labels,
+			},
+			Type:       corev1.SecretTypeOpaque,
+			StringData: map[string]string{"token": githubToken},
+		}
+		if existing, err := k.Client.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{}); err == nil && existing != nil {
+			sec.ResourceVersion = existing.ResourceVersion
+			if _, err := k.Client.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
+				return fmt.Errorf("update git token secret: %w", err)
+			}
+		} else if apierrors.IsNotFound(err) {
+			if _, err := k.Client.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
+				return fmt.Errorf("create git token secret: %w", err)
+			}
+		} else if err != nil {
+			return fmt.Errorf("get git token secret: %w", err)
+		}
 	}
 
 	// Create the job if it doesn't exist. If it exists, we attach to it.
@@ -247,7 +276,7 @@ if [ -n "${RAILPUSH_BUILD_INCLUDE:-}" ]; then
   echo "RailPush: generating .dockerignore from buildInclude"
   # Start by ignoring everything, then whitelist the specified paths.
   printf '%s\n' "*" > .dockerignore
-  echo "$RAILPUSH_BUILD_INCLUDE" | while IFS= read -r incl; do
+  echo "$RAILPUSH_BUILD_INCLUDE" | while IFS= read -r incl || [ -n "$incl" ]; do
     incl="$(printf '%s' "$incl" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     [ -z "$incl" ] && continue
     printf '!%s\n' "$incl" >> .dockerignore
@@ -259,7 +288,7 @@ if [ -n "${RAILPUSH_BUILD_INCLUDE:-}" ]; then
   cat .dockerignore | sed 's/^/  /'
 elif [ -n "${RAILPUSH_BUILD_EXCLUDE:-}" ]; then
   echo "RailPush: generating .dockerignore from buildExclude"
-  echo "$RAILPUSH_BUILD_EXCLUDE" | while IFS= read -r excl; do
+  echo "$RAILPUSH_BUILD_EXCLUDE" | while IFS= read -r excl || [ -n "$excl" ]; do
     excl="$(printf '%s' "$excl" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     [ -z "$excl" ] && continue
     printf '%s\n' "$excl" >> .dockerignore
@@ -276,9 +305,24 @@ else
 fi
 
 # Resolve base image override for auto-generated Dockerfiles.
-BASE_IMAGE_NODE="${RAILPUSH_BASE_IMAGE:-node:20-alpine}"
-BASE_IMAGE_PYTHON="${RAILPUSH_BASE_IMAGE:-python:3.12-slim}"
-BASE_IMAGE_GO="${RAILPUSH_BASE_IMAGE:-golang:1.24-alpine}"
+# The Go layer validates RAILPUSH_BASE_IMAGE against a strict regex, but as defense
+# in depth we also reject values containing shell metacharacters here.
+_validate_image_ref() {
+  case "$1" in
+    *'$'*|*'`'*|*'\'*|*';'*|*'|'*|*'&'*|*'('*|*')'*|*'{'*|*'}'*|*'>'*|*'<'*|*'!'*|*"'"*)
+      echo "RailPush: WARNING: invalid base image reference, using default" >&2
+      return 1 ;;
+  esac
+  return 0
+}
+BASE_IMAGE_NODE="node:20-alpine"
+BASE_IMAGE_PYTHON="python:3.12-slim"
+BASE_IMAGE_GO="golang:1.24-alpine"
+if [ -n "${RAILPUSH_BASE_IMAGE:-}" ] && _validate_image_ref "$RAILPUSH_BASE_IMAGE"; then
+  BASE_IMAGE_NODE="$RAILPUSH_BASE_IMAGE"
+  BASE_IMAGE_PYTHON="$RAILPUSH_BASE_IMAGE"
+  BASE_IMAGE_GO="$RAILPUSH_BASE_IMAGE"
+fi
 
 if [ "$RUNTIME" = "static" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
   echo "RailPush: generating static Dockerfile at $DOCKERFILE_PATH"
@@ -590,35 +634,21 @@ fi
 			return fmt.Errorf("get build job for git token secret: %w", err)
 		}
 
-		sec := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      secretName,
-				Namespace: ns,
-				Labels:    labels,
-				OwnerReferences: []metav1.OwnerReference{
-					{
-						APIVersion: batchv1.SchemeGroupVersion.String(),
-						Kind:       "Job",
-						Name:       buildJob.Name,
-						UID:        buildJob.UID,
-					},
-				},
-			},
-			Type:       corev1.SecretTypeOpaque,
-			StringData: map[string]string{"token": githubToken},
+		// Update the already-created Secret to add OwnerReference for GC.
+		sec, err := k.Client.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("get git token secret for owner ref: %w", err)
 		}
-
-		if existing, err := k.Client.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{}); err == nil && existing != nil {
-			sec.ResourceVersion = existing.ResourceVersion
-			if _, err := k.Client.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
-				return fmt.Errorf("update git token secret: %w", err)
-			}
-		} else if apierrors.IsNotFound(err) {
-			if _, err := k.Client.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
-				return fmt.Errorf("create git token secret: %w", err)
-			}
-		} else if err != nil {
-			return fmt.Errorf("get git token secret: %w", err)
+		sec.OwnerReferences = []metav1.OwnerReference{
+			{
+				APIVersion: batchv1.SchemeGroupVersion.String(),
+				Kind:       "Job",
+				Name:       buildJob.Name,
+				UID:        buildJob.UID,
+			},
+		}
+		if _, err := k.Client.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update git token secret owner ref: %w", err)
 		}
 
 		defer func() {
@@ -702,7 +732,11 @@ func buildGitCloneEnvWithOpts(repoURL string, branch string, commitSHA string, t
 	}
 	baseImage = strings.TrimSpace(baseImage)
 	if baseImage != "" {
-		env = append(env, corev1.EnvVar{Name: "RAILPUSH_BASE_IMAGE", Value: baseImage})
+		// Validate to prevent shell injection in generated Dockerfiles (FROM $BASE_IMAGE_*).
+		if validDockerImageRef.MatchString(baseImage) {
+			env = append(env, corev1.EnvVar{Name: "RAILPUSH_BASE_IMAGE", Value: baseImage})
+		}
+		// Invalid values are silently dropped — the default base image will be used.
 	}
 	buildInclude = strings.TrimSpace(buildInclude)
 	if buildInclude != "" {

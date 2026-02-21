@@ -646,8 +646,9 @@ func normalizeBlueprintPlan(raw string) (string, bool) {
 
 func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	type pendingDeploy struct {
-		svc  *models.Service
-		sdef RenderService
+		svc     *models.Service
+		sdef    RenderService
+		created bool // true if newly created, false if adopted/updated
 	}
 	type pendingDBProvision struct {
 		db       *models.ManagedDatabase
@@ -1547,9 +1548,9 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			}
 		}
 
-		if created {
-			pending = append(pending, pendingDeploy{svc: svc, sdef: sdef})
-		}
+		// Track for env var resolution in Phase 3d — both new and adopted services
+		// need their YAML-declared envVars applied.
+		pending = append(pending, pendingDeploy{svc: svc, sdef: sdef, created: created})
 	}
 
 	// --- Phase 3c: Create env var groups ---
@@ -1698,9 +1699,13 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	}
 
 	// --- Phase 4: Create queued deploys (so workers don't pick them up until we flip to pending) ---
+	// Only newly created services get an initial deploy; adopted services already have deploy history.
 	var deployIDs []string
 	var jobs []services.DeployJob
 	for _, p := range pending {
+		if !p.created {
+			continue
+		}
 		deploy := &models.Deploy{
 			ServiceID: p.svc.ID, Trigger: "blueprint", Branch: p.svc.Branch,
 			Status: "queued",

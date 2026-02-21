@@ -51,7 +51,7 @@ func ListManagedDatabases() ([]ManagedDatabase, error) {
 }
 
 func ListManagedDatabasesByWorkspace(workspaceID string) ([]ManagedDatabase, error) {
-	query := "SELECT id, workspace_id, name, plan, pg_version, container_id, host, port, db_name, username, status, COALESCE(ha_enabled,false), COALESCE(ha_strategy,'none'), standby_replica_id::text, COALESCE(init_script,''), created_at FROM managed_databases"
+	query := "SELECT id, COALESCE(workspace_id::text,''), name, COALESCE(plan,'starter'), COALESCE(pg_version,16), COALESCE(container_id,''), COALESCE(host,'localhost'), COALESCE(port,5432), COALESCE(db_name,''), COALESCE(username,''), COALESCE(status,'creating'), COALESCE(ha_enabled,false), COALESCE(ha_strategy,'none'), standby_replica_id::text, COALESCE(init_script,''), created_at FROM managed_databases"
 	var (
 		rows *sql.Rows
 		err  error
