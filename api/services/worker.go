@@ -1431,6 +1431,16 @@ func (w *Worker) ProvisionDatabase(db *models.ManagedDatabase, password string) 
 			_ = models.UpdateManagedDatabaseStatus(db.ID, "available", "k8s:"+name)
 			_ = models.UpdateManagedDatabaseConnection(db.ID, 5432, name)
 			log.Printf("Database %s provisioned successfully in k8s (%s)", db.Name, name)
+
+			// Run init script if specified (one-time, on first provision only).
+			if initScript := strings.TrimSpace(db.InitScript); initScript != "" {
+				log.Printf("Database %s: running init script (%d bytes)", db.Name, len(initScript))
+				if err := kd.RunDatabaseInitScript(db, password, initScript); err != nil {
+					log.Printf("Database %s: init script failed: %v (database is still available)", db.Name, err)
+				} else {
+					log.Printf("Database %s: init script completed successfully", db.Name)
+				}
+			}
 			return
 		}
 

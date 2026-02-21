@@ -23,19 +23,20 @@ type ManagedDatabase struct {
 	HAEnabled         bool      `json:"ha_enabled"`
 	HAStrategy        string    `json:"ha_strategy"`
 	StandbyReplicaID  *string   `json:"standby_replica_id"`
+	InitScript        string    `json:"init_script"`
 	CreatedAt         time.Time `json:"created_at"`
 }
 
 func CreateManagedDatabase(d *ManagedDatabase) error {
-	return database.DB.QueryRow("INSERT INTO managed_databases (workspace_id, name, plan, pg_version, host, port, db_name, username, encrypted_password) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, status, created_at",
-		d.WorkspaceID, d.Name, d.Plan, d.PGVersion, d.Host, d.Port, d.DBName, d.Username, d.EncryptedPassword).Scan(&d.ID, &d.Status, &d.CreatedAt)
+	return database.DB.QueryRow("INSERT INTO managed_databases (workspace_id, name, plan, pg_version, host, port, db_name, username, encrypted_password, init_script) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, status, created_at",
+		d.WorkspaceID, d.Name, d.Plan, d.PGVersion, d.Host, d.Port, d.DBName, d.Username, d.EncryptedPassword, d.InitScript).Scan(&d.ID, &d.Status, &d.CreatedAt)
 }
 
 func GetManagedDatabase(id string) (*ManagedDatabase, error) {
 	d := &ManagedDatabase{}
 	var standbyReplicaID sql.NullString
-	err := database.DB.QueryRow("SELECT id, COALESCE(workspace_id::text,''), name, COALESCE(plan,'starter'), COALESCE(pg_version,16), COALESCE(container_id,''), COALESCE(host,'localhost'), COALESCE(port,5432), COALESCE(db_name,''), COALESCE(username,''), COALESCE(encrypted_password,''), COALESCE(status,'creating'), COALESCE(ha_enabled,false), COALESCE(ha_strategy,'none'), standby_replica_id::text, created_at FROM managed_databases WHERE id=$1", id).Scan(
-		&d.ID, &d.WorkspaceID, &d.Name, &d.Plan, &d.PGVersion, &d.ContainerID, &d.Host, &d.Port, &d.DBName, &d.Username, &d.EncryptedPassword, &d.Status, &d.HAEnabled, &d.HAStrategy, &standbyReplicaID, &d.CreatedAt)
+	err := database.DB.QueryRow("SELECT id, COALESCE(workspace_id::text,''), name, COALESCE(plan,'starter'), COALESCE(pg_version,16), COALESCE(container_id,''), COALESCE(host,'localhost'), COALESCE(port,5432), COALESCE(db_name,''), COALESCE(username,''), COALESCE(encrypted_password,''), COALESCE(status,'creating'), COALESCE(ha_enabled,false), COALESCE(ha_strategy,'none'), standby_replica_id::text, COALESCE(init_script,''), created_at FROM managed_databases WHERE id=$1", id).Scan(
+		&d.ID, &d.WorkspaceID, &d.Name, &d.Plan, &d.PGVersion, &d.ContainerID, &d.Host, &d.Port, &d.DBName, &d.Username, &d.EncryptedPassword, &d.Status, &d.HAEnabled, &d.HAStrategy, &standbyReplicaID, &d.InitScript, &d.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

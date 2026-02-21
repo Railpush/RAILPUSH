@@ -314,13 +314,23 @@ export function ServiceSettings() {
               onChange={(e) => setFormData({ ...formData, start_command: e.target.value })}
               placeholder="e.g., npm start"
             />
-            <Input
-              label="Pre-Deploy Command"
-              value={formData.pre_deploy_command}
-              onChange={(e) => setFormData({ ...formData, pre_deploy_command: e.target.value })}
-              placeholder="e.g., npx prisma migrate deploy"
-              hint="Runs before the new version starts (e.g., database migrations)"
-            />
+            <div>
+              <Input
+                label="Pre-Deploy Command"
+                value={formData.pre_deploy_command}
+                onChange={(e) => setFormData({ ...formData, pre_deploy_command: e.target.value })}
+                placeholder="e.g., npx prisma migrate deploy"
+                hint="Runs AFTER build completes, BEFORE the new version goes live. Use for database migrations, cache warming, etc."
+              />
+              {formData.pre_deploy_command && (
+                <div className="mt-2 flex items-center gap-2 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/20">
+                  <span className="text-amber-500 text-xs font-semibold">PRE-DEPLOY</span>
+                  <span className="text-xs text-content-secondary">
+                    This command runs as a separate job before each deploy. If it fails, the deploy is aborted.
+                  </span>
+                </div>
+              )}
+            </div>
 
             <div>
               <label className="block text-sm font-medium text-content-primary mb-2">Auto-Deploy</label>

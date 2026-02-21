@@ -239,6 +239,47 @@ if [ -n "${RAILPUSH_DOCKERFILE_CONTENT:-}" ]; then
   mkdir -p "$(dirname "$DOCKERFILE_PATH")" 2>/dev/null || true
   printf '%s\n' "$RAILPUSH_DOCKERFILE_CONTENT" > "$DOCKERFILE_PATH"
 fi
+
+# Per-service build context: generate .dockerignore from buildInclude/buildExclude.
+# buildInclude is a newline-delimited list of files to KEEP (everything else is excluded).
+# buildExclude is a newline-delimited list of files to EXCLUDE.
+if [ -n "${RAILPUSH_BUILD_INCLUDE:-}" ]; then
+  echo "RailPush: generating .dockerignore from buildInclude"
+  # Start by ignoring everything, then whitelist the specified paths.
+  printf '%s\n' "*" > .dockerignore
+  echo "$RAILPUSH_BUILD_INCLUDE" | while IFS= read -r incl; do
+    incl="$(printf '%s' "$incl" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [ -z "$incl" ] && continue
+    printf '!%s\n' "$incl" >> .dockerignore
+  done
+  # Always keep Dockerfile itself.
+  printf '!%s\n' "$DOCKERFILE_PATH" >> .dockerignore
+  printf '!%s\n' "Dockerfile" >> .dockerignore
+  echo "RailPush: .dockerignore contents:"
+  cat .dockerignore | sed 's/^/  /'
+elif [ -n "${RAILPUSH_BUILD_EXCLUDE:-}" ]; then
+  echo "RailPush: generating .dockerignore from buildExclude"
+  echo "$RAILPUSH_BUILD_EXCLUDE" | while IFS= read -r excl; do
+    excl="$(printf '%s' "$excl" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [ -z "$excl" ] && continue
+    printf '%s\n' "$excl" >> .dockerignore
+  done
+  echo "RailPush: .dockerignore contents:"
+  cat .dockerignore | sed 's/^/  /'
+fi
+
+# Always exclude .git from builds (saves context size).
+if [ ! -f .dockerignore ]; then
+  printf '%s\n' ".git" > .dockerignore
+else
+  printf '%s\n' ".git" >> .dockerignore
+fi
+
+# Resolve base image override for auto-generated Dockerfiles.
+BASE_IMAGE_NODE="${RAILPUSH_BASE_IMAGE:-node:20-alpine}"
+BASE_IMAGE_PYTHON="${RAILPUSH_BASE_IMAGE:-python:3.12-slim}"
+BASE_IMAGE_GO="${RAILPUSH_BASE_IMAGE:-golang:1.24-alpine}"
+
 if [ "$RUNTIME" = "static" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
   echo "RailPush: generating static Dockerfile at $DOCKERFILE_PATH"
   mkdir -p "$(dirname "$DOCKERFILE_PATH")" 2>/dev/null || true
@@ -268,7 +309,7 @@ if [ "$RUNTIME" = "static" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
   fi
 
   {
-    printf '%s\n' "FROM node:20-alpine AS build"
+    printf '%s\n' "FROM $BASE_IMAGE_NODE AS build"
     printf '%s\n' "WORKDIR /app"
     printf '%s\n' "COPY . ."
     if [ "$NEEDS_COREPACK" = "1" ]; then
@@ -321,7 +362,7 @@ if [ "$RUNTIME" = "node" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
   fi
 
   {
-    printf '%s\n' "FROM node:20-alpine"
+    printf '%s\n' "FROM $BASE_IMAGE_NODE"
     printf '%s\n' "WORKDIR /app"
     if [ -n "$RAILPUSH_SUBDIR" ]; then
       printf 'COPY %s/ .\n' "$RAILPUSH_SUBDIR"
@@ -385,7 +426,7 @@ if [ "$RUNTIME" = "python" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
   fi
 
   {
-    printf '%s\n' "FROM python:3.12-slim"
+    printf '%s\n' "FROM $BASE_IMAGE_PYTHON"
     printf '%s\n' "WORKDIR /app"
     printf 'COPY %s .\n' "$COPY_FROM"
     if [ -z "$RAILPUSH_SUBDIR" ]; then
@@ -413,7 +454,7 @@ if [ "$RUNTIME" = "go" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
   fi
 
   {
-    printf '%s\n' "FROM golang:1.24-alpine AS build"
+    printf '%s\n' "FROM $BASE_IMAGE_GO AS build"
     printf '%s\n' "WORKDIR /src"
     printf '%s\n' "RUN apk add --no-cache git ca-certificates"
     printf 'COPY %s .\n' "$COPY_FROM"
@@ -433,7 +474,14 @@ if [ "$RUNTIME" = "go" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
   } > "$DOCKERFILE_PATH"
 fi
 
-if [ ! -f "$DOCKERFILE_PATH" ]; then
+# Show the Dockerfile in build logs so users can debug build failures.
+if [ -f "$DOCKERFILE_PATH" ]; then
+  echo ""
+  echo "=== Dockerfile ($DOCKERFILE_PATH) ==="
+  cat "$DOCKERFILE_PATH" | sed 's/^/  /'
+  echo "=== End Dockerfile ==="
+  echo ""
+else
   echo "RailPush: Dockerfile not found at $DOCKERFILE_PATH (runtime=$RUNTIME)"
   echo "RailPush: add a Dockerfile to your repo, set a runtime (node/python/go), or set the Dockerfile path."
   echo "RailPush: repo root:"
@@ -487,7 +535,7 @@ fi
 							{
 								Name:  "clone",
 								Image: "alpine/git",
-								Env:   buildGitCloneEnvWithOpts(repoURL, branch, commitSHA, secretName, runtime, dfRelFromRepo, svc.BuildCommand, svc.StaticPublishPath, port, dockerfileOverride),
+								Env:   buildGitCloneEnvWithOpts(repoURL, branch, commitSHA, secretName, runtime, dfRelFromRepo, svc.BuildCommand, svc.StaticPublishPath, port, dockerfileOverride, svc.BaseImage, svc.BuildInclude, svc.BuildExclude),
 								Command: []string{"sh", "-c", cloneScript},
 								VolumeMounts: []corev1.VolumeMount{
 									{Name: "workspace", MountPath: "/workspace"},
@@ -607,10 +655,10 @@ fi
 }
 
 func buildGitCloneEnv(repoURL string, branch string, commitSHA string, tokenSecretName string) []corev1.EnvVar {
-	return buildGitCloneEnvWithOpts(repoURL, branch, commitSHA, tokenSecretName, "", "", "", "", 0, "")
+	return buildGitCloneEnvWithOpts(repoURL, branch, commitSHA, tokenSecretName, "", "", "", "", 0, "", "", "", "")
 }
 
-func buildGitCloneEnvWithOpts(repoURL string, branch string, commitSHA string, tokenSecretName string, runtime string, dockerfileAbs string, buildCommand string, staticPublishPath string, port int, dockerfileOverride string) []corev1.EnvVar {
+func buildGitCloneEnvWithOpts(repoURL string, branch string, commitSHA string, tokenSecretName string, runtime string, dockerfileAbs string, buildCommand string, staticPublishPath string, port int, dockerfileOverride string, baseImage string, buildInclude string, buildExclude string) []corev1.EnvVar {
 	env := []corev1.EnvVar{
 		{Name: "REPO_URL", Value: strings.TrimSpace(repoURL)},
 		{Name: "BRANCH", Value: strings.TrimSpace(branch)},
@@ -651,6 +699,18 @@ func buildGitCloneEnvWithOpts(repoURL string, branch string, commitSHA string, t
 	dockerfileOverride = strings.TrimSpace(dockerfileOverride)
 	if dockerfileOverride != "" {
 		env = append(env, corev1.EnvVar{Name: "RAILPUSH_DOCKERFILE_CONTENT", Value: dockerfileOverride})
+	}
+	baseImage = strings.TrimSpace(baseImage)
+	if baseImage != "" {
+		env = append(env, corev1.EnvVar{Name: "RAILPUSH_BASE_IMAGE", Value: baseImage})
+	}
+	buildInclude = strings.TrimSpace(buildInclude)
+	if buildInclude != "" {
+		env = append(env, corev1.EnvVar{Name: "RAILPUSH_BUILD_INCLUDE", Value: buildInclude})
+	}
+	buildExclude = strings.TrimSpace(buildExclude)
+	if buildExclude != "" {
+		env = append(env, corev1.EnvVar{Name: "RAILPUSH_BUILD_EXCLUDE", Value: buildExclude})
 	}
 	return env
 }

@@ -372,4 +372,12 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 
 	// Docker-in-Docker sidecar support: services that need Docker daemon access (e.g., pentagi).
 	`ALTER TABLE services ADD COLUMN IF NOT EXISTS docker_access BOOLEAN DEFAULT FALSE`,
+
+	// Per-service build context control: include/exclude file lists for generating .dockerignore.
+	`ALTER TABLE services ADD COLUMN IF NOT EXISTS base_image TEXT DEFAULT ''`,
+	`ALTER TABLE services ADD COLUMN IF NOT EXISTS build_include TEXT DEFAULT ''`,
+	`ALTER TABLE services ADD COLUMN IF NOT EXISTS build_exclude TEXT DEFAULT ''`,
+
+	// Database init scripts: run SQL once when a managed database is first provisioned.
+	`ALTER TABLE managed_databases ADD COLUMN IF NOT EXISTS init_script TEXT DEFAULT ''`,
 }

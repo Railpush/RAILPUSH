@@ -182,6 +182,11 @@ services:                                         # Array of services
       ignoredPaths: [<glob patterns>]
     image:                                        # optional, deploy prebuilt image (skips build)
       url: <image URL>
+    buildInclude:                                  # optional, whitelist files for build context
+      - <file or directory paths>
+    buildExclude:                                  # optional, exclude files from build context
+      - <file or directory paths>
+    baseImage: <optional, override base image for auto-generated Dockerfile>
     envVars:
       - key: <ENV_NAME>
         value: <literal value>
@@ -209,6 +214,7 @@ databases:                                        # Array of PostgreSQL instance
     postgresMajorVersion: <int, default 16>
     databaseName: <optional, custom DB name>
     user: <optional, custom username>
+    initScript: <optional, SQL to run once on first provision>
 
 keyValues:                                        # Array of Redis instances
   - name: <required string>
@@ -234,6 +240,9 @@ Rules:
 - Key-value stores go under "keyValues:" (top-level), NOT under "services:".
 - Databases go under "databases:" (top-level), NOT under "services:".
 - Do NOT use fields that are not in the schema above (e.g. no "autoscaling", "maxShutdownDelaySeconds", "maxRunTimeSeconds", "headers", "routes", "ipAllowList", "projects").
+- If the project needs multiple runtimes (e.g. Python + Node.js), use baseImage to specify a multi-runtime base image.
+- If the repo has a schema.sql or migration file and a database, set initScript on the database.
+- Use buildInclude/buildExclude when multiple services share a directory to avoid including unnecessary files.
 - Keep configuration conservative and production-safe.
 - Include at least one service.`
 

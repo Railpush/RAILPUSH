@@ -557,6 +557,9 @@ envVarGroups:
                       ['disk', 'Object', 'No', 'Persistent disk: { name, mountPath, sizeGB }'],
                       ['buildFilter', 'Object', 'No', 'Build triggers: { paths, ignoredPaths }'],
                       ['image', 'Object', 'No', 'Prebuilt image: { url }'],
+                      ['buildInclude', 'Array', 'No', 'Whitelist files for build context (.dockerignore)'],
+                      ['buildExclude', 'Array', 'No', 'Exclude files from build context (.dockerignore)'],
+                      ['baseImage', 'String', 'No', 'Override base image for auto-generated Dockerfile'],
                     ].map(([field, type, req, desc]) => (
                       <tr key={field} className="border-b border-border-subtle">
                         <td className="py-2 pr-4 font-mono text-xs text-brand">{field}</td>
@@ -619,7 +622,8 @@ envVarGroups:
                     <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs text-brand">plan</td><td className="py-2 pr-4">String</td><td className="py-2">free (1Gi), starter (5Gi), standard (20Gi), pro (100Gi). Default: starter</td></tr>
                     <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs text-brand">postgresMajorVersion</td><td className="py-2 pr-4">Int</td><td className="py-2">PostgreSQL version (default: 16)</td></tr>
                     <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs text-brand">databaseName</td><td className="py-2 pr-4">String</td><td className="py-2">Custom DB name (defaults to resource name)</td></tr>
-                    <tr><td className="py-2 pr-4 font-mono text-xs text-brand">user</td><td className="py-2 pr-4">String</td><td className="py-2">Custom username (defaults to resource name)</td></tr>
+                    <tr className="border-b border-border-subtle"><td className="py-2 pr-4 font-mono text-xs text-brand">user</td><td className="py-2 pr-4">String</td><td className="py-2">Custom username (defaults to resource name)</td></tr>
+                    <tr><td className="py-2 pr-4 font-mono text-xs text-brand">initScript</td><td className="py-2 pr-4">String</td><td className="py-2">SQL to run once on first provision (e.g. schema.sql)</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -714,6 +718,51 @@ envVarGroups:
       ignoredPaths:
         - docs/**
         - "*.md"`} />
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Per-Service Build Context</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                Control which files each service sees during build. Useful for monorepos where multiple services share a directory.
+              </p>
+              <CodeBlock filename="buildInclude (whitelist)" code={`services:
+  # Only include specific files in the build
+  - type: worker
+    name: sync-worker
+    runtime: python
+    buildInclude:
+      - worker.py
+      - requirements.txt
+      - schema.sql`} />
+              <div className="mt-4" />
+              <CodeBlock filename="buildExclude (blacklist)" code={`services:
+  # Exclude specific files from the build
+  - type: web
+    name: viewer
+    runtime: node
+    buildExclude:
+      - worker.py
+      - sync.log
+      - "*.md"`} />
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Custom Base Image</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                Override the default base image for auto-generated Dockerfiles. Useful for multi-runtime builds (e.g. Python + Node.js).
+              </p>
+              <CodeBlock filename="baseImage example" code={`services:
+  - type: web
+    name: fullstack-app
+    runtime: python
+    baseImage: nikolaik/python-nodejs:python3.12-nodejs20
+    buildCommand: pip install -r requirements.txt && npm install && npm run build
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT`} />
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Database Init Script</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                Run SQL once when a managed database is first provisioned. Eliminates the need for services to self-bootstrap schema.
+              </p>
+              <CodeBlock filename="initScript example" code={`databases:
+  - name: my-db
+    plan: starter
+    initScript: schema.sql`} />
             </section>
 
             {/* ── Environment Variables ────────────────────── */}

@@ -503,6 +503,9 @@ type RenderService struct {
 	Disk              *RenderDisk        `yaml:"disk"`
 	BuildFilter       *RenderBuildFilter `yaml:"buildFilter"`
 	Image             *RenderImage       `yaml:"image"`
+	BuildInclude      []string           `yaml:"buildInclude"`
+	BuildExclude      []string           `yaml:"buildExclude"`
+	BaseImage         string             `yaml:"baseImage"`
 }
 
 type RenderDisk struct {
@@ -547,6 +550,7 @@ type RenderDatabase struct {
 	PGVersion    int    `yaml:"postgresMajorVersion"`
 	DatabaseName string `yaml:"databaseName"`
 	User         string `yaml:"user"`
+	InitScript   string `yaml:"initScript"`
 }
 
 type RenderKeyValue struct {
@@ -1204,7 +1208,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			db := &models.ManagedDatabase{
 				WorkspaceID: bp.WorkspaceID, Name: ddef.Name, Plan: ddef.Plan,
 				PGVersion: ddef.PGVersion, Host: "localhost", Port: 5432,
-				DBName: dbName, Username: dbUser,
+				DBName: dbName, Username: dbUser, InitScript: ddef.InitScript,
 			}
 			if p, repaired := normalizeBlueprintPlan(db.Plan); repaired {
 				log.Printf("Blueprint sync: repaired database plan for %s from %q to %q", ddef.Name, db.Plan, p)
@@ -1360,7 +1364,9 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				HealthCheckPath: sdef.HealthCheckPath, PreDeployCommand: sdef.PreDeployCmd,
 				DockerfilePath: sdef.DockerfilePath, DockerContext: dockerCtx,
 				StaticPublishPath: sdef.StaticPublishPath, Schedule: sdef.Schedule,
-				ImageURL: imageURL,
+				ImageURL: imageURL, BaseImage: sdef.BaseImage,
+				BuildInclude: strings.Join(sdef.BuildInclude, "\n"),
+				BuildExclude: strings.Join(sdef.BuildExclude, "\n"),
 			}
 			if sdef.DockerCommand != "" {
 				svc.StartCommand = sdef.DockerCommand
@@ -1436,6 +1442,9 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			svc.PreDeployCommand = sdef.PreDeployCmd
 			svc.StaticPublishPath = sdef.StaticPublishPath
 			svc.Schedule = sdef.Schedule
+			svc.BaseImage = sdef.BaseImage
+			svc.BuildInclude = strings.Join(sdef.BuildInclude, "\n")
+			svc.BuildExclude = strings.Join(sdef.BuildExclude, "\n")
 
 				desiredPlan, repairedPlan := normalizeBlueprintPlan(sdef.Plan)
 				if repairedPlan {

@@ -359,6 +359,14 @@ services:
         - docs/**
     image:                                       # optional: deploy a prebuilt image (skips build)
       url: docker.io/myorg/myapp:latest
+    buildInclude:                                 # optional: whitelist files for build context
+      - src/
+      - package.json
+      - package-lock.json
+    buildExclude:                                 # optional: exclude files from build context
+      - "*.md"
+      - docs/
+    baseImage: node:20-slim                       # optional: override default base image for auto-generated Dockerfile
     envVars:
       - key: NODE_ENV
         value: production
@@ -395,8 +403,12 @@ services:
   - type: worker
     name: task-processor
     runtime: python
+    baseImage: python:3.12-slim                   # override default base (e.g. pre-install Node.js)
     buildCommand: pip install -r requirements.txt
     startCommand: celery -A tasks worker --loglevel=info
+    buildInclude:                                 # only include worker files
+      - worker.py
+      - requirements.txt
     envVars:
       - key: CELERY_BROKER_URL
         fromService:
@@ -425,6 +437,7 @@ databases:
     postgresMajorVersion: 16                     # optional: default 16
     databaseName: myapp                          # optional: custom DB name (defaults to resource name)
     user: myapp                                  # optional: custom username (defaults to resource name)
+    initScript: schema.sql                       # optional: SQL file to run once on first provision
 
 keyValues:
   - name: my-cache                               # required: unique identifier
@@ -470,6 +483,9 @@ top-level sections (`keyValues` and `databases`).
 | `disk` | yes | yes | yes | n/a | n/a |
 | `buildFilter` | yes | yes | yes | yes | yes |
 | `image` | yes | yes | yes | n/a | n/a |
+| `buildInclude` | yes | yes | yes | yes | yes |
+| `buildExclude` | yes | yes | yes | yes | yes |
+| `baseImage` | yes | yes | yes | yes | yes |
 | `envVars` | yes | yes | yes | yes | yes |
 
 ### 7.4 Kubernetes Resources Generated
@@ -550,6 +566,96 @@ Redis storage: free=1Gi, starter=2Gi, standard=5Gi, pro=10Gi.
 
 Plan aliases are accepted: `hobby`/`basic`/`small` -> `starter`, `medium` -> `standard`,
 `professional`/`business`/`enterprise`/`team` -> `pro`, `trial` -> `free`.
+
+### 7.8 Per-Service Build Context
+
+By default, the entire repo is included in the Docker build context. For monorepos or
+multi-service repos where services share a directory, use `buildInclude` or `buildExclude`
+to control which files each service sees during `COPY . .`.
+
+**buildInclude** (whitelist mode): Only the listed files/directories are included.
+Everything else is excluded. A `.dockerignore` is generated with `*` at the top,
+then `!<path>` for each included path.
+
+```yaml
+services:
+  - type: worker
+    name: foreflight-sync
+    buildInclude:
+      - worker.py
+      - requirements.txt
+      - schema.sql
+```
+
+**buildExclude** (blacklist mode): The listed files/directories are excluded.
+Everything else is included. A `.dockerignore` is generated with the listed paths.
+
+```yaml
+services:
+  - type: web
+    name: foreflight-viewer
+    buildExclude:
+      - worker.py
+      - sync.log
+      - "*.md"
+```
+
+If both are set, `buildInclude` takes precedence. The generated `.dockerignore` is
+shown in build logs for debugging.
+
+### 7.9 Custom Base Images
+
+Auto-generated Dockerfiles use default base images (`node:20-alpine`, `python:3.12-slim`,
+`golang:1.24-alpine`). Override these with `baseImage` for multi-runtime builds or
+when you need system dependencies pre-installed:
+
+```yaml
+services:
+  # Python + Node.js: use a base image with both runtimes
+  - type: web
+    name: fullstack-app
+    runtime: python
+    baseImage: nikolaik/python-nodejs:python3.12-nodejs20
+    buildCommand: pip install -r requirements.txt && npm install && npm run build
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+```
+
+If `dockerfilePath` is set (custom Dockerfile), `baseImage` is ignored — you control
+the FROM instruction directly.
+
+### 7.10 Database Init Scripts
+
+Run a SQL script once when a managed database is first provisioned. This eliminates
+the need for services to self-bootstrap schema on first run:
+
+```yaml
+databases:
+  - name: my-db
+    plan: starter
+    initScript: schema.sql    # path to SQL file in the repo (run once on first provision)
+```
+
+The init script runs as a one-time K8s pod using `psql` against the newly created
+database. If it fails, the database is still marked available (the error is logged).
+The script is NOT re-run on subsequent syncs.
+
+### 7.11 Build Log Improvements
+
+Auto-generated Dockerfiles are now printed in build logs before Kaniko runs, making
+it easy to debug build failures:
+
+```
+=== Dockerfile (Dockerfile) ===
+  FROM python:3.12-slim
+  WORKDIR /app
+  COPY . .
+  RUN pip install --no-cache-dir -r requirements.txt
+  ...
+=== End Dockerfile ===
+```
+
+The `.dockerignore` contents (if generated from `buildInclude`/`buildExclude`) are
+also printed in build logs.
 
 ---
 

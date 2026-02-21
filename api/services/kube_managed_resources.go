@@ -786,3 +786,89 @@ func (k *KubeDeployer) DeleteManagedKeyValueResources(kvID string) error {
 	}
 	return nil
 }
+
+// RunDatabaseInitScript runs a one-time SQL init script against a managed database.
+// It executes as a K8s Job using psql inside the database pod.
+func (k *KubeDeployer) RunDatabaseInitScript(db *models.ManagedDatabase, password string, initScript string) error {
+	if k == nil || k.Client == nil {
+		return fmt.Errorf("kube deployer not initialized")
+	}
+	ns := k.namespace()
+	name := kubeManagedDatabaseName(db.ID)
+	host := name // ClusterIP service name
+
+	dbName := strings.TrimSpace(db.DBName)
+	if dbName == "" {
+		dbName = strings.TrimSpace(db.Name)
+	}
+	user := strings.TrimSpace(db.Username)
+	if user == "" {
+		user = strings.TrimSpace(db.Name)
+	}
+
+	// Use a short-lived pod that runs psql with the init script via stdin.
+	podName := name + "-init"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	// Clean up any previous init pod (best-effort).
+	_ = k.Client.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{})
+	time.Sleep(2 * time.Second)
+
+	connStr := fmt.Sprintf("postgresql://%s:%s@%s:5432/%s?sslmode=require", user, password, host, dbName)
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: ns,
+		},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			Containers: []corev1.Container{
+				{
+					Name:    "init",
+					Image:   fmt.Sprintf("postgres:%d-alpine", db.PGVersion),
+					Command: []string{"psql", connStr, "-c", initScript},
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceCPU:    resource.MustParse("50m"),
+							corev1.ResourceMemory: resource.MustParse("64Mi"),
+						},
+						Limits: corev1.ResourceList{
+							corev1.ResourceCPU:    resource.MustParse("200m"),
+							corev1.ResourceMemory: resource.MustParse("128Mi"),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if _, err := k.Client.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("create init pod: %w", err)
+	}
+
+	// Wait for completion.
+	for {
+		select {
+		case <-ctx.Done():
+			_ = k.Client.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
+			return fmt.Errorf("init script timed out")
+		default:
+		}
+
+		p, err := k.Client.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("get init pod: %w", err)
+		}
+		if p.Status.Phase == corev1.PodSucceeded {
+			_ = k.Client.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{})
+			return nil
+		}
+		if p.Status.Phase == corev1.PodFailed {
+			_ = k.Client.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{})
+			return fmt.Errorf("init script failed (pod phase=Failed)")
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
