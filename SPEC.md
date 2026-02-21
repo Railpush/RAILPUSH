@@ -437,7 +437,8 @@ databases:
     postgresMajorVersion: 16                     # optional: default 16
     databaseName: myapp                          # optional: custom DB name (defaults to resource name)
     user: myapp                                  # optional: custom username (defaults to resource name)
-    initScript: schema.sql                       # optional: SQL file to run once on first provision
+    initScript: CREATE EXTENSION IF NOT EXISTS pgcrypto;  # optional: inline SQL to run once on first provision
+    initScriptPath: db/schema.sql                # optional: path to SQL file in repo (run once on first provision)
 
 keyValues:
   - name: my-cache                               # required: unique identifier
@@ -625,18 +626,42 @@ the FROM instruction directly.
 
 ### 7.10 Database Init Scripts
 
-Run a SQL script once when a managed database is first provisioned. This eliminates
-the need for services to self-bootstrap schema on first run:
+Run SQL once when a managed database is first provisioned. This eliminates
+the need for services to self-bootstrap schema on first run.
+
+Two options — use either or both:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `initScript` | String | Inline SQL (good for short one-liners like `CREATE EXTENSION`) |
+| `initScriptPath` | String | Path to a `.sql` file in the repo, relative to root (good for full schemas) |
+
+When both are set, inline runs first, then the file contents.
 
 ```yaml
+# Option A: inline SQL (simple cases)
 databases:
   - name: my-db
     plan: starter
-    initScript: schema.sql    # path to SQL file in the repo (run once on first provision)
+    initScript: CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+# Option B: file path (full schemas)
+databases:
+  - name: my-db
+    plan: starter
+    initScriptPath: db/schema.sql
+
+# Option C: both (inline extension + full schema from file)
+databases:
+  - name: my-db
+    plan: starter
+    initScript: CREATE EXTENSION IF NOT EXISTS pgcrypto;
+    initScriptPath: db/schema.sql
 ```
 
-The init script runs as a one-time K8s pod using `psql` against the newly created
-database. If it fails, the database is still marked available (the error is logged).
+The file is read from the repo at sync time (during `git clone`). The resolved
+SQL is stored in the database and executed as a one-time K8s pod using `psql`.
+If it fails, the database is still marked available (the error is logged).
 The script is NOT re-run on subsequent syncs.
 
 ### 7.11 Build Log Improvements

@@ -545,12 +545,13 @@ type RenderFromService struct {
 }
 
 type RenderDatabase struct {
-	Name         string `yaml:"name"`
-	Plan         string `yaml:"plan"`
-	PGVersion    int    `yaml:"postgresMajorVersion"`
-	DatabaseName string `yaml:"databaseName"`
-	User         string `yaml:"user"`
-	InitScript   string `yaml:"initScript"`
+	Name           string `yaml:"name"`
+	Plan           string `yaml:"plan"`
+	PGVersion      int    `yaml:"postgresMajorVersion"`
+	DatabaseName   string `yaml:"databaseName"`
+	User           string `yaml:"user"`
+	InitScript     string `yaml:"initScript"`
+	InitScriptPath string `yaml:"initScriptPath"`
 }
 
 type RenderKeyValue struct {
@@ -1017,6 +1018,39 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			log.Printf("Blueprint sync: failed to rewrite AI service names blueprint=%s err=%v", bp.ID, err)
 			// Best-effort only. We'll still proceed with the original spec; preflight may fail with a clear message.
 		}
+	}
+
+	// Resolve initScriptPath: read SQL files from the cloned repo and merge into initScript.
+	for i, ddef := range spec.Databases {
+		scriptPath := strings.TrimSpace(ddef.InitScriptPath)
+		if scriptPath == "" {
+			continue
+		}
+		// Validate path: must be relative, no traversal.
+		cleaned := filepath.Clean(scriptPath)
+		if filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "..") {
+			fail(fmt.Sprintf("database %s: initScriptPath %q is invalid (must be a relative path within the repo)", ddef.Name, scriptPath))
+			return
+		}
+		sqlData, err := os.ReadFile(filepath.Join(tmpDir, cleaned))
+		if err != nil {
+			fail(fmt.Sprintf("database %s: initScriptPath %q not found in repo", ddef.Name, scriptPath))
+			return
+		}
+		fileSQL := strings.TrimSpace(string(sqlData))
+		if fileSQL == "" {
+			logLine(fmt.Sprintf("WARNING: database %s: initScriptPath %q is empty, skipping", ddef.Name, scriptPath))
+			continue
+		}
+		// If both initScript (inline) and initScriptPath are set, concatenate them
+		// (inline runs first, then file). This lets users do quick one-liners inline
+		// and keep the heavy schema in a file.
+		if existing := strings.TrimSpace(ddef.InitScript); existing != "" {
+			spec.Databases[i].InitScript = existing + "\n" + fileSQL
+		} else {
+			spec.Databases[i].InitScript = fileSQL
+		}
+		logLine(fmt.Sprintf("Database %s: loaded %d bytes from %s", ddef.Name, len(fileSQL), scriptPath))
 	}
 
 	if len(spec.Services) == 0 && len(spec.Databases) == 0 && len(spec.KeyValues) == 0 {

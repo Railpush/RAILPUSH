@@ -214,7 +214,8 @@ databases:                                        # Array of PostgreSQL instance
     postgresMajorVersion: <int, default 16>
     databaseName: <optional, custom DB name>
     user: <optional, custom username>
-    initScript: <optional, SQL to run once on first provision>
+    initScript: <optional, inline SQL to run once on first provision>
+    initScriptPath: <optional, path to .sql file in repo, relative to root>
 
 keyValues:                                        # Array of Redis instances
   - name: <required string>
@@ -241,7 +242,7 @@ Rules:
 - Databases go under "databases:" (top-level), NOT under "services:".
 - Do NOT use fields that are not in the schema above (e.g. no "autoscaling", "maxShutdownDelaySeconds", "maxRunTimeSeconds", "headers", "routes", "ipAllowList", "projects").
 - If the project needs multiple runtimes (e.g. Python + Node.js), use baseImage to specify a multi-runtime base image.
-- If the repo has a schema.sql or migration file and a database, set initScript on the database.
+- If the repo has a schema.sql or migration file and a database, set initScriptPath to the file path (e.g. initScriptPath: db/schema.sql). Use initScript for short inline SQL like CREATE EXTENSION.
 - Use buildInclude/buildExclude when multiple services share a directory to avoid including unnecessary files.
 - Keep configuration conservative and production-safe.
 - Include at least one service.`
