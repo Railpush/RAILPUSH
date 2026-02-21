@@ -1506,6 +1506,21 @@ func (w *Worker) ProvisionDatabase(db *models.ManagedDatabase, password string) 
 		models.UpdateManagedDatabaseStatus(db.ID, "available", cid)
 		models.UpdateManagedDatabaseConnection(db.ID, port, "localhost")
 		log.Printf("Database %s provisioned successfully on port %d", db.Name, port)
+
+		// Run init script if specified (one-time, on first provision only).
+		if initScript := strings.TrimSpace(db.InitScript); initScript != "" {
+			log.Printf("Database %s: running init script (%d bytes, docker mode)", db.Name, len(initScript))
+			out, err := w.Deployer.ExecCommand("docker", "exec",
+				"-e", fmt.Sprintf("PGPASSWORD=%s", password),
+				containerName,
+				"psql", "-U", db.Username, "-d", db.DBName, "-c", initScript,
+			)
+			if err != nil {
+				log.Printf("Database %s: init script failed: %v (output: %s)", db.Name, err, out)
+			} else {
+				log.Printf("Database %s: init script completed successfully", db.Name)
+			}
+		}
 	}()
 }
 

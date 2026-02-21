@@ -51,7 +51,7 @@ func ListManagedDatabases() ([]ManagedDatabase, error) {
 }
 
 func ListManagedDatabasesByWorkspace(workspaceID string) ([]ManagedDatabase, error) {
-	query := "SELECT id, workspace_id, name, plan, pg_version, container_id, host, port, db_name, username, status, COALESCE(ha_enabled,false), COALESCE(ha_strategy,'none'), standby_replica_id::text, created_at FROM managed_databases"
+	query := "SELECT id, workspace_id, name, plan, pg_version, container_id, host, port, db_name, username, status, COALESCE(ha_enabled,false), COALESCE(ha_strategy,'none'), standby_replica_id::text, COALESCE(init_script,''), created_at FROM managed_databases"
 	var (
 		rows *sql.Rows
 		err  error
@@ -69,7 +69,7 @@ func ListManagedDatabasesByWorkspace(workspaceID string) ([]ManagedDatabase, err
 	for rows.Next() {
 		var d ManagedDatabase
 		var standbyReplicaID sql.NullString
-		if err := rows.Scan(&d.ID, &d.WorkspaceID, &d.Name, &d.Plan, &d.PGVersion, &d.ContainerID, &d.Host, &d.Port, &d.DBName, &d.Username, &d.Status, &d.HAEnabled, &d.HAStrategy, &standbyReplicaID, &d.CreatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.WorkspaceID, &d.Name, &d.Plan, &d.PGVersion, &d.ContainerID, &d.Host, &d.Port, &d.DBName, &d.Username, &d.Status, &d.HAEnabled, &d.HAStrategy, &standbyReplicaID, &d.InitScript, &d.CreatedAt); err != nil {
 			return nil, err
 		}
 		if standbyReplicaID.Valid && standbyReplicaID.String != "" {

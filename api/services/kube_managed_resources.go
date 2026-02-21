@@ -806,16 +806,16 @@ func (k *KubeDeployer) RunDatabaseInitScript(db *models.ManagedDatabase, passwor
 		user = strings.TrimSpace(db.Name)
 	}
 
-	// Use a short-lived pod that runs psql with the init script via stdin.
+	// Use a short-lived pod that runs psql with the init script.
+	// The password is injected via the existing auth Secret (never embedded in pod args).
 	podName := name + "-init"
+	authSecretName := name + "-auth"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	// Clean up any previous init pod (best-effort).
 	_ = k.Client.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{})
 	time.Sleep(2 * time.Second)
-
-	connStr := fmt.Sprintf("postgresql://%s:%s@%s:5432/%s?sslmode=require", user, password, host, dbName)
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -826,9 +826,22 @@ func (k *KubeDeployer) RunDatabaseInitScript(db *models.ManagedDatabase, passwor
 			RestartPolicy: corev1.RestartPolicyNever,
 			Containers: []corev1.Container{
 				{
-					Name:    "init",
-					Image:   fmt.Sprintf("postgres:%d-alpine", db.PGVersion),
-					Command: []string{"psql", connStr, "-c", initScript},
+					Name:  "init",
+					Image: fmt.Sprintf("postgres:%d-alpine", db.PGVersion),
+					Command: []string{"sh", "-c",
+						fmt.Sprintf("psql \"postgresql://$PGUSER:$PGPASSWORD@%s:5432/$PGDATABASE?sslmode=require\" -c %q", host, initScript),
+					},
+					Env: []corev1.EnvVar{
+						{Name: "PGUSER", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{Name: authSecretName}, Key: "POSTGRES_USER",
+						}}},
+						{Name: "PGPASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{Name: authSecretName}, Key: "POSTGRES_PASSWORD",
+						}}},
+						{Name: "PGDATABASE", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{Name: authSecretName}, Key: "POSTGRES_DB",
+						}}},
+					},
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceCPU:    resource.MustParse("50m"),

@@ -311,8 +311,8 @@ func trimToLabelLen(base, suffix string) string {
 
 func UpdateService(s *Service) error {
 	_, err := database.DB.Exec(
-		"UPDATE services SET project_id=$1, environment_id=$2, name=$3, branch=$4, build_command=$5, start_command=$6, dockerfile_path=$7, docker_context=$8, image_url=$9, health_check_path=$10, port=$11, auto_deploy=$12, max_shutdown_delay=$13, pre_deploy_command=$14, static_publish_path=$15, schedule=$16, plan=$17, instances=$18, docker_access=$19, updated_at=NOW() WHERE id=$20",
-		s.ProjectID, s.EnvironmentID, s.Name, s.Branch, s.BuildCommand, s.StartCommand, s.DockerfilePath, s.DockerContext, s.ImageURL, s.HealthCheckPath, s.Port, s.AutoDeploy, s.MaxShutdownDelay, s.PreDeployCommand, s.StaticPublishPath, s.Schedule, s.Plan, s.Instances, s.DockerAccess, s.ID,
+		"UPDATE services SET project_id=$1, environment_id=$2, name=$3, branch=$4, build_command=$5, start_command=$6, dockerfile_path=$7, docker_context=$8, image_url=$9, health_check_path=$10, port=$11, auto_deploy=$12, max_shutdown_delay=$13, pre_deploy_command=$14, static_publish_path=$15, schedule=$16, plan=$17, instances=$18, docker_access=$19, base_image=$20, build_include=$21, build_exclude=$22, updated_at=NOW() WHERE id=$23",
+		s.ProjectID, s.EnvironmentID, s.Name, s.Branch, s.BuildCommand, s.StartCommand, s.DockerfilePath, s.DockerContext, s.ImageURL, s.HealthCheckPath, s.Port, s.AutoDeploy, s.MaxShutdownDelay, s.PreDeployCommand, s.StaticPublishPath, s.Schedule, s.Plan, s.Instances, s.DockerAccess, s.BaseImage, s.BuildInclude, s.BuildExclude, s.ID,
 	)
 	return err
 }
