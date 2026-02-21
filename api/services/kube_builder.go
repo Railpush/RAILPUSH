@@ -334,7 +334,8 @@ if [ -n "${RAILPUSH_BASE_IMAGE:-}" ] && _validate_image_ref "$RAILPUSH_BASE_IMAG
 fi
 
 # Pre-check: for Node.js runtimes, verify package.json exists in the docker context.
-if [ "$RUNTIME" = "static" ] || [ "$RUNTIME" = "node" ]; then
+# (Skip for static — plain HTML sites don't need package.json and the static generator handles it.)
+if [ "$RUNTIME" = "node" ]; then
   PKG_CHECK_DIR="$(dirname "$DOCKERFILE_PATH")"
   [ "$PKG_CHECK_DIR" = "." ] && PKG_CHECK_DIR="$DOCKER_CONTEXT"
   if [ ! -f "$PKG_CHECK_DIR/package.json" ] && [ ! -f "package.json" ]; then
@@ -363,9 +364,25 @@ if [ "$RUNTIME" = "static" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
   mkdir -p "$(dirname "$DOCKERFILE_PATH")" 2>/dev/null || true
 
   PORT="${RAILPUSH_PORT:-10000}"
-  BUILD_COMMAND="${RAILPUSH_BUILD_COMMAND:-npm run build}"
+  BUILD_COMMAND="${RAILPUSH_BUILD_COMMAND:-}"
   PUBLISH_PATH="${RAILPUSH_STATIC_PUBLISH_PATH:-dist}"
   PUBLISH_PATH="${PUBLISH_PATH#/}"
+
+  # Detect plain HTML sites: no build command AND no package.json → skip Node build stage entirely.
+  IS_PLAIN_HTML="0"
+  if [ -z "$BUILD_COMMAND" ] && [ ! -f package.json ]; then
+    IS_PLAIN_HTML="1"
+    echo "RailPush: no build command and no package.json detected — serving as plain static site"
+    # For plain HTML, publish path "dist" makes no sense — use repo root.
+    if [ "$PUBLISH_PATH" = "dist" ] || [ "$PUBLISH_PATH" = "build" ]; then
+      PUBLISH_PATH="."
+    fi
+  fi
+
+  # Default build command for Node-based static sites (React, Vue, Next.js, etc.)
+  if [ -z "$BUILD_COMMAND" ] && [ "$IS_PLAIN_HTML" = "0" ]; then
+    BUILD_COMMAND="npm run build"
+  fi
 
   # If the build command already installs deps (npm/yarn/pnpm), don't duplicate work.
   NEEDS_INSTALL="1"
@@ -387,19 +404,30 @@ if [ "$RUNTIME" = "static" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
   fi
 
   {
-    printf '%s\n' "FROM $BASE_IMAGE_NODE AS build"
-    printf '%s\n' "WORKDIR /app"
-    printf '%s\n' "COPY . ."
-    if [ "$NEEDS_COREPACK" = "1" ]; then
-      printf '%s\n' "RUN corepack enable"
+    if [ "$IS_PLAIN_HTML" = "1" ]; then
+      # Plain HTML/CSS/JS — no Node build needed, just nginx.
+      printf '%s\n' "FROM nginx:alpine"
+      if [ "$PUBLISH_PATH" = "." ] || [ "$PUBLISH_PATH" = "" ]; then
+        printf '%s\n' "COPY . /usr/share/nginx/html"
+      else
+        printf '%s\n' "COPY $PUBLISH_PATH /usr/share/nginx/html"
+      fi
+    else
+      # Node.js-based static site (React, Vue, Next.js, etc.) — multi-stage build.
+      printf '%s\n' "FROM $BASE_IMAGE_NODE AS build"
+      printf '%s\n' "WORKDIR /app"
+      printf '%s\n' "COPY . ."
+      if [ "$NEEDS_COREPACK" = "1" ]; then
+        printf '%s\n' "RUN corepack enable"
+      fi
+      if [ "$NEEDS_INSTALL" = "1" ]; then
+        printf '%s\n' "RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi"
+      fi
+      printf '%s\n' "RUN $BUILD_COMMAND"
+      printf '\n'
+      printf '%s\n' "FROM nginx:alpine"
+      printf '%s\n' "COPY --from=build /app/$PUBLISH_PATH /usr/share/nginx/html"
     fi
-    if [ "$NEEDS_INSTALL" = "1" ]; then
-      printf '%s\n' "RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi"
-    fi
-    printf '%s\n' "RUN $BUILD_COMMAND"
-    printf '\n'
-    printf '%s\n' "FROM nginx:alpine"
-    printf '%s\n' "COPY --from=build /app/$PUBLISH_PATH /usr/share/nginx/html"
     printf '%s\n' "RUN printf 'worker_processes auto;\\nerror_log /dev/stderr notice;\\npid /tmp/nginx.pid;\\n\\nevents {\\n  worker_connections 1024;\\n}\\n\\nhttp {\\n  include /etc/nginx/mime.types;\\n  default_type application/octet-stream;\\n\\n  access_log /dev/stdout;\\n  sendfile on;\\n  keepalive_timeout 65;\\n\\n  # Nginx does not create intermediate directories; keep temp paths directly under /tmp.\\n  client_body_temp_path /tmp/client_temp 1 2;\\n  proxy_temp_path       /tmp/proxy_temp 1 2;\\n  fastcgi_temp_path     /tmp/fastcgi_temp 1 2;\\n  uwsgi_temp_path       /tmp/uwsgi_temp 1 2;\\n  scgi_temp_path        /tmp/scgi_temp 1 2;\\n\\n  include /etc/nginx/conf.d/*.conf;\\n}\\n' > /etc/nginx/nginx.conf"
     printf '%s\n' "RUN printf 'server {\\n  listen ${PORT};\\n  server_name _;\\n  root /usr/share/nginx/html;\\n  index index.html;\\n\\n  location = /healthz {\\n    add_header Content-Type text/plain;\\n    return 200 ok;\\n  }\\n\\n  location / {\\n    try_files \$uri \$uri/ /index.html;\\n  }\\n}\\n' > /etc/nginx/conf.d/default.conf"
     printf '%s\n' "ENV HOME=/tmp"
