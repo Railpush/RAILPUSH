@@ -308,11 +308,12 @@ fi
 # The Go layer validates RAILPUSH_BASE_IMAGE against a strict regex, but as defense
 # in depth we also reject values containing shell metacharacters here.
 _validate_image_ref() {
-  case "$1" in
-    *'$'*|*'`'*|*'\'*|*';'*|*'|'*|*'&'*|*'('*|*')'*|*'{'*|*'}'*|*'>'*|*'<'*|*'!'*|*"'"*)
-      echo "RailPush: WARNING: invalid base image reference, using default" >&2
-      return 1 ;;
-  esac
+  # Reject any value containing shell metacharacters. Only allow [a-zA-Z0-9._/:@-].
+  # The Go layer already validates via regex; this is defense-in-depth.
+  if printf '%s' "$1" | grep -qE '[^a-zA-Z0-9._/:@-]'; then
+    echo "RailPush: WARNING: invalid base image reference, using default" >&2
+    return 1
+  fi
   return 0
 }
 BASE_IMAGE_NODE="node:20-alpine"
