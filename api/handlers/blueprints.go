@@ -1350,17 +1350,15 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			return
 		}
 
+		// Check if this service is already linked to the blueprint from a prior sync.
+		alreadyLinked := false
 		existing, err := models.GetBlueprintResourceByName(bp.ID, "service", serviceName)
 		if err != nil {
 			fail("database error")
 			return
 		}
 		if existing != nil {
-			// Populate svcMap so fromService refs can resolve to pre-existing blueprint services.
-			if svc, _ := models.GetService(existing.ResourceID); svc != nil {
-				svcMap[serviceName] = svc
-			}
-			continue
+			alreadyLinked = true
 		}
 
 		dockerCtx := sdef.DockerContext
@@ -1384,8 +1382,14 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			startCommand = ""
 		}
 
-		// If a service already exists with this name, adopt it instead of creating a duplicate.
-		svc, _ := models.GetServiceByWorkspaceAndName(bp.WorkspaceID, serviceName)
+		// Load the existing service: from the blueprint link, or by name in the workspace.
+		var svc *models.Service
+		if alreadyLinked {
+			svc, _ = models.GetService(existing.ResourceID)
+		}
+		if svc == nil {
+			svc, _ = models.GetServiceByWorkspaceAndName(bp.WorkspaceID, serviceName)
+		}
 		if svc == nil {
 			autoDeploy := true
 			if sdef.AutoDeploy != nil {
@@ -1416,18 +1420,18 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		if svc.RepoURL == "" {
 			svc.RepoURL = bp.RepoURL
 		}
-			if svc.Port == 0 {
-				svc.Port = 10000
-			}
-			if p, repaired := normalizeBlueprintPlan(svc.Plan); repaired {
-				log.Printf("Blueprint sync: repaired service plan for %s from %q to %q", serviceName, svc.Plan, p)
-				svc.Plan = p
-			} else {
-				svc.Plan = p
-			}
-			if sdef.NumInstances > 0 {
-				svc.Instances = sdef.NumInstances
-			} else {
+		if svc.Port == 0 {
+			svc.Port = 10000
+		}
+		if p, repaired := normalizeBlueprintPlan(svc.Plan); repaired {
+			log.Printf("Blueprint sync: repaired service plan for %s from %q to %q", serviceName, svc.Plan, p)
+			svc.Plan = p
+		} else {
+			svc.Plan = p
+		}
+		if sdef.NumInstances > 0 {
+			svc.Instances = sdef.NumInstances
+		} else {
 			svc.Instances = 1
 		}
 
@@ -1448,7 +1452,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				}
 			}
 		} else {
-			// Keep adopted services in sync with the blueprint (only fields supported by UpdateService).
+			// Keep existing/adopted services in sync with the blueprint YAML.
 			before := *svc
 			// Track for rollback before any external side-effects (e.g. billing) or writes.
 			st.updatedServices = append(st.updatedServices, before)
@@ -1481,13 +1485,13 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			svc.BuildInclude = strings.Join(sdef.BuildInclude, "\n")
 			svc.BuildExclude = strings.Join(sdef.BuildExclude, "\n")
 
-				desiredPlan, repairedPlan := normalizeBlueprintPlan(sdef.Plan)
-				if repairedPlan {
-					log.Printf("Blueprint sync: repaired desired plan for %s from %q to %q", serviceName, sdef.Plan, desiredPlan)
-				}
-				if sdef.NumInstances > 0 {
-					svc.Instances = sdef.NumInstances
-				} else {
+			desiredPlan, repairedPlan := normalizeBlueprintPlan(sdef.Plan)
+			if repairedPlan {
+				log.Printf("Blueprint sync: repaired desired plan for %s from %q to %q", serviceName, sdef.Plan, desiredPlan)
+			}
+			if sdef.NumInstances > 0 {
+				svc.Instances = sdef.NumInstances
+			} else {
 				svc.Instances = 1
 			}
 
@@ -1517,14 +1521,19 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			}
 		}
 
-		linkBRs = append(linkBRs, models.BlueprintResource{
-			BlueprintID: bp.ID, ResourceType: "service",
-			ResourceID: svc.ID, ResourceName: serviceName,
-		})
+		// Only create a new blueprint_resources link if this service wasn't already linked.
+		if !alreadyLinked {
+			linkBRs = append(linkBRs, models.BlueprintResource{
+				BlueprintID: bp.ID, ResourceType: "service",
+				ResourceID: svc.ID, ResourceName: serviceName,
+			})
+		}
 
 		svcMap[serviceName] = svc
 		if created {
 			log.Printf("Blueprint sync: created service %s", serviceName)
+		} else if alreadyLinked {
+			log.Printf("Blueprint sync: updated existing service %s", serviceName)
 		} else {
 			log.Printf("Blueprint sync: adopted existing service %s", serviceName)
 		}
