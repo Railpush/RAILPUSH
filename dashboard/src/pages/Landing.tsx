@@ -16,6 +16,7 @@ import {
   Github,
   Search,
   Loader2,
+  Plug,
 } from 'lucide-react';
 import { SEO } from '../components/SEO';
 import { Logo } from '../components/Logo';
@@ -92,6 +93,18 @@ const features = [
     description:
       'Cron jobs with retries, logs, and per-job alerting—visible alongside your apps.',
   },
+  {
+    icon: Code,
+    title: 'Blueprints (IaC)',
+    description:
+      'Declare your entire stack in a single YAML file. Push to deploy services, databases, and env vars atomically.',
+  },
+  {
+    icon: Plug,
+    title: 'MCP for AI agents',
+    description:
+      'Let Claude, ChatGPT, and Cursor manage your infra through natural language with our built-in MCP server.',
+  },
 ];
 
 const steps = [
@@ -137,7 +150,7 @@ const pricingPlans = PLAN_SPECS.map((plan) => ({
 
 const footerLinks = {
   Product: ['Web Services', 'Databases', 'Domains', 'Cron Jobs', 'Blueprints', 'Pricing'],
-  Resources: ['Documentation', 'API Reference'],
+  Resources: ['Documentation', 'API Reference', 'MCP Server'],
   Company: ['Privacy'],
 };
 
@@ -791,6 +804,7 @@ export function Landing() {
                   const linkMap: Record<string, string> = {
                     'Documentation': '/docs',
                     'API Reference': '/docs#cli',
+                    'MCP Server': '/docs#mcp',
                     'Web Services': '/docs#services',
                     'Databases': '/docs#databases',
                     'Domains': '/docs#domains',

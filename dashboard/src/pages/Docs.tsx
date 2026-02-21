@@ -23,7 +23,8 @@ import {
   Zap,
   Code,
   Shield,
-  Box
+  Box,
+  Plug
 } from 'lucide-react';
 import { SEO } from '../components/SEO';
 import { LogoMark } from '../components/Logo';
@@ -98,6 +99,7 @@ const sections = [
   { id: 'disks', label: 'Persistent Disks', icon: HardDrive },
   { id: 'scaling', label: 'Scaling', icon: Cpu },
   { id: 'cli', label: 'CLI & API', icon: Terminal },
+  { id: 'mcp', label: 'MCP Server', icon: Plug },
 ];
 
 // ─── Docs Component ───────────────────────────────────────────────
@@ -1144,7 +1146,7 @@ railpush databases create --name mydb --engine postgresql --plan starter`} />
               {/* ── REST API ── */}
               <h3 className="text-lg font-semibold mt-8 mb-3">REST API</h3>
               <p className="text-content-secondary text-base leading-relaxed mb-6">
-                The RailPush API is a RESTful JSON API. All endpoints require a Bearer token from <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-content-primary text-xs font-mono">/api/v1/auth/login</code>.
+                The RailPush API is a RESTful JSON API. Authenticate with a Bearer token from <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-content-primary text-xs font-mono">/api/v1/auth/login</code> (JWT) or an API key from <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-content-primary text-xs font-mono">/api/v1/auth/api-keys</code>.
               </p>
 
               <h3 className="text-lg font-semibold mb-3">Authentication</h3>
@@ -1188,6 +1190,189 @@ curl https://railpush.com/api/v1/services \\
                     <span className="text-xs text-content-secondary hidden sm:block">{e.desc}</span>
                   </div>
                 ))}
+              </div>
+            </section>
+
+            {/* ── MCP Server ─────────────────────────────── */}
+            <section id="mcp" className="scroll-mt-20 mb-20">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-10 h-10 rounded-xl bg-brand/10 flex items-center justify-center">
+                  <Plug className="w-5 h-5 text-brand" />
+                </div>
+                <h2 className="text-2xl font-bold tracking-tight">MCP Server</h2>
+              </div>
+              <p className="text-content-secondary text-base leading-relaxed mt-4 mb-6">
+                The RailPush MCP (Model Context Protocol) server lets AI agents&mdash;Claude, ChatGPT, Cursor, and any MCP-compatible client&mdash;fully manage your infrastructure through natural language. Create services, trigger deploys, manage databases, configure env vars, and more without leaving your AI conversation.
+              </p>
+
+              <div className="rounded-xl border border-brand/20 bg-brand/5 p-5 mb-8">
+                <div className="flex items-start gap-3">
+                  <Zap className="w-5 h-5 text-brand shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-sm font-semibold mb-1">AI-native infrastructure</div>
+                    <div className="text-sm text-content-secondary">
+                      With 50 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <h3 className="text-lg font-semibold mb-3">1. Create an API Key</h3>
+              <p className="text-content-secondary text-sm leading-relaxed mb-4">
+                Go to <strong>Settings &rarr; API Keys</strong> in the dashboard (or use the API) to create an API key. The raw key is shown only once&mdash;copy it immediately.
+              </p>
+              <CodeBlock language="bash" filename="terminal" code={`# Or via the API:
+curl -X POST https://apps.railpush.com/api/v1/auth/api-keys \\
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name": "mcp-server"}'
+
+# Response: {"id": "...", "key": "abc123...", "name": "mcp-server"}`} />
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">2. Install the MCP Server</h3>
+              <CodeBlock language="bash" filename="terminal" code={`# Clone the repo and build
+git clone https://github.com/muniravila-dotcom/RAILPUSH.git
+cd RAILPUSH/mcp
+npm install
+npm run build`} />
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">3. Configure Your AI Client</h3>
+              <p className="text-content-secondary text-sm leading-relaxed mb-4">
+                Add the MCP server to your client's configuration. Below are examples for popular clients.
+              </p>
+
+              <h3 className="text-base font-semibold mt-6 mb-3">Claude Desktop</h3>
+              <CodeBlock language="json" filename="claude_desktop_config.json" code={`{
+  "mcpServers": {
+    "railpush": {
+      "command": "node",
+      "args": ["/path/to/RAILPUSH/mcp/build/index.js"],
+      "env": {
+        "RAILPUSH_API_KEY": "your-api-key",
+        "RAILPUSH_API_URL": "https://apps.railpush.com"
+      }
+    }
+  }
+}`} />
+
+              <h3 className="text-base font-semibold mt-6 mb-3">Claude Code (CLI)</h3>
+              <CodeBlock language="bash" filename="terminal" code={`claude mcp add railpush \\
+  -e RAILPUSH_API_KEY=your-api-key \\
+  -e RAILPUSH_API_URL=https://apps.railpush.com \\
+  -- node /path/to/RAILPUSH/mcp/build/index.js`} />
+
+              <h3 className="text-base font-semibold mt-6 mb-3">Cursor</h3>
+              <CodeBlock language="json" filename=".cursor/mcp.json" code={`{
+  "mcpServers": {
+    "railpush": {
+      "command": "node",
+      "args": ["/path/to/RAILPUSH/mcp/build/index.js"],
+      "env": {
+        "RAILPUSH_API_KEY": "your-api-key",
+        "RAILPUSH_API_URL": "https://apps.railpush.com"
+      }
+    }
+  }
+}`} />
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Environment Variables</h3>
+              <div className="overflow-x-auto mb-8">
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="border-b border-border-default">
+                      <th className="text-left py-2 pr-4 font-semibold">Variable</th>
+                      <th className="text-left py-2 pr-4 font-semibold">Required</th>
+                      <th className="text-left py-2 font-semibold">Description</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-content-secondary">
+                    <tr className="border-b border-border-subtle">
+                      <td className="py-2 pr-4 font-mono text-xs text-brand">RAILPUSH_API_KEY</td>
+                      <td className="py-2 pr-4 text-sm">Yes</td>
+                      <td className="py-2 text-sm">API key for authentication</td>
+                    </tr>
+                    <tr className="border-b border-border-subtle">
+                      <td className="py-2 pr-4 font-mono text-xs text-brand">RAILPUSH_API_URL</td>
+                      <td className="py-2 pr-4 text-sm">No</td>
+                      <td className="py-2 text-sm">API base URL (default: https://apps.railpush.com)</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Available Tools</h3>
+              <p className="text-content-secondary text-sm leading-relaxed mb-4">
+                The MCP server exposes 50 tools organized by category. Agents discover these automatically.
+              </p>
+
+              <div className="overflow-x-auto mb-8">
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="border-b border-border-default">
+                      <th className="text-left py-2 pr-4 font-semibold">Category</th>
+                      <th className="text-left py-2 font-semibold">Tools</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-content-secondary">
+                    {[
+                      ['Services', 'list, get, create, update, delete, restart, suspend, resume'],
+                      ['Deploys', 'trigger, list, get, rollback'],
+                      ['Env Vars', 'list, set (bulk replace)'],
+                      ['Custom Domains', 'list, add, delete'],
+                      ['Databases', 'list, create, get, update, delete, backup, list backups, replicas, create replica, promote replica, enable HA'],
+                      ['Key-Value (Redis)', 'list, create, get, delete'],
+                      ['Logs', 'get runtime logs, get deploy logs'],
+                      ['AI Fix', 'start fix session, get fix status'],
+                      ['One-Off Jobs', 'run, list, get'],
+                      ['Autoscaling', 'get policy, set policy'],
+                      ['Blueprints', 'list, create, get, sync, delete'],
+                      ['Env Groups', 'list, create, get, delete, list vars, set vars, link service, unlink service, list linked services'],
+                      ['Metrics', 'get resource usage'],
+                      ['Projects', 'list projects'],
+                      ['GitHub', 'list repos, list branches'],
+                    ].map(([cat, tools]) => (
+                      <tr key={cat} className="border-b border-border-subtle">
+                        <td className="py-2 pr-4 font-semibold text-content-primary text-xs">{cat}</td>
+                        <td className="py-2 text-xs">{tools}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Example Conversations</h3>
+              <p className="text-content-secondary text-sm leading-relaxed mb-4">
+                Once configured, you can interact with your infrastructure naturally:
+              </p>
+
+              <CodeBlock language="text" filename="examples" code={`You: "Deploy my-api service from the staging branch"
+Agent: [calls trigger_deploy with branch="staging"] Deploy triggered.
+
+You: "What's failing on the flightatom service?"
+Agent: [calls get_service, get_logs] The service is in deploy_failed state.
+       The logs show a missing RESEND_API_KEY environment variable...
+
+You: "Create a new Postgres database called analytics-db on the pro plan"
+Agent: [calls create_database] Created database analytics-db.
+       Connection URL: postgresql://analytics-db:pass@...
+
+You: "Set the DATABASE_URL env var on my-api to that connection string and redeploy"
+Agent: [calls set_env_vars, trigger_deploy] Done. Deploy is building now.
+
+You: "Scale the web service to 3 instances with autoscaling up to 5"
+Agent: [calls update_service, set_autoscaling_policy] Updated to 3 instances
+       with autoscaling enabled (3-5 instances, 70% CPU target).`} />
+
+              <div className="rounded-xl border border-brand/20 bg-brand/5 p-5 mt-8">
+                <div className="flex items-start gap-3">
+                  <Shield className="w-5 h-5 text-brand shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-sm font-semibold mb-1">Security</div>
+                    <div className="text-sm text-content-secondary">
+                      The MCP server authenticates using your API key and inherits your RBAC permissions. It can only access workspaces and resources your account has access to. API keys can be revoked at any time from the dashboard.
+                    </div>
+                  </div>
+                </div>
               </div>
             </section>
 

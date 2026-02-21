@@ -874,6 +874,76 @@ DELETE /user/api-keys/:id              # Revoke API key
 - `/ws/builds/:deployId` — Real-time build output
 - `/ws/events` — Global event stream (deploys, failures, scaling events)
 
+### 11.3 MCP Server (Model Context Protocol)
+
+RailPush ships an MCP server (`mcp/`) that exposes the full platform as tools for AI agents (Claude, ChatGPT, Cursor, and any MCP-compatible client).
+
+**Architecture:**
+- TypeScript server using `@modelcontextprotocol/sdk`
+- STDIO transport (launched as a subprocess by the MCP client)
+- Authenticates via API key (`RAILPUSH_API_KEY`) passed as `Authorization: Bearer` header
+- All API calls go through the standard REST API — same RBAC and rate limits apply
+
+**Setup:**
+```bash
+cd mcp && npm install && npm run build
+```
+
+**Configuration (Claude Desktop / Cursor):**
+```json
+{
+  "mcpServers": {
+    "railpush": {
+      "command": "node",
+      "args": ["/path/to/RAILPUSH/mcp/build/index.js"],
+      "env": {
+        "RAILPUSH_API_KEY": "your-api-key",
+        "RAILPUSH_API_URL": "https://apps.railpush.com"
+      }
+    }
+  }
+}
+```
+
+**Environment Variables:**
+| Variable | Required | Description |
+|---|---|---|
+| `RAILPUSH_API_KEY` | Yes | API key (created via dashboard or `POST /api/v1/auth/api-keys`) |
+| `RAILPUSH_API_URL` | No | API base URL (default: `https://apps.railpush.com`) |
+
+**50 Tools by Category:**
+
+| Category | Tools |
+|---|---|
+| Services | `list_services`, `get_service`, `create_service`, `update_service`, `delete_service`, `restart_service`, `suspend_service`, `resume_service` |
+| Deploys | `trigger_deploy`, `list_deploys`, `get_deploy`, `rollback_deploy` |
+| Env Vars | `list_env_vars`, `set_env_vars` |
+| Custom Domains | `list_custom_domains`, `add_custom_domain`, `delete_custom_domain` |
+| Databases | `list_databases`, `create_database`, `get_database`, `update_database`, `delete_database`, `trigger_backup`, `list_backups`, `list_replicas`, `create_replica`, `promote_replica`, `enable_ha` |
+| Key-Value | `list_key_value_stores`, `create_key_value_store`, `get_key_value_store`, `delete_key_value_store` |
+| Logs | `get_logs` |
+| AI Fix | `start_ai_fix`, `get_ai_fix_status` |
+| Jobs | `run_job`, `list_jobs`, `get_job` |
+| Autoscaling | `get_autoscaling_policy`, `set_autoscaling_policy` |
+| Blueprints | `list_blueprints`, `create_blueprint`, `get_blueprint`, `sync_blueprint`, `delete_blueprint` |
+| Env Groups | `list_env_groups`, `create_env_group`, `get_env_group`, `delete_env_group`, `list_env_group_vars`, `set_env_group_vars`, `link_service_to_env_group`, `unlink_service_from_env_group`, `list_env_group_linked_services` |
+| Metrics | `get_metrics` |
+| Projects | `list_projects` |
+| GitHub | `list_github_repos`, `list_github_branches` |
+
+**API Key Auth (added to middleware):**
+- The auth middleware (`api/middleware/auth.go`) now falls back to API key resolution when JWT parsing fails
+- `models.ResolveAPIKey()` iterates stored key hashes and uses `bcrypt.CompareHashAndPassword`
+- Expired keys are skipped; matching key returns the owning `user_id`
+- The resolved user is subject to the same RBAC and suspension checks as JWT users
+
+**Files:**
+- `mcp/src/index.ts` — MCP server with all tool registrations
+- `mcp/src/client.ts` — HTTP client wrapper for the RailPush API
+- `mcp/package.json` — Dependencies (`@modelcontextprotocol/sdk`, `zod`)
+- `api/middleware/auth.go` — API key fallback in `AuthenticateRequest()`
+- `api/models/user.go` — `ResolveAPIKey()` function
+
 ---
 
 ## 12. Persistent Storage
