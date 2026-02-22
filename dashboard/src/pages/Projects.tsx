@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronDown, ChevronRight, FolderKanban, MoreVertical, Pencil, Plus, Search, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Folder, FolderKanban, FolderOpen, MoreVertical, MoveRight, Pencil, Plus, Search, Trash2 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Dropdown } from '../components/ui/Dropdown';
@@ -160,6 +160,9 @@ export function Projects() {
   const [ungroupedServices, setUngroupedServices] = useState<Service[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // Folder navigation state
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+
   const [editingCard, setEditingCard] = useState<ProjectCard | null>(null);
   const [editName, setEditName] = useState('');
   const [editFolderID, setEditFolderID] = useState(ROOT_FOLDER_VALUE);
@@ -177,16 +180,11 @@ export function Projects() {
   const [savingFolderRename, setSavingFolderRename] = useState(false);
   const [deletingFolder, setDeletingFolder] = useState<ProjectFolder | null>(null);
   const [deletingFolderPending, setDeletingFolderPending] = useState(false);
-  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
 
-  const toggleFolder = (folderId: string) => {
-    setCollapsedFolders((prev) => {
-      const next = new Set(prev);
-      if (next.has(folderId)) next.delete(folderId);
-      else next.add(folderId);
-      return next;
-    });
-  };
+  // Move-to-folder modal
+  const [movingCard, setMovingCard] = useState<ProjectCard | null>(null);
+  const [moveFolderID, setMoveFolderID] = useState(ROOT_FOLDER_VALUE);
+  const [savingMove, setSavingMove] = useState(false);
 
   const [serviceTab, setServiceTab] = useState<ServiceTab>('active');
   const [serviceSearch, setServiceSearch] = useState('');
@@ -284,6 +282,37 @@ export function Projects() {
     }
   };
 
+  const beginMove = (card: ProjectCard) => {
+    setMovingCard(card);
+    setMoveFolderID(card.folderId || ROOT_FOLDER_VALUE);
+  };
+
+  const saveMove = async () => {
+    if (!movingCard?.projectId) return;
+
+    const currentFolderID = movingCard.folderId || ROOT_FOLDER_VALUE;
+    if (moveFolderID === currentFolderID) {
+      setMovingCard(null);
+      setMoveFolderID(ROOT_FOLDER_VALUE);
+      return;
+    }
+
+    const nextFolderID = moveFolderID === ROOT_FOLDER_VALUE ? null : moveFolderID;
+
+    setSavingMove(true);
+    try {
+      await projectsApi.update(movingCard.projectId, { folder_id: nextFolderID });
+      toast.success(`Moved "${movingCard.name}" to ${nextFolderID ? folders.find(f => f.id === nextFolderID)?.name || 'folder' : 'root'}`);
+      setMovingCard(null);
+      setMoveFolderID(ROOT_FOLDER_VALUE);
+      await loadData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to move project');
+    } finally {
+      setSavingMove(false);
+    }
+  };
+
   const confirmDeleteProject = async () => {
     if (!deletingProjectCard?.projectId) return;
 
@@ -301,7 +330,7 @@ export function Projects() {
   };
 
   const openCreateFolder = (parentId?: string) => {
-    setNewFolderParentId(parentId ?? null);
+    setNewFolderParentId(parentId ?? currentFolderId ?? null);
     setNewFolderName('');
     setCreateFolderOpen(true);
   };
@@ -363,6 +392,10 @@ export function Projects() {
       await projectFoldersApi.delete(deletingFolder.id);
       toast.success('Folder deleted');
       setDeletingFolder(null);
+      // If we were inside the deleted folder, go back to root
+      if (currentFolderId === deletingFolder.id) {
+        setCurrentFolderId(null);
+      }
       await loadData();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to delete folder');
@@ -387,62 +420,63 @@ export function Projects() {
     }
   };
 
-  interface FolderNode {
-    folder: ProjectFolder;
-    cards: ProjectCard[];
-    children: FolderNode[];
-  }
+  // Build breadcrumb path for current folder
+  const breadcrumbs = useMemo(() => {
+    if (!currentFolderId) return [];
 
-  const groupedCards = useMemo(() => {
-    const rootCards: ProjectCard[] = [];
-    const cardsByFolder = new Map<string, ProjectCard[]>();
+    const path: ProjectFolder[] = [];
+    const visited = new Set<string>();
+    let cur: string | null = currentFolderId;
 
-    for (const folder of folders) {
-      cardsByFolder.set(folder.id, []);
+    while (cur) {
+      if (visited.has(cur)) break; // cycle guard
+      visited.add(cur);
+      const folder = folders.find(f => f.id === cur);
+      if (!folder) break;
+      path.unshift(folder);
+      cur = folder.parent_id;
     }
 
+    return path;
+  }, [currentFolderId, folders]);
+
+  // Count projects inside a folder (direct children only)
+  const projectCountByFolder = useMemo(() => {
+    const counts = new Map<string, number>();
     for (const card of cards) {
+      if (card.kind === 'project' && card.folderId) {
+        counts.set(card.folderId, (counts.get(card.folderId) || 0) + 1);
+      }
+    }
+    return counts;
+  }, [cards]);
+
+  // Count subfolders inside a folder
+  const subfolderCountByFolder = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const folder of folders) {
+      const pid = folder.parent_id || '__root__';
+      counts.set(pid, (counts.get(pid) || 0) + 1);
+    }
+    return counts;
+  }, [folders]);
+
+  // Items visible at the current folder level
+  const visibleFolders = useMemo(() => {
+    return folders
+      .filter(f => (f.parent_id || null) === currentFolderId)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [folders, currentFolderId]);
+
+  const visibleCards = useMemo(() => {
+    return cards.filter(card => {
       if (card.kind !== 'project') {
-        rootCards.push(card);
-        continue;
+        // Blueprints only show at root
+        return currentFolderId === null && !card.folderId;
       }
-      if (card.folderId && cardsByFolder.has(card.folderId)) {
-        cardsByFolder.get(card.folderId)?.push(card);
-      } else {
-        rootCards.push(card);
-      }
-    }
-
-    // Build tree from flat folder list with cycle detection.
-    const nodeMap = new Map<string, FolderNode>();
-    for (const folder of folders) {
-      nodeMap.set(folder.id, { folder, cards: cardsByFolder.get(folder.id) || [], children: [] });
-    }
-    const rootFolders: FolderNode[] = [];
-    for (const folder of folders) {
-      const node = nodeMap.get(folder.id)!;
-      if (folder.parent_id && nodeMap.has(folder.parent_id)) {
-        // Cycle detection: walk the ancestor chain and ensure this folder's id doesn't appear.
-        let isCycle = false;
-        let cur: string | undefined | null = folder.parent_id;
-        const visited = new Set<string>();
-        while (cur && nodeMap.has(cur)) {
-          if (cur === folder.id || visited.has(cur)) { isCycle = true; break; }
-          visited.add(cur);
-          cur = nodeMap.get(cur)!.folder.parent_id ?? null;
-        }
-        if (!isCycle) {
-          nodeMap.get(folder.parent_id)!.children.push(node);
-        } else {
-          rootFolders.push(node);
-        }
-      } else {
-        rootFolders.push(node);
-      }
-    }
-
-    return { rootCards, folderTree: rootFolders };
-  }, [cards, folders]);
+      return (card.folderId || null) === currentFolderId;
+    });
+  }, [cards, currentFolderId]);
 
   const folderOptions = useMemo(() => {
     // Build hierarchical labels (e.g. "Parent / Child / Grandchild") with cycle protection.
@@ -466,22 +500,107 @@ export function Projects() {
     for (const f of folders) buildLabel(f);
 
     return [
-      { value: ROOT_FOLDER_VALUE, label: 'No folder' },
+      { value: ROOT_FOLDER_VALUE, label: 'No folder (root)' },
       ...folders.map((folder) => ({ value: folder.id, label: labelMap.get(folder.id) || folder.name })),
     ];
   }, [folders]);
+
+  // Render a folder as a distinct card in the grid
+  const renderFolderCard = (folder: ProjectFolder) => {
+    const projectCount = projectCountByFolder.get(folder.id) || 0;
+    const subCount = subfolderCountByFolder.get(folder.id) || 0;
+
+    return (
+      <div
+        key={`folder:${folder.id}`}
+        onClick={() => setCurrentFolderId(folder.id)}
+        className="group relative min-h-[160px] rounded-xl border-2 border-dashed border-brand/30 bg-brand/[0.03] hover:border-brand/50 hover:bg-brand/[0.06] cursor-pointer transition-all duration-200"
+      >
+        <div className="h-full flex flex-col justify-between p-5">
+          <div className="flex items-start justify-between gap-2">
+            <div className="w-10 h-10 rounded-lg bg-brand/10 flex items-center justify-center">
+              <Folder className="w-5 h-5 text-brand" />
+            </div>
+
+            <div onClick={(e) => e.stopPropagation()}>
+              <Dropdown
+                align="right"
+                trigger={
+                  <button
+                    type="button"
+                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary"
+                    aria-label={`Folder actions for ${folder.name}`}
+                  >
+                    <MoreVertical className="w-4 h-4" />
+                  </button>
+                }
+                items={[
+                  {
+                    label: 'Rename Folder',
+                    icon: <Pencil className="w-3.5 h-3.5" />,
+                    onClick: () => beginRenameFolder(folder),
+                  },
+                  {
+                    label: 'New Subfolder',
+                    icon: <Plus className="w-3.5 h-3.5" />,
+                    onClick: () => openCreateFolder(folder.id),
+                  },
+                  { label: '', divider: true, onClick: () => {} },
+                  {
+                    label: 'Delete Folder',
+                    icon: <Trash2 className="w-3.5 h-3.5" />,
+                    onClick: () => setDeletingFolder(folder),
+                    danger: true,
+                  },
+                ]}
+              />
+            </div>
+          </div>
+
+          <div>
+            <div className="text-lg font-semibold text-content-primary leading-tight truncate">{folder.name}</div>
+            <div className="text-xs text-content-tertiary mt-1.5">
+              {projectCount} {projectCount === 1 ? 'project' : 'projects'}
+              {subCount > 0 && <span> &middot; {subCount} {subCount === 1 ? 'subfolder' : 'subfolders'}</span>}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const renderProjectCard = (card: ProjectCard) => {
     const health = summarizeHealth(card.services);
     const clickable = card.kind === 'project' || card.kind === 'blueprint';
     const canManage = card.kind === 'project' && !!card.projectId && !!card.editable;
 
+    const menuItems = [];
+    if (canManage) {
+      menuItems.push({
+        label: 'Edit Project',
+        icon: <Pencil className="w-3.5 h-3.5" />,
+        onClick: () => beginEdit(card),
+      });
+      menuItems.push({
+        label: 'Move to Folder',
+        icon: <MoveRight className="w-3.5 h-3.5" />,
+        onClick: () => beginMove(card),
+      });
+      menuItems.push({ label: '', divider: true, onClick: () => {} });
+      menuItems.push({
+        label: 'Delete Project',
+        icon: <Trash2 className="w-3.5 h-3.5" />,
+        onClick: () => setDeletingProjectCard(card),
+        danger: true,
+      });
+    }
+
     return (
       <Card
         key={card.key}
         hover={clickable}
         onClick={clickable ? () => openCard(card) : undefined}
-        className="group min-h-[160px] rounded-none bg-transparent border-border-default/80"
+        className="group min-h-[160px] rounded-xl bg-transparent border-border-default/80"
       >
         <div className="h-full flex flex-col justify-between">
           <div className="flex items-start justify-between gap-2">
@@ -502,19 +621,7 @@ export function Projects() {
                       <MoreVertical className="w-4 h-4" />
                     </button>
                   }
-                  items={[
-                    {
-                      label: 'Edit Project',
-                      icon: <Pencil className="w-3.5 h-3.5" />,
-                      onClick: () => beginEdit(card),
-                    },
-                    {
-                      label: 'Delete Project',
-                      icon: <Trash2 className="w-3.5 h-3.5" />,
-                      onClick: () => setDeletingProjectCard(card),
-                      danger: true,
-                    },
-                  ]}
+                  items={menuItems}
                 />
               </div>
             )}
@@ -539,89 +646,6 @@ export function Projects() {
                      </span>
         </div>
       </Card>
-    );
-  };
-
-  const MAX_FOLDER_DEPTH = 10;
-  const renderFolderNode = (node: FolderNode, depth: number): React.ReactNode => {
-    if (depth > MAX_FOLDER_DEPTH) return null; // Safety limit to prevent stack overflow
-    const isCollapsed = collapsedFolders.has(node.folder.id);
-    const hasContent = node.cards.length > 0 || node.children.length > 0;
-    const totalProjects = node.cards.length;
-
-    return (
-      <div key={node.folder.id} className="mb-6" style={{ marginLeft: depth > 0 ? 24 : 0 }}>
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => toggleFolder(node.folder.id)}
-              className="p-0.5 rounded text-content-tertiary hover:text-content-primary transition-colors"
-              aria-label={isCollapsed ? 'Expand folder' : 'Collapse folder'}
-            >
-              {isCollapsed
-                ? <ChevronRight className="w-4 h-4" />
-                : <ChevronDown className="w-4 h-4" />
-              }
-            </button>
-            <FolderKanban className="w-4 h-4 text-content-tertiary" />
-            <h3 className="text-base font-semibold text-content-primary">{node.folder.name}</h3>
-            <span className="text-xs text-content-tertiary">
-              {totalProjects} {totalProjects === 1 ? 'project' : 'projects'}
-              {node.children.length > 0 && ` · ${node.children.length} ${node.children.length === 1 ? 'subfolder' : 'subfolders'}`}
-            </span>
-          </div>
-
-          <Dropdown
-            align="right"
-            trigger={
-              <button
-                type="button"
-                className="p-1 rounded text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary"
-                aria-label={`Folder actions for ${node.folder.name}`}
-              >
-                <MoreVertical className="w-4 h-4" />
-              </button>
-            }
-            items={[
-              {
-                label: 'New Subfolder',
-                icon: <Plus className="w-3.5 h-3.5" />,
-                onClick: () => openCreateFolder(node.folder.id),
-              },
-              {
-                label: 'Rename Folder',
-                icon: <Pencil className="w-3.5 h-3.5" />,
-                onClick: () => beginRenameFolder(node.folder),
-              },
-              {
-                label: 'Delete Folder',
-                icon: <Trash2 className="w-3.5 h-3.5" />,
-                onClick: () => setDeletingFolder(node.folder),
-                danger: true,
-              },
-            ]}
-          />
-        </div>
-
-        {!isCollapsed && (
-          <>
-            {node.cards.length > 0 && (
-              <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-4 mb-4">
-                {node.cards.map((card) => renderProjectCard(card))}
-              </div>
-            )}
-
-            {node.children.map((child) => renderFolderNode(child, depth + 1))}
-
-            {!hasContent && (
-              <div className="min-h-[80px] border border-dashed border-border-default/60 rounded-none flex items-center px-5 text-sm text-content-tertiary">
-                No projects in this folder yet
-              </div>
-            )}
-          </>
-        )}
-      </div>
     );
   };
 
@@ -681,141 +705,192 @@ export function Projects() {
         <>
           <div className="mb-12">
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-2xl font-semibold text-content-primary">Projects</h2>
+              <div className="flex items-center gap-2 min-w-0">
+                {/* Breadcrumb navigation */}
+                <button
+                  type="button"
+                  onClick={() => setCurrentFolderId(null)}
+                  className={cn(
+                    'text-2xl font-semibold transition-colors shrink-0',
+                    currentFolderId
+                      ? 'text-content-tertiary hover:text-content-primary cursor-pointer'
+                      : 'text-content-primary',
+                  )}
+                >
+                  Projects
+                </button>
+
+                {breadcrumbs.map((folder) => (
+                  <div key={folder.id} className="flex items-center gap-2 min-w-0">
+                    <ChevronRight className="w-5 h-5 text-content-tertiary shrink-0" />
+                    <button
+                      type="button"
+                      onClick={() => setCurrentFolderId(folder.id)}
+                      className={cn(
+                        'text-2xl font-semibold transition-colors truncate',
+                        folder.id === currentFolderId
+                          ? 'text-content-primary'
+                          : 'text-content-tertiary hover:text-content-primary cursor-pointer',
+                      )}
+                    >
+                      {folder.name}
+                    </button>
+                  </div>
+                ))}
+              </div>
+
               <Button variant="secondary" size="sm" onClick={() => openCreateFolder()}>
                 <Plus className="w-3.5 h-3.5" />
                 New Folder
               </Button>
             </div>
 
-            <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-4 mb-8">
-              {groupedCards.rootCards.map((card) => renderProjectCard(card))}
+            <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4 mb-8">
+              {/* Folders first */}
+              {visibleFolders.map((folder) => renderFolderCard(folder))}
 
-              <button
-                type="button"
-                onClick={() => navigate('/new/blueprint')}
-                className="min-h-[160px] rounded-none border border-dashed border-border-default/70 hover:border-border-hover text-content-secondary hover:text-content-primary transition-colors flex items-center justify-center text-lg"
-              >
-                + Create new project
-              </button>
-            </div>
+              {/* Then project cards */}
+              {visibleCards.map((card) => renderProjectCard(card))}
 
-            {groupedCards.folderTree.map((node) => renderFolderNode(node, 0))}
-          </div>
-
-          <div>
-            <h2 className="text-2xl font-semibold text-content-primary mb-5">Ungrouped Services</h2>
-
-            <div className="inline-flex items-center border border-border-default mb-5">
-              {[
-                { id: 'active' as ServiceTab, label: `Active (${activeUngrouped.length})` },
-                { id: 'suspended' as ServiceTab, label: `Suspended (${suspendedUngrouped.length})` },
-                { id: 'all' as ServiceTab, label: `All (${ungroupedServices.length})` },
-              ].map((tab) => (
+              {/* Create new project button */}
+              {currentFolderId === null && (
                 <button
-                  key={tab.id}
                   type="button"
-                  onClick={() => setServiceTab(tab.id)}
-                  className={cn(
-                    'px-3 py-1.5 text-sm border-r border-border-default last:border-r-0 transition-colors',
-                    serviceTab === tab.id
-                      ? 'bg-brand text-white'
-                      : 'text-content-secondary hover:text-content-primary hover:bg-surface-tertiary',
-                  )}
+                  onClick={() => navigate('/new/blueprint')}
+                  className="min-h-[160px] rounded-xl border border-dashed border-border-default/70 hover:border-border-hover text-content-secondary hover:text-content-primary transition-colors flex items-center justify-center text-lg cursor-pointer"
                 >
-                  {tab.label}
+                  + Create new project
                 </button>
-              ))}
-            </div>
-
-            <div className="relative mb-5">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-content-tertiary" />
-              <input
-                type="text"
-                value={serviceSearch}
-                onChange={(e) => setServiceSearch(e.target.value)}
-                placeholder="Search services"
-                className="w-full bg-transparent border border-border-default rounded-none pl-10 pr-3 py-2 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:border-border-hover"
-              />
-            </div>
-
-            <div className="border border-border-default rounded-none overflow-x-auto overflow-y-visible">
-              <div className="grid grid-cols-[2.3fr_0.8fr_0.9fr_0.8fr_0.7fr_50px] px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-content-tertiary border-b border-border-default">
-                <div>SERVICE NAME</div>
-                <div>STATUS</div>
-                <div>RUNTIME</div>
-                <div>REGION</div>
-                <div>UPDATED</div>
-                <div />
-              </div>
-
-              {visibleUngrouped.length === 0 ? (
-                <div className="px-4 py-6 text-sm text-content-secondary">No ungrouped services.</div>
-              ) : (
-                visibleUngrouped.map((svc) => (
-                  <div
-                    key={svc.id}
-                    className="grid grid-cols-[2.3fr_0.8fr_0.9fr_0.8fr_0.7fr_50px] items-center px-4 py-3 border-b border-border-subtle last:border-b-0 hover:bg-surface-tertiary/40"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => navigate(`/services/${svc.id}`)}
-                      className="inline-flex items-center gap-2 min-w-0 text-left"
-                    >
-                      <ServiceIcon type={svc.type} />
-                      <span className="text-sm text-content-primary truncate underline decoration-content-tertiary/60 underline-offset-4">
-                        {svc.name}
-                      </span>
-                    </button>
-
-                    <div>
-                      <StatusBadge status={effectiveStatus(svc)} size="sm" />
-                    </div>
-
-                    <div>
-                      <span className="inline-flex items-center px-2 py-1 text-[11px] rounded-md border border-brand/20 bg-brand/10 text-brand font-semibold capitalize">
-                        {svc.runtime || serviceTypeLabel(svc.type)}
-                      </span>
-                    </div>
-
-                    <div className="text-sm text-content-secondary">N/A</div>
-                    <div className="text-sm text-content-secondary">{timeAgo(svc.updated_at || svc.created_at)}</div>
-
-                    <div className="justify-self-end">
-                      <Dropdown
-                        align="right"
-                        side="top"
-                        trigger={
-                          <button
-                            type="button"
-                            className="p-1 rounded text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary"
-                            aria-label={`Actions for ${svc.name}`}
-                          >
-                            <MoreVertical className="w-4 h-4" />
-                          </button>
-                        }
-                        items={[
-                          {
-                            label: 'Open Service',
-                            onClick: () => navigate(`/services/${svc.id}`),
-                          },
-                          {
-                            label: 'Delete Service',
-                            icon: <Trash2 className="w-3.5 h-3.5" />,
-                            onClick: () => setDeletingService(svc),
-                            danger: true,
-                          },
-                        ]}
-                      />
-                    </div>
-                  </div>
-                ))
               )}
             </div>
+
+            {/* Empty state for folders */}
+            {visibleFolders.length === 0 && visibleCards.length === 0 && currentFolderId && (
+              <div className="min-h-[120px] border border-dashed border-border-default/60 rounded-xl flex flex-col items-center justify-center gap-2 text-content-tertiary">
+                <FolderOpen className="w-8 h-8" />
+                <span className="text-sm">This folder is empty</span>
+                <span className="text-xs">Move projects here or create a subfolder</span>
+              </div>
+            )}
           </div>
+
+          {/* Ungrouped services only show at root */}
+          {currentFolderId === null && (
+            <div>
+              <h2 className="text-2xl font-semibold text-content-primary mb-5">Ungrouped Services</h2>
+
+              <div className="inline-flex items-center border border-border-default mb-5">
+                {[
+                  { id: 'active' as ServiceTab, label: `Active (${activeUngrouped.length})` },
+                  { id: 'suspended' as ServiceTab, label: `Suspended (${suspendedUngrouped.length})` },
+                  { id: 'all' as ServiceTab, label: `All (${ungroupedServices.length})` },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setServiceTab(tab.id)}
+                    className={cn(
+                      'px-3 py-1.5 text-sm border-r border-border-default last:border-r-0 transition-colors',
+                      serviceTab === tab.id
+                        ? 'bg-brand text-white'
+                        : 'text-content-secondary hover:text-content-primary hover:bg-surface-tertiary',
+                    )}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="relative mb-5">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-content-tertiary" />
+                <input
+                  type="text"
+                  value={serviceSearch}
+                  onChange={(e) => setServiceSearch(e.target.value)}
+                  placeholder="Search services"
+                  className="w-full bg-transparent border border-border-default rounded-none pl-10 pr-3 py-2 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:border-border-hover"
+                />
+              </div>
+
+              <div className="border border-border-default rounded-none overflow-x-auto overflow-y-visible">
+                <div className="grid grid-cols-[2.3fr_0.8fr_0.9fr_0.8fr_0.7fr_50px] px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-content-tertiary border-b border-border-default">
+                  <div>SERVICE NAME</div>
+                  <div>STATUS</div>
+                  <div>RUNTIME</div>
+                  <div>REGION</div>
+                  <div>UPDATED</div>
+                  <div />
+                </div>
+
+                {visibleUngrouped.length === 0 ? (
+                  <div className="px-4 py-6 text-sm text-content-secondary">No ungrouped services.</div>
+                ) : (
+                  visibleUngrouped.map((svc) => (
+                    <div
+                      key={svc.id}
+                      className="grid grid-cols-[2.3fr_0.8fr_0.9fr_0.8fr_0.7fr_50px] items-center px-4 py-3 border-b border-border-subtle last:border-b-0 hover:bg-surface-tertiary/40"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/services/${svc.id}`)}
+                        className="inline-flex items-center gap-2 min-w-0 text-left"
+                      >
+                        <ServiceIcon type={svc.type} />
+                        <span className="text-sm text-content-primary truncate underline decoration-content-tertiary/60 underline-offset-4">
+                          {svc.name}
+                        </span>
+                      </button>
+
+                      <div>
+                        <StatusBadge status={effectiveStatus(svc)} size="sm" />
+                      </div>
+
+                      <div>
+                        <span className="inline-flex items-center px-2 py-1 text-[11px] rounded-md border border-brand/20 bg-brand/10 text-brand font-semibold capitalize">
+                          {svc.runtime || serviceTypeLabel(svc.type)}
+                        </span>
+                      </div>
+
+                      <div className="text-sm text-content-secondary">N/A</div>
+                      <div className="text-sm text-content-secondary">{timeAgo(svc.updated_at || svc.created_at)}</div>
+
+                      <div className="justify-self-end">
+                        <Dropdown
+                          align="right"
+                          side="top"
+                          trigger={
+                            <button
+                              type="button"
+                              className="p-1 rounded text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary"
+                              aria-label={`Actions for ${svc.name}`}
+                            >
+                              <MoreVertical className="w-4 h-4" />
+                            </button>
+                          }
+                          items={[
+                            {
+                              label: 'Open Service',
+                              onClick: () => navigate(`/services/${svc.id}`),
+                            },
+                            {
+                              label: 'Delete Service',
+                              icon: <Trash2 className="w-3.5 h-3.5" />,
+                              onClick: () => setDeletingService(svc),
+                              danger: true,
+                            },
+                          ]}
+                        />
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
         </>
       )}
 
+      {/* Edit Project Modal */}
       <Modal
         open={!!editingCard}
         onClose={() => {
@@ -864,6 +939,48 @@ export function Projects() {
         </div>
       </Modal>
 
+      {/* Move to Folder Modal */}
+      <Modal
+        open={!!movingCard}
+        onClose={() => {
+          if (savingMove) return;
+          setMovingCard(null);
+          setMoveFolderID(ROOT_FOLDER_VALUE);
+        }}
+        title="Move to Folder"
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setMovingCard(null);
+                setMoveFolderID(ROOT_FOLDER_VALUE);
+              }}
+              disabled={savingMove}
+            >
+              Cancel
+            </Button>
+            <Button onClick={saveMove} loading={savingMove}>
+              Move
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-content-secondary mb-4">
+          Move <span className="text-content-primary font-medium">{movingCard?.name}</span> to:
+        </p>
+        <select
+          value={moveFolderID}
+          onChange={(e) => setMoveFolderID(e.target.value)}
+          className="w-full bg-surface-tertiary border border-border-default rounded-md px-3 py-2 text-sm text-content-primary focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
+        >
+          {folderOptions.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      </Modal>
+
+      {/* Create Folder Modal */}
       <Modal
         open={createFolderOpen}
         onClose={() => {
@@ -898,6 +1015,7 @@ export function Projects() {
         />
       </Modal>
 
+      {/* Rename Folder Modal */}
       <Modal
         open={!!renamingFolder}
         onClose={() => {
@@ -932,6 +1050,7 @@ export function Projects() {
         />
       </Modal>
 
+      {/* Delete Folder Modal */}
       <Modal
         open={!!deletingFolder}
         onClose={() => {
@@ -956,6 +1075,7 @@ export function Projects() {
         </p>
       </Modal>
 
+      {/* Delete Project Modal */}
       <Modal
         open={!!deletingProjectCard}
         onClose={() => {
@@ -982,6 +1102,7 @@ export function Projects() {
         </p>
       </Modal>
 
+      {/* Delete Service Modal */}
       <Modal
         open={!!deletingService}
         onClose={() => {
