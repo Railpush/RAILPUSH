@@ -12,6 +12,7 @@ type Blueprint struct {
 	ID             string     `json:"id"`
 	WorkspaceID    string     `json:"workspace_id"`
 	Name           string     `json:"name"`
+	FolderID       *string    `json:"folder_id"`
 	RepoURL        string     `json:"repo_url"`
 	Branch         string     `json:"branch"`
 	FilePath       string     `json:"file_path"`
@@ -39,16 +40,25 @@ func CreateBlueprint(b *Blueprint) error {
 	).Scan(&b.ID, &b.CreatedAt)
 }
 
-const blueprintSelectCols = `id, workspace_id, name, COALESCE(repo_url,''), COALESCE(branch,'main'), COALESCE(file_path,'railpush.yaml'), COALESCE(ai_ignore_repo_yaml,false), last_synced_at, COALESCE(last_sync_status,''), COALESCE(sync_log,''), created_at`
+const blueprintSelectCols = `id, workspace_id, name, COALESCE(folder_id::text,''), COALESCE(repo_url,''), COALESCE(branch,'main'), COALESCE(file_path,'railpush.yaml'), COALESCE(ai_ignore_repo_yaml,false), last_synced_at, COALESCE(last_sync_status,''), COALESCE(sync_log,''), created_at`
 const blueprintSelectColsWithGenerated = blueprintSelectCols + `, COALESCE(generated_yaml,'')`
+
+func scanBlueprintFolderID(raw string) *string {
+	if raw == "" {
+		return nil
+	}
+	return &raw
+}
 
 func GetBlueprint(id string) (*Blueprint, error) {
 	b := &Blueprint{}
+	var folderRaw string
 	err := database.DB.QueryRow("SELECT "+blueprintSelectColsWithGenerated+" FROM blueprints WHERE id=$1", id).Scan(
-		&b.ID, &b.WorkspaceID, &b.Name, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.SyncLog, &b.CreatedAt, &b.GeneratedYAML)
+		&b.ID, &b.WorkspaceID, &b.Name, &folderRaw, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.SyncLog, &b.CreatedAt, &b.GeneratedYAML)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
+	b.FolderID = scanBlueprintFolderID(folderRaw)
 	return b, err
 }
 
@@ -61,9 +71,11 @@ func ListBlueprints() ([]Blueprint, error) {
 	var bps []Blueprint
 	for rows.Next() {
 		var b Blueprint
-		if err := rows.Scan(&b.ID, &b.WorkspaceID, &b.Name, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.SyncLog, &b.CreatedAt); err != nil {
+		var folderRaw string
+		if err := rows.Scan(&b.ID, &b.WorkspaceID, &b.Name, &folderRaw, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.SyncLog, &b.CreatedAt); err != nil {
 			return nil, err
 		}
+		b.FolderID = scanBlueprintFolderID(folderRaw)
 		bps = append(bps, b)
 	}
 	return bps, nil
@@ -78,12 +90,23 @@ func ListBlueprintsByWorkspace(workspaceID string) ([]Blueprint, error) {
 	var bps []Blueprint
 	for rows.Next() {
 		var b Blueprint
-		if err := rows.Scan(&b.ID, &b.WorkspaceID, &b.Name, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.SyncLog, &b.CreatedAt); err != nil {
+		var folderRaw string
+		if err := rows.Scan(&b.ID, &b.WorkspaceID, &b.Name, &folderRaw, &b.RepoURL, &b.Branch, &b.FilePath, &b.AIIgnoreRepoYAML, &b.LastSyncedAt, &b.LastSyncStatus, &b.SyncLog, &b.CreatedAt); err != nil {
 			return nil, err
 		}
+		b.FolderID = scanBlueprintFolderID(folderRaw)
 		bps = append(bps, b)
 	}
 	return bps, nil
+}
+
+func UpdateBlueprintFolderID(id string, folderID *string) error {
+	if folderID == nil || *folderID == "" {
+		_, err := database.DB.Exec("UPDATE blueprints SET folder_id=NULL WHERE id=$1", id)
+		return err
+	}
+	_, err := database.DB.Exec("UPDATE blueprints SET folder_id=$1 WHERE id=$2", *folderID, id)
+	return err
 }
 
 func DeleteBlueprint(id string) error {

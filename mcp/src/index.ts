@@ -691,6 +691,22 @@ server.tool(
 );
 
 server.tool(
+  "update_blueprint",
+  "Update a blueprint. Currently supports moving it to a project folder. Set folder_id to null to move to root.",
+  {
+    blueprint_id: z.string().describe("Blueprint ID"),
+    folder_id: z.string().nullable().optional().describe("Folder ID to move the blueprint into (null to move to root)"),
+  },
+  async ({ blueprint_id, ...updates }) => {
+    try {
+      const data = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
+      return text(await client.updateBlueprint(blueprint_id, data));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
   "delete_blueprint",
   "Delete a blueprint and optionally its linked services.",
   { blueprint_id: z.string().describe("Blueprint ID") },
@@ -889,10 +905,11 @@ server.tool(
 
 server.tool(
   "update_project",
-  "Update a project's name or configuration.",
+  "Update a project's name or move it to a folder. Set folder_id to null to move to root.",
   {
     project_id: z.string().describe("Project ID"),
     name: z.string().optional().describe("New project name"),
+    folder_id: z.string().nullable().optional().describe("Folder ID to move the project into (null to move to root)"),
   },
   async ({ project_id, ...updates }) => {
     try {

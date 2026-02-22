@@ -115,6 +115,7 @@ function buildProjectData(
       key,
       kind: 'blueprint',
       blueprintId: blueprint.id,
+      folderId: blueprint.folder_id || undefined,
       name: blueprint.name || 'Untitled Project',
       services: blueprintServices,
       createdAt: blueprint.created_at,
@@ -288,7 +289,8 @@ export function Projects() {
   };
 
   const saveMove = async () => {
-    if (!movingCard?.projectId) return;
+    if (!movingCard) return;
+    if (!movingCard.projectId && !movingCard.blueprintId) return;
 
     const currentFolderID = movingCard.folderId || ROOT_FOLDER_VALUE;
     if (moveFolderID === currentFolderID) {
@@ -301,13 +303,17 @@ export function Projects() {
 
     setSavingMove(true);
     try {
-      await projectsApi.update(movingCard.projectId, { folder_id: nextFolderID });
+      if (movingCard.kind === 'project' && movingCard.projectId) {
+        await projectsApi.update(movingCard.projectId, { folder_id: nextFolderID });
+      } else if (movingCard.kind === 'blueprint' && movingCard.blueprintId) {
+        await blueprintsApi.update(movingCard.blueprintId, { folder_id: nextFolderID });
+      }
       toast.success(`Moved "${movingCard.name}" to ${nextFolderID ? folders.find(f => f.id === nextFolderID)?.name || 'folder' : 'root'}`);
       setMovingCard(null);
       setMoveFolderID(ROOT_FOLDER_VALUE);
       await loadData();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to move project');
+      toast.error(err instanceof Error ? err.message : 'Failed to move');
     } finally {
       setSavingMove(false);
     }
@@ -440,11 +446,11 @@ export function Projects() {
     return path;
   }, [currentFolderId, folders]);
 
-  // Count projects inside a folder (direct children only)
+  // Count projects/blueprints inside a folder (direct children only)
   const projectCountByFolder = useMemo(() => {
     const counts = new Map<string, number>();
     for (const card of cards) {
-      if (card.kind === 'project' && card.folderId) {
+      if (card.folderId) {
         counts.set(card.folderId, (counts.get(card.folderId) || 0) + 1);
       }
     }
@@ -470,10 +476,6 @@ export function Projects() {
 
   const visibleCards = useMemo(() => {
     return cards.filter(card => {
-      if (card.kind !== 'project') {
-        // Blueprints only show at root
-        return currentFolderId === null && !card.folderId;
-      }
       return (card.folderId || null) === currentFolderId;
     });
   }, [cards, currentFolderId]);
@@ -572,20 +574,26 @@ export function Projects() {
   const renderProjectCard = (card: ProjectCard) => {
     const health = summarizeHealth(card.services);
     const clickable = card.kind === 'project' || card.kind === 'blueprint';
-    const canManage = card.kind === 'project' && !!card.projectId && !!card.editable;
+    const canManageProject = card.kind === 'project' && !!card.projectId && !!card.editable;
+    const canManageBlueprint = card.kind === 'blueprint' && !!card.blueprintId;
+    const canManage = canManageProject || canManageBlueprint;
 
     const menuItems = [];
-    if (canManage) {
+    if (canManageProject) {
       menuItems.push({
         label: 'Edit Project',
         icon: <Pencil className="w-3.5 h-3.5" />,
         onClick: () => beginEdit(card),
       });
+    }
+    if (canManage) {
       menuItems.push({
         label: 'Move to Folder',
         icon: <MoveRight className="w-3.5 h-3.5" />,
         onClick: () => beginMove(card),
       });
+    }
+    if (canManageProject) {
       menuItems.push({ label: '', divider: true, onClick: () => {} });
       menuItems.push({
         label: 'Delete Project',

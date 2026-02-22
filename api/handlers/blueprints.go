@@ -142,6 +142,63 @@ func (h *BlueprintHandler) GetBlueprint(w http.ResponseWriter, r *http.Request) 
 	utils.RespondJSON(w, http.StatusOK, blueprintDetailResponse{Blueprint: *bp, Resources: enriched})
 }
 
+func (h *BlueprintHandler) UpdateBlueprint(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	userID := middleware.GetUserID(r)
+	bp, err := models.GetBlueprint(id)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if bp == nil {
+		utils.RespondError(w, http.StatusNotFound, "blueprint not found")
+		return
+	}
+	if err := services.EnsureWorkspaceAccess(userID, bp.WorkspaceID, models.RoleDeveloper); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	var req map[string]interface{}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if rawFolderID, ok := req["folder_id"]; ok {
+		switch v := rawFolderID.(type) {
+		case nil:
+			if err := models.UpdateBlueprintFolderID(id, nil); err != nil {
+				utils.RespondError(w, http.StatusInternalServerError, "failed to update folder")
+				return
+			}
+		case string:
+			folderID := strings.TrimSpace(v)
+			if folderID == "" {
+				if err := models.UpdateBlueprintFolderID(id, nil); err != nil {
+					utils.RespondError(w, http.StatusInternalServerError, "failed to update folder")
+					return
+				}
+			} else {
+				if err := models.UpdateBlueprintFolderID(id, &folderID); err != nil {
+					utils.RespondError(w, http.StatusInternalServerError, "failed to update folder")
+					return
+				}
+			}
+		default:
+			utils.RespondError(w, http.StatusBadRequest, "folder_id must be a string or null")
+			return
+		}
+	}
+
+	updated, _ := models.GetBlueprint(id)
+	if updated == nil {
+		utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, updated)
+}
+
 func blueprintResourceStatus(r models.BlueprintResource) string {
 	switch r.ResourceType {
 	case "service":

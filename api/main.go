@@ -353,6 +353,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/blueprints", bpH.ListBlueprints).Methods("GET")
 	authed.HandleFunc("/blueprints", bpH.CreateBlueprint).Methods("POST")
 	authed.HandleFunc("/blueprints/{id}", bpH.GetBlueprint).Methods("GET")
+	authed.HandleFunc("/blueprints/{id}", bpH.UpdateBlueprint).Methods("PATCH")
 	authed.HandleFunc("/blueprints/{id}", bpH.DeleteBlueprint).Methods("DELETE")
 	authed.HandleFunc("/blueprints/{id}/sync", bpH.SyncBlueprint).Methods("POST")
 	authed.HandleFunc("/projects", projH.ListProjects).Methods("GET")

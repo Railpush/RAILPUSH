@@ -287,6 +287,10 @@ export class RailPushClient {
     return this.request("POST", `/blueprints/${id}/sync`);
   }
 
+  async updateBlueprint(id: string, data: Record<string, unknown>) {
+    return this.request("PATCH", `/blueprints/${id}`, data);
+  }
+
   async deleteBlueprint(id: string) {
     return this.request("DELETE", `/blueprints/${id}`);
   }

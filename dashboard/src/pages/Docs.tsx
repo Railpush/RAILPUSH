@@ -1231,6 +1231,7 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'GET', path: '/blueprints', desc: 'List blueprints' },
                   { method: 'POST', path: '/blueprints', desc: 'Create a blueprint (auto-syncs)' },
                   { method: 'GET', path: '/blueprints/:id', desc: 'Get blueprint details' },
+                  { method: 'PATCH', path: '/blueprints/:id', desc: 'Update blueprint (move to folder)' },
                   { method: 'DELETE', path: '/blueprints/:id', desc: 'Delete a blueprint' },
                   { method: 'POST', path: '/blueprints/:id/sync', desc: 'Trigger blueprint sync' },
                 ]},
@@ -1325,7 +1326,7 @@ curl https://railpush.com/api/v1/services \\
                   <div>
                     <div className="text-sm font-semibold mb-1">AI-native infrastructure</div>
                     <div className="text-sm text-content-secondary">
-                      With 98 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
+                      With 99 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
                     </div>
                   </div>
                 </div>
@@ -1416,7 +1417,7 @@ npm run build`} />
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Available Tools</h3>
               <p className="text-content-secondary text-sm leading-relaxed mb-4">
-                The MCP server exposes 98 tools organized by category. Agents discover these automatically.
+                The MCP server exposes 99 tools organized by category. Agents discover these automatically.
               </p>
 
               <div className="overflow-x-auto mb-8">
@@ -1440,10 +1441,10 @@ npm run build`} />
                       ['AI Fix', 'start fix session, get fix status'],
                       ['One-Off Jobs', 'run, list, get'],
                       ['Autoscaling', 'get policy, set policy'],
-                      ['Blueprints', 'list, create, get, sync, delete'],
+                      ['Blueprints', 'list, create, get, update (move to folder), sync, delete'],
                       ['Env Groups', 'list, create, get, update, delete, list vars, set vars, link, unlink, list linked services'],
                       ['Metrics', 'get resource usage, get usage history'],
-                      ['Projects', 'list, create, get, update, delete'],
+                      ['Projects', 'list, create, get, update (name + move to folder), delete'],
                       ['Environments', 'list, create, update, delete'],
 
                       ['Project Folders', 'list, create, update, delete'],

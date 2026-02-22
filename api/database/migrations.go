@@ -393,4 +393,9 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 	`ALTER TABLE project_folders ADD COLUMN IF NOT EXISTS parent_id UUID`,
 	`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='project_folders_parent_id_fkey') THEN ALTER TABLE project_folders ADD CONSTRAINT project_folders_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES project_folders(id) ON DELETE CASCADE; END IF; END $$`,
 	`CREATE INDEX IF NOT EXISTS idx_project_folders_parent_id ON project_folders(parent_id)`,
+
+	// Blueprints can be organized into project folders too.
+	`ALTER TABLE blueprints ADD COLUMN IF NOT EXISTS folder_id UUID`,
+	`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='blueprints_folder_id_fkey') THEN ALTER TABLE blueprints ADD CONSTRAINT blueprints_folder_id_fkey FOREIGN KEY (folder_id) REFERENCES project_folders(id) ON DELETE SET NULL; END IF; END $$`,
+	`CREATE INDEX IF NOT EXISTS idx_blueprints_folder_id ON blueprints(folder_id)`,
 }

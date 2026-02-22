@@ -178,6 +178,7 @@ export interface Blueprint {
   id: string;
   workspace_id: string;
   name: string;
+  folder_id: string | null;
   repo_url: string;
   branch: string;
   file_path: string;

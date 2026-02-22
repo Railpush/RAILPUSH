@@ -174,6 +174,7 @@ export const blueprints = {
   list: () => request<Blueprint[]>('/blueprints'),
   get: (id: string) => request<Blueprint & { resources: BlueprintResource[] }>(`/blueprints/${id}`),
   create: (data: Partial<Blueprint>) => request<Blueprint>('/blueprints', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: string, data: { folder_id?: string | null }) => request<Blueprint>(`/blueprints/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   sync: (id: string) => request<void>(`/blueprints/${id}/sync`, { method: 'POST' }),
   delete: (id: string) => request<void>(`/blueprints/${id}`, { method: 'DELETE' }),
 };
