@@ -422,8 +422,8 @@ export function Landing() {
                 <span className="text-xs font-semibold text-brand uppercase tracking-wider">New</span>
               </div>
               <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-4">
-                Your infrastructure,{' '}
-                <span className="text-gradient-brand">one conversation away</span>
+                <span className="text-gradient-brand text-5xl sm:text-6xl font-extrabold tracking-tighter block mb-2">MCP</span>
+                Your infrastructure, one conversation away
               </h2>
               <p className="text-content-secondary text-lg leading-relaxed mb-8">
                 The RailPush MCP server gives AI agents full control of your platform. Deploy services, scale databases, debug failures, and manage secrets — all through natural language in Claude, ChatGPT, or Cursor.
