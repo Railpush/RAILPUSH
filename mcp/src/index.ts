@@ -118,10 +118,12 @@ server.tool(
 
 server.tool(
   "update_service",
-  "Update a service's configuration. Only provided fields are changed. Use this to change branch, build/start commands, scaling plan, port, and more.",
+  "Update a service's configuration. Only provided fields are changed. Use this to change branch, build/start commands, scaling plan, port, project assignment, and more.",
   {
     service_id: z.string().describe("Service ID"),
     name: z.string().optional().describe("New service name"),
+    project_id: z.string().nullable().optional().describe("Project ID to assign the service to (set to null to unassign)"),
+    environment_id: z.string().nullable().optional().describe("Environment ID within the project (set to null to unassign)"),
     branch: z.string().optional().describe("Git branch"),
     build_command: z.string().optional().describe("Build command"),
     start_command: z.string().optional().describe("Start command"),
@@ -140,7 +142,11 @@ server.tool(
   },
   async ({ service_id, ...updates }) => {
     try {
-      const data = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
+      // Keep null values for project_id/environment_id (they mean "unassign"), but filter out undefined
+      const data: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(updates)) {
+        if (v !== undefined) data[k] = v;
+      }
       return text(await client.updateService(service_id, data));
     }
     catch (e) { return err(e); }
@@ -890,6 +896,64 @@ server.tool(
   { project_id: z.string().describe("Project ID") },
   async ({ project_id }) => {
     try { return text(await client.deleteProject(project_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+// ════════════════════════════════════════════════════════════════════════
+//  PROJECT FOLDERS
+// ════════════════════════════════════════════════════════════════════════
+
+server.tool(
+  "list_project_folders",
+  "List all project folders in the workspace. Folders organize projects into groups and can be nested (subfolders).",
+  { workspace_id: z.string().optional().describe("Workspace ID") },
+  async ({ workspace_id }) => {
+    try { return text(await client.listProjectFolders(workspace_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "create_project_folder",
+  "Create a new project folder. Optionally nest it inside another folder by providing parent_id. Max nesting depth is 3 levels.",
+  {
+    name: z.string().describe("Folder name"),
+    parent_id: z.string().nullable().optional().describe("Parent folder ID to nest this folder inside (null for root)"),
+    workspace_id: z.string().optional().describe("Workspace ID"),
+  },
+  async (args) => {
+    try { return text(await client.createProjectFolder(args as Record<string, unknown>)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "update_project_folder",
+  "Update a project folder's name or move it to a different parent folder.",
+  {
+    folder_id: z.string().describe("Folder ID"),
+    name: z.string().optional().describe("New folder name"),
+    parent_id: z.string().nullable().optional().describe("New parent folder ID (null to move to root)"),
+  },
+  async ({ folder_id, ...updates }) => {
+    try {
+      const data: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(updates)) {
+        if (v !== undefined) data[k] = v;
+      }
+      return text(await client.updateProjectFolder(folder_id, data));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "delete_project_folder",
+  "Delete a project folder. Sub-folders are cascade deleted. Projects in the folder are moved to root (unassigned).",
+  { folder_id: z.string().describe("Folder ID") },
+  async ({ folder_id }) => {
+    try { return text(await client.deleteProjectFolder(folder_id)); }
     catch (e) { return err(e); }
   },
 );

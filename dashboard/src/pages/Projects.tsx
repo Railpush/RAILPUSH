@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronDown, FolderKanban, MoreVertical, Pencil, Plus, Search, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, FolderKanban, MoreVertical, Pencil, Plus, Search, Trash2 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Dropdown } from '../components/ui/Dropdown';
@@ -171,11 +171,22 @@ export function Projects() {
   const [createFolderOpen, setCreateFolderOpen] = useState(false);
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
+  const [newFolderParentId, setNewFolderParentId] = useState<string | null>(null);
   const [renamingFolder, setRenamingFolder] = useState<ProjectFolder | null>(null);
   const [renameFolderName, setRenameFolderName] = useState('');
   const [savingFolderRename, setSavingFolderRename] = useState(false);
   const [deletingFolder, setDeletingFolder] = useState<ProjectFolder | null>(null);
   const [deletingFolderPending, setDeletingFolderPending] = useState(false);
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
+
+  const toggleFolder = (folderId: string) => {
+    setCollapsedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderId)) next.delete(folderId);
+      else next.add(folderId);
+      return next;
+    });
+  };
 
   const [serviceTab, setServiceTab] = useState<ServiceTab>('active');
   const [serviceSearch, setServiceSearch] = useState('');
@@ -289,15 +300,22 @@ export function Projects() {
     }
   };
 
+  const openCreateFolder = (parentId?: string) => {
+    setNewFolderParentId(parentId ?? null);
+    setNewFolderName('');
+    setCreateFolderOpen(true);
+  };
+
   const createFolder = async () => {
     const name = newFolderName.trim();
     if (!name) return;
 
     setCreatingFolder(true);
     try {
-      await projectFoldersApi.create({ name });
+      await projectFoldersApi.create({ name, parent_id: newFolderParentId });
       toast.success('Folder created');
       setNewFolderName('');
+      setNewFolderParentId(null);
       setCreateFolderOpen(false);
       await loadData();
     } catch (err) {
@@ -369,6 +387,12 @@ export function Projects() {
     }
   };
 
+  interface FolderNode {
+    folder: ProjectFolder;
+    cards: ProjectCard[];
+    children: FolderNode[];
+  }
+
   const groupedCards = useMemo(() => {
     const rootCards: ProjectCard[] = [];
     const cardsByFolder = new Map<string, ProjectCard[]>();
@@ -389,22 +413,48 @@ export function Projects() {
       }
     }
 
-    return {
-      rootCards,
-      folderSections: folders.map((folder) => ({
-        folder,
-        cards: cardsByFolder.get(folder.id) || [],
-      })),
-    };
+    // Build tree from flat folder list.
+    const nodeMap = new Map<string, FolderNode>();
+    for (const folder of folders) {
+      nodeMap.set(folder.id, { folder, cards: cardsByFolder.get(folder.id) || [], children: [] });
+    }
+    const rootFolders: FolderNode[] = [];
+    for (const folder of folders) {
+      const node = nodeMap.get(folder.id)!;
+      if (folder.parent_id && nodeMap.has(folder.parent_id)) {
+        nodeMap.get(folder.parent_id)!.children.push(node);
+      } else {
+        rootFolders.push(node);
+      }
+    }
+
+    return { rootCards, folderTree: rootFolders };
   }, [cards, folders]);
 
-  const folderOptions = useMemo(
-    () => [
+  const folderOptions = useMemo(() => {
+    // Build hierarchical labels (e.g. "Parent / Child / Grandchild").
+    const labelMap = new Map<string, string>();
+    const buildLabel = (folder: ProjectFolder): string => {
+      if (labelMap.has(folder.id)) return labelMap.get(folder.id)!;
+      if (folder.parent_id) {
+        const parent = folders.find((f) => f.id === folder.parent_id);
+        if (parent) {
+          const parentLabel = buildLabel(parent);
+          const label = `${parentLabel} / ${folder.name}`;
+          labelMap.set(folder.id, label);
+          return label;
+        }
+      }
+      labelMap.set(folder.id, folder.name);
+      return folder.name;
+    };
+    for (const f of folders) buildLabel(f);
+
+    return [
       { value: ROOT_FOLDER_VALUE, label: 'No folder' },
-      ...folders.map((folder) => ({ value: folder.id, label: folder.name })),
-    ],
-    [folders],
-  );
+      ...folders.map((folder) => ({ value: folder.id, label: labelMap.get(folder.id) || folder.name })),
+    ];
+  }, [folders]);
 
   const renderProjectCard = (card: ProjectCard) => {
     const health = summarizeHealth(card.services);
@@ -468,9 +518,90 @@ export function Projects() {
                 health.tone === 'healthy' ? 'bg-emerald-500' : 'bg-rose-500',
               )}
             />
-          </span>
+                     </span>
         </div>
       </Card>
+    );
+  };
+
+  const renderFolderNode = (node: FolderNode, depth: number): React.ReactNode => {
+    const isCollapsed = collapsedFolders.has(node.folder.id);
+    const hasContent = node.cards.length > 0 || node.children.length > 0;
+    const totalProjects = node.cards.length;
+
+    return (
+      <div key={node.folder.id} className="mb-6" style={{ marginLeft: depth > 0 ? 24 : 0 }}>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => toggleFolder(node.folder.id)}
+              className="p-0.5 rounded text-content-tertiary hover:text-content-primary transition-colors"
+              aria-label={isCollapsed ? 'Expand folder' : 'Collapse folder'}
+            >
+              {isCollapsed
+                ? <ChevronRight className="w-4 h-4" />
+                : <ChevronDown className="w-4 h-4" />
+              }
+            </button>
+            <FolderKanban className="w-4 h-4 text-content-tertiary" />
+            <h3 className="text-base font-semibold text-content-primary">{node.folder.name}</h3>
+            <span className="text-xs text-content-tertiary">
+              {totalProjects} {totalProjects === 1 ? 'project' : 'projects'}
+              {node.children.length > 0 && ` · ${node.children.length} ${node.children.length === 1 ? 'subfolder' : 'subfolders'}`}
+            </span>
+          </div>
+
+          <Dropdown
+            align="right"
+            trigger={
+              <button
+                type="button"
+                className="p-1 rounded text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary"
+                aria-label={`Folder actions for ${node.folder.name}`}
+              >
+                <MoreVertical className="w-4 h-4" />
+              </button>
+            }
+            items={[
+              {
+                label: 'New Subfolder',
+                icon: <Plus className="w-3.5 h-3.5" />,
+                onClick: () => openCreateFolder(node.folder.id),
+              },
+              {
+                label: 'Rename Folder',
+                icon: <Pencil className="w-3.5 h-3.5" />,
+                onClick: () => beginRenameFolder(node.folder),
+              },
+              {
+                label: 'Delete Folder',
+                icon: <Trash2 className="w-3.5 h-3.5" />,
+                onClick: () => setDeletingFolder(node.folder),
+                danger: true,
+              },
+            ]}
+          />
+        </div>
+
+        {!isCollapsed && (
+          <>
+            {node.cards.length > 0 && (
+              <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-4 mb-4">
+                {node.cards.map((card) => renderProjectCard(card))}
+              </div>
+            )}
+
+            {node.children.map((child) => renderFolderNode(child, depth + 1))}
+
+            {!hasContent && (
+              <div className="min-h-[80px] border border-dashed border-border-default/60 rounded-none flex items-center px-5 text-sm text-content-tertiary">
+                No projects in this folder yet
+              </div>
+            )}
+          </>
+        )}
+      </div>
     );
   };
 
@@ -531,7 +662,7 @@ export function Projects() {
           <div className="mb-12">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-2xl font-semibold text-content-primary">Projects</h2>
-              <Button variant="secondary" size="sm" onClick={() => setCreateFolderOpen(true)}>
+              <Button variant="secondary" size="sm" onClick={() => openCreateFolder()}>
                 <Plus className="w-3.5 h-3.5" />
                 New Folder
               </Button>
@@ -549,53 +680,7 @@ export function Projects() {
               </button>
             </div>
 
-            {groupedCards.folderSections.map((section) => (
-              <div key={section.folder.id} className="mb-8">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <FolderKanban className="w-4 h-4 text-content-tertiary" />
-                    <h3 className="text-base font-semibold text-content-primary">{section.folder.name}</h3>
-                    <span className="text-xs text-content-tertiary">{section.cards.length} projects</span>
-                  </div>
-
-                  <Dropdown
-                    align="right"
-                    trigger={
-                      <button
-                        type="button"
-                        className="p-1 rounded text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary"
-                        aria-label={`Folder actions for ${section.folder.name}`}
-                      >
-                        <MoreVertical className="w-4 h-4" />
-                      </button>
-                    }
-                    items={[
-                      {
-                        label: 'Rename Folder',
-                        icon: <Pencil className="w-3.5 h-3.5" />,
-                        onClick: () => beginRenameFolder(section.folder),
-                      },
-                      {
-                        label: 'Delete Folder',
-                        icon: <Trash2 className="w-3.5 h-3.5" />,
-                        onClick: () => setDeletingFolder(section.folder),
-                        danger: true,
-                      },
-                    ]}
-                  />
-                </div>
-
-                <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-4">
-                  {section.cards.length > 0 ? (
-                    section.cards.map((card) => renderProjectCard(card))
-                  ) : (
-                    <div className="min-h-[120px] border border-dashed border-border-default/60 rounded-none flex items-center px-5 text-sm text-content-tertiary">
-                      No projects in this folder yet
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
+            {groupedCards.folderTree.map((node) => renderFolderNode(node, 0))}
           </div>
 
           <div>

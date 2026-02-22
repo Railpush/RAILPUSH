@@ -23,6 +23,8 @@ type ProjectHandler struct {
 
 var errProjectFolderNotFound = errors.New("project folder not found")
 
+const maxFolderDepth = 3 // Root counts as depth 0, so max nesting is 3 levels deep.
+
 func NewProjectHandler(cfg *config.Config, worker *services.Worker, stripe *services.StripeService) *ProjectHandler {
 	return &ProjectHandler{Config: cfg, Worker: worker, Stripe: stripe}
 }
@@ -407,8 +409,9 @@ func (h *ProjectHandler) ListProjectFolders(w http.ResponseWriter, r *http.Reque
 
 func (h *ProjectHandler) CreateProjectFolder(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		WorkspaceID string `json:"workspace_id"`
-		Name        string `json:"name"`
+		WorkspaceID string  `json:"workspace_id"`
+		Name        string  `json:"name"`
+		ParentID    *string `json:"parent_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
@@ -431,14 +434,39 @@ func (h *ProjectHandler) CreateProjectFolder(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	f := &models.ProjectFolder{WorkspaceID: workspaceID, Name: req.Name}
+	// Validate parent folder if provided.
+	var parentID *string
+	if req.ParentID != nil {
+		pid := strings.TrimSpace(*req.ParentID)
+		if pid != "" {
+			parent, err := models.GetProjectFolder(pid)
+			if err != nil || parent == nil || parent.WorkspaceID != workspaceID {
+				utils.RespondError(w, http.StatusBadRequest, "parent folder not found")
+				return
+			}
+			// Check depth limit: parent's depth + 1 for the new child.
+			depth, err := models.FolderDepth(pid)
+			if err != nil {
+				utils.RespondError(w, http.StatusInternalServerError, "failed to check folder depth")
+				return
+			}
+			if depth+1 > maxFolderDepth {
+				utils.RespondError(w, http.StatusBadRequest, "maximum folder nesting depth exceeded")
+				return
+			}
+			parentID = &pid
+		}
+	}
+
+	f := &models.ProjectFolder{WorkspaceID: workspaceID, Name: req.Name, ParentID: parentID}
 	if err := models.CreateProjectFolder(f); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to create folder")
 		return
 	}
 
 	services.Audit(workspaceID, userID, "project_folder.created", "project_folder", f.ID, map[string]interface{}{
-		"name": f.Name,
+		"name":      f.Name,
+		"parent_id": f.ParentID,
 	})
 	utils.RespondJSON(w, http.StatusCreated, f)
 }
@@ -456,39 +484,109 @@ func (h *ProjectHandler) UpdateProjectFolder(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	var req struct {
-		Name *string `json:"name"`
-	}
+	var req map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Name == nil {
-		utils.RespondError(w, http.StatusBadRequest, "name is required")
-		return
+
+	changed := false
+	auditDetails := map[string]interface{}{}
+
+	if rawName, ok := req["name"]; ok {
+		name, ok := rawName.(string)
+		if !ok {
+			utils.RespondError(w, http.StatusBadRequest, "name must be a string")
+			return
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			utils.RespondError(w, http.StatusBadRequest, "name cannot be empty")
+			return
+		}
+		if name != f.Name {
+			auditDetails["old_name"] = f.Name
+			auditDetails["name"] = name
+			f.Name = name
+			changed = true
+		}
 	}
 
-	nextName := strings.TrimSpace(*req.Name)
-	if nextName == "" {
-		utils.RespondError(w, http.StatusBadRequest, "name cannot be empty")
-		return
+	if rawParent, ok := req["parent_id"]; ok {
+		switch v := rawParent.(type) {
+		case nil:
+			if f.ParentID != nil {
+				auditDetails["old_parent_id"] = f.ParentID
+				auditDetails["parent_id"] = nil
+				f.ParentID = nil
+				changed = true
+			}
+		case string:
+			pid := strings.TrimSpace(v)
+			if pid == "" {
+				if f.ParentID != nil {
+					auditDetails["old_parent_id"] = f.ParentID
+					auditDetails["parent_id"] = nil
+					f.ParentID = nil
+					changed = true
+				}
+			} else {
+				// Cannot parent to self.
+				if pid == folderID {
+					utils.RespondError(w, http.StatusBadRequest, "a folder cannot be its own parent")
+					return
+				}
+				// Cannot parent to a descendant (would create a cycle).
+				descendants, err := models.FolderDescendantIDs(folderID)
+				if err != nil {
+					utils.RespondError(w, http.StatusInternalServerError, "failed to validate folder hierarchy")
+					return
+				}
+				for _, did := range descendants {
+					if did == pid {
+						utils.RespondError(w, http.StatusBadRequest, "cannot move folder into one of its own subfolders")
+						return
+					}
+				}
+				parent, err := models.GetProjectFolder(pid)
+				if err != nil || parent == nil || parent.WorkspaceID != f.WorkspaceID {
+					utils.RespondError(w, http.StatusBadRequest, "parent folder not found")
+					return
+				}
+				// Check depth: new parent's depth + 1 + subtree depth of this folder.
+				parentDepth, err := models.FolderDepth(pid)
+				if err != nil {
+					utils.RespondError(w, http.StatusInternalServerError, "failed to check folder depth")
+					return
+				}
+				if parentDepth+1 > maxFolderDepth {
+					utils.RespondError(w, http.StatusBadRequest, "maximum folder nesting depth exceeded")
+					return
+				}
+				if f.ParentID == nil || *f.ParentID != pid {
+					auditDetails["old_parent_id"] = f.ParentID
+					auditDetails["parent_id"] = pid
+					f.ParentID = &pid
+					changed = true
+				}
+			}
+		default:
+			utils.RespondError(w, http.StatusBadRequest, "parent_id must be a string or null")
+			return
+		}
 	}
-	if nextName == f.Name {
+
+	if !changed {
 		utils.RespondJSON(w, http.StatusOK, f)
 		return
 	}
 
-	oldName := f.Name
-	f.Name = nextName
 	if err := models.UpdateProjectFolder(f); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to update folder")
 		return
 	}
 
-	services.Audit(f.WorkspaceID, userID, "project_folder.updated", "project_folder", f.ID, map[string]interface{}{
-		"old_name": oldName,
-		"name":     f.Name,
-	})
+	services.Audit(f.WorkspaceID, userID, "project_folder.updated", "project_folder", f.ID, auditDetails)
 	utils.RespondJSON(w, http.StatusOK, f)
 }
 

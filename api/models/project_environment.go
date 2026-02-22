@@ -19,6 +19,7 @@ type Project struct {
 type ProjectFolder struct {
 	ID          string    `json:"id"`
 	WorkspaceID string    `json:"workspace_id"`
+	ParentID    *string   `json:"parent_id"`
 	Name        string    `json:"name"`
 	CreatedAt   time.Time `json:"created_at"`
 }
@@ -127,27 +128,33 @@ func DeleteProject(id string) error {
 }
 
 func CreateProjectFolder(f *ProjectFolder) error {
+	var parentID interface{}
+	if f.ParentID != nil && strings.TrimSpace(*f.ParentID) != "" {
+		parentID = strings.TrimSpace(*f.ParentID)
+	}
 	return database.DB.QueryRow(
-		"INSERT INTO project_folders (workspace_id, name) VALUES ($1, $2) RETURNING id, created_at",
-		f.WorkspaceID, f.Name,
+		"INSERT INTO project_folders (workspace_id, parent_id, name) VALUES ($1, $2, $3) RETURNING id, created_at",
+		f.WorkspaceID, parentID, f.Name,
 	).Scan(&f.ID, &f.CreatedAt)
 }
 
 func GetProjectFolder(id string) (*ProjectFolder, error) {
 	f := &ProjectFolder{}
+	var parentID string
 	err := database.DB.QueryRow(
-		"SELECT id, workspace_id, name, created_at FROM project_folders WHERE id=$1",
+		"SELECT id, workspace_id, COALESCE(parent_id::text,''), name, created_at FROM project_folders WHERE id=$1",
 		id,
-	).Scan(&f.ID, &f.WorkspaceID, &f.Name, &f.CreatedAt)
+	).Scan(&f.ID, &f.WorkspaceID, &parentID, &f.Name, &f.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
+	f.ParentID = strPtrOrNil(parentID)
 	return f, err
 }
 
 func ListProjectFolders(workspaceID string) ([]ProjectFolder, error) {
 	rows, err := database.DB.Query(
-		"SELECT id, workspace_id, name, created_at FROM project_folders WHERE workspace_id=$1 ORDER BY created_at ASC",
+		"SELECT id, workspace_id, COALESCE(parent_id::text,''), name, created_at FROM project_folders WHERE workspace_id=$1 ORDER BY created_at ASC",
 		workspaceID,
 	)
 	if err != nil {
@@ -158,20 +165,65 @@ func ListProjectFolders(workspaceID string) ([]ProjectFolder, error) {
 	var out []ProjectFolder
 	for rows.Next() {
 		var f ProjectFolder
-		if err := rows.Scan(&f.ID, &f.WorkspaceID, &f.Name, &f.CreatedAt); err != nil {
+		var parentID string
+		if err := rows.Scan(&f.ID, &f.WorkspaceID, &parentID, &f.Name, &f.CreatedAt); err != nil {
 			return nil, err
 		}
+		f.ParentID = strPtrOrNil(parentID)
 		out = append(out, f)
 	}
 	return out, nil
 }
 
 func UpdateProjectFolder(f *ProjectFolder) error {
+	var parentID interface{}
+	if f.ParentID != nil && strings.TrimSpace(*f.ParentID) != "" {
+		parentID = strings.TrimSpace(*f.ParentID)
+	}
 	_, err := database.DB.Exec(
-		"UPDATE project_folders SET name=$1 WHERE id=$2",
-		f.Name, f.ID,
+		"UPDATE project_folders SET name=$1, parent_id=$2 WHERE id=$3",
+		f.Name, parentID, f.ID,
 	)
 	return err
+}
+
+// FolderDepth returns how many ancestors a folder has (0 = root).
+func FolderDepth(id string) (int, error) {
+	var depth int
+	err := database.DB.QueryRow(
+		`WITH RECURSIVE ancestors AS (
+			SELECT id, parent_id, 0 AS depth FROM project_folders WHERE id=$1
+			UNION ALL
+			SELECT pf.id, pf.parent_id, a.depth+1 FROM project_folders pf JOIN ancestors a ON pf.id=a.parent_id
+		) SELECT COALESCE(MAX(depth),0) FROM ancestors`,
+		id,
+	).Scan(&depth)
+	return depth, err
+}
+
+// FolderDescendantIDs returns all descendant folder IDs (for cycle detection).
+func FolderDescendantIDs(id string) ([]string, error) {
+	rows, err := database.DB.Query(
+		`WITH RECURSIVE descendants AS (
+			SELECT id FROM project_folders WHERE parent_id=$1
+			UNION ALL
+			SELECT pf.id FROM project_folders pf JOIN descendants d ON pf.parent_id=d.id
+		) SELECT id FROM descendants`,
+		id,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var sid string
+		if err := rows.Scan(&sid); err != nil {
+			return nil, err
+		}
+		ids = append(ids, sid)
+	}
+	return ids, nil
 }
 
 func DeleteProjectFolder(id string) error {

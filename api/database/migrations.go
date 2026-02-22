@@ -384,4 +384,9 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 	// External access: unique TCP port per database proxied by nginx ingress controller.
 	`ALTER TABLE managed_databases ADD COLUMN IF NOT EXISTS external_port INT`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_databases_external_port ON managed_databases(external_port) WHERE external_port IS NOT NULL`,
+
+	// Nested project folders: a folder can contain sub-folders (self-referencing FK).
+	`ALTER TABLE project_folders ADD COLUMN IF NOT EXISTS parent_id UUID`,
+	`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='project_folders_parent_id_fkey') THEN ALTER TABLE project_folders ADD CONSTRAINT project_folders_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES project_folders(id) ON DELETE CASCADE; END IF; END $$`,
+	`CREATE INDEX IF NOT EXISTS idx_project_folders_parent_id ON project_folders(parent_id)`,
 }

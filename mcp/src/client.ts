@@ -363,6 +363,24 @@ export class RailPushClient {
     return this.request("DELETE", `/projects/${id}`);
   }
 
+  // ── Project Folders ──────────────────────────────────────────────────
+
+  async listProjectFolders(workspaceId?: string) {
+    return this.request("GET", "/project-folders", undefined, workspaceId ? { workspace_id: workspaceId } : undefined);
+  }
+
+  async createProjectFolder(data: Record<string, unknown>) {
+    return this.request("POST", "/project-folders", data);
+  }
+
+  async updateProjectFolder(id: string, data: Record<string, unknown>) {
+    return this.request("PATCH", `/project-folders/${id}`, data);
+  }
+
+  async deleteProjectFolder(id: string) {
+    return this.request("DELETE", `/project-folders/${id}`);
+  }
+
   // ── Environments ────────────────────────────────────────────────────
 
   async listEnvironments(projectId: string) {

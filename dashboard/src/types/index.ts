@@ -41,6 +41,7 @@ export interface Project {
 export interface ProjectFolder {
   id: string;
   workspace_id: string;
+  parent_id: string | null;
   name: string;
   created_at: string;
 }

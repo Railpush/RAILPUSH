@@ -106,9 +106,9 @@ export const projects = {
 export const projectFolders = {
   list: (workspaceId?: string) =>
     request<ProjectFolder[]>(workspaceId ? `/project-folders?workspace_id=${encodeURIComponent(workspaceId)}` : '/project-folders'),
-  create: (data: { workspace_id?: string; name: string }) =>
+  create: (data: { workspace_id?: string; name: string; parent_id?: string | null }) =>
     request<ProjectFolder>('/project-folders', { method: 'POST', body: JSON.stringify(data) }),
-  update: (id: string, data: { name: string }) =>
+  update: (id: string, data: { name?: string; parent_id?: string | null }) =>
     request<ProjectFolder>(`/project-folders/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (id: string) =>
     request<void>(`/project-folders/${id}`, { method: 'DELETE' }),
