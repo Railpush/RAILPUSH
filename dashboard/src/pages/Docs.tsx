@@ -373,11 +373,18 @@ DB_NAME=mydb`} />
               </p>
 
               <h3 className="text-lg font-semibold mb-3">Eviction Policies</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                The eviction policy can be set at creation and updated at any time via the dashboard or API. Changes take effect immediately.
+              </p>
               <div className="grid grid-cols-2 gap-2 mb-6">
                 {[
                   { policy: 'allkeys-lru', desc: 'Evict least recently used keys (default)' },
-                  { policy: 'volatile-lru', desc: 'Evict LRU keys with TTL set' },
+                  { policy: 'allkeys-lfu', desc: 'Evict least frequently used keys' },
                   { policy: 'allkeys-random', desc: 'Evict random keys' },
+                  { policy: 'volatile-lru', desc: 'Evict LRU keys with TTL set' },
+                  { policy: 'volatile-lfu', desc: 'Evict LFU keys with TTL set' },
+                  { policy: 'volatile-random', desc: 'Evict random keys with TTL set' },
+                  { policy: 'volatile-ttl', desc: 'Evict keys with shortest TTL' },
                   { policy: 'noeviction', desc: 'Return error when memory full' },
                 ].map(p => (
                   <div key={p.policy} className="px-3 py-2 rounded-lg border border-border-default bg-surface-secondary/30">
@@ -1160,37 +1167,144 @@ curl https://railpush.com/api/v1/services \\
   -H "Authorization: Bearer YOUR_TOKEN"`} />
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Endpoints</h3>
-              <div className="space-y-2 mb-6">
-                {[
-                  { method: 'GET', path: '/api/v1/services', desc: 'List all services' },
-                  { method: 'POST', path: '/api/v1/services', desc: 'Create a service' },
-                  { method: 'GET', path: '/api/v1/services/:id', desc: 'Get service details' },
-                  { method: 'PATCH', path: '/api/v1/services/:id', desc: 'Update a service' },
-                  { method: 'DELETE', path: '/api/v1/services/:id', desc: 'Delete a service' },
-                  { method: 'POST', path: '/api/v1/services/:id/deploys', desc: 'Trigger a deploy' },
-                  { method: 'GET', path: '/api/v1/services/:id/logs', desc: 'Query service logs' },
-                  { method: 'GET', path: '/api/v1/services/:id/env-vars', desc: 'List env vars' },
-                  { method: 'PUT', path: '/api/v1/services/:id/env-vars', desc: 'Bulk update env vars' },
-                  { method: 'POST', path: '/api/v1/services/:id/custom-domains', desc: 'Add custom domain' },
-                  { method: 'GET', path: '/api/v1/blueprints', desc: 'List blueprints' },
-                  { method: 'POST', path: '/api/v1/blueprints', desc: 'Create a blueprint (auto-syncs)' },
-                  { method: 'POST', path: '/api/v1/blueprints/:id/sync', desc: 'Trigger blueprint sync' },
-                  { method: 'GET', path: '/api/v1/databases', desc: 'List databases' },
-                  { method: 'POST', path: '/api/v1/databases', desc: 'Create a database' },
-                ].map(e => (
-                  <div key={e.method + e.path} className="flex items-center gap-3 px-4 py-2.5 rounded-lg border border-border-default bg-surface-secondary/30">
-                    <code className={`px-2 py-0.5 rounded text-xs font-mono font-bold ${
-                      e.method === 'GET' ? 'bg-status-success/10 text-status-success' :
-                      e.method === 'POST' ? 'bg-brand/10 text-brand' :
-                      e.method === 'PUT' ? 'bg-status-warning/10 text-status-warning' :
-                      e.method === 'PATCH' ? 'bg-status-warning/10 text-status-warning' :
-                      'bg-status-error/10 text-status-error'
-                    }`}>{e.method}</code>
-                    <code className="text-xs font-mono text-content-primary flex-1">{e.path}</code>
-                    <span className="text-xs text-content-secondary hidden sm:block">{e.desc}</span>
+              <p className="text-sm text-content-secondary mb-4">
+                All endpoints are under <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-content-primary text-xs font-mono">/api/v1</code> and require a Bearer token unless noted.
+              </p>
+
+              {[
+                { group: 'Services', endpoints: [
+                  { method: 'GET', path: '/services', desc: 'List all services' },
+                  { method: 'POST', path: '/services', desc: 'Create a service' },
+                  { method: 'GET', path: '/services/:id', desc: 'Get service details' },
+                  { method: 'PATCH', path: '/services/:id', desc: 'Update a service' },
+                  { method: 'DELETE', path: '/services/:id', desc: 'Delete a service' },
+                  { method: 'POST', path: '/services/:id/restart', desc: 'Restart a service' },
+                  { method: 'POST', path: '/services/:id/suspend', desc: 'Suspend a service' },
+                  { method: 'POST', path: '/services/:id/resume', desc: 'Resume a suspended service' },
+                ]},
+                { group: 'Deploys', endpoints: [
+                  { method: 'POST', path: '/services/:id/deploys', desc: 'Trigger a deploy' },
+                  { method: 'GET', path: '/services/:id/deploys', desc: 'List deploys' },
+                  { method: 'GET', path: '/services/:id/deploys/:deployId', desc: 'Get deploy details' },
+                  { method: 'POST', path: '/services/:id/deploys/:deployId/rollback', desc: 'Rollback to a deploy' },
+                ]},
+                { group: 'Env Vars & Domains', endpoints: [
+                  { method: 'GET', path: '/services/:id/env-vars', desc: 'List env vars' },
+                  { method: 'PUT', path: '/services/:id/env-vars', desc: 'Bulk update env vars' },
+                  { method: 'GET', path: '/services/:id/custom-domains', desc: 'List custom domains' },
+                  { method: 'POST', path: '/services/:id/custom-domains', desc: 'Add custom domain' },
+                  { method: 'DELETE', path: '/services/:id/custom-domains/:domain', desc: 'Remove custom domain' },
+                ]},
+                { group: 'Logs & Metrics', endpoints: [
+                  { method: 'GET', path: '/services/:id/logs', desc: 'Query service logs' },
+                  { method: 'GET', path: '/services/:id/metrics', desc: 'Get current resource usage' },
+                  { method: 'GET', path: '/services/:id/metrics/history', desc: 'Get usage history' },
+                ]},
+                { group: 'Autoscaling & Jobs', endpoints: [
+                  { method: 'GET', path: '/services/:id/autoscaling', desc: 'Get autoscaling policy' },
+                  { method: 'PUT', path: '/services/:id/autoscaling', desc: 'Set autoscaling policy' },
+                  { method: 'GET', path: '/services/:id/jobs', desc: 'List one-off jobs' },
+                  { method: 'POST', path: '/services/:id/jobs', desc: 'Run a one-off job' },
+                  { method: 'GET', path: '/jobs/:jobId', desc: 'Get job details' },
+                ]},
+                { group: 'Databases (PostgreSQL)', endpoints: [
+                  { method: 'GET', path: '/databases', desc: 'List databases' },
+                  { method: 'POST', path: '/databases', desc: 'Create a database' },
+                  { method: 'GET', path: '/databases/:id', desc: 'Get database details' },
+                  { method: 'PATCH', path: '/databases/:id', desc: 'Update a database' },
+                  { method: 'DELETE', path: '/databases/:id', desc: 'Delete a database' },
+                  { method: 'GET', path: '/databases/:id/backups', desc: 'List backups' },
+                  { method: 'POST', path: '/databases/:id/backups', desc: 'Trigger a backup' },
+                  { method: 'GET', path: '/databases/:id/replicas', desc: 'List read replicas' },
+                  { method: 'POST', path: '/databases/:id/replicas', desc: 'Create a read replica' },
+                  { method: 'POST', path: '/databases/:id/replicas/:rid/promote', desc: 'Promote replica' },
+                  { method: 'POST', path: '/databases/:id/ha/enable', desc: 'Enable high availability' },
+                ]},
+                { group: 'Key-Value (Redis)', endpoints: [
+                  { method: 'GET', path: '/keyvalue', desc: 'List key-value stores' },
+                  { method: 'POST', path: '/keyvalue', desc: 'Create a key-value store' },
+                  { method: 'GET', path: '/keyvalue/:id', desc: 'Get key-value details' },
+                  { method: 'PATCH', path: '/keyvalue/:id', desc: 'Update plan or eviction policy' },
+                  { method: 'DELETE', path: '/keyvalue/:id', desc: 'Delete a key-value store' },
+                ]},
+                { group: 'Blueprints', endpoints: [
+                  { method: 'GET', path: '/blueprints', desc: 'List blueprints' },
+                  { method: 'POST', path: '/blueprints', desc: 'Create a blueprint (auto-syncs)' },
+                  { method: 'GET', path: '/blueprints/:id', desc: 'Get blueprint details' },
+                  { method: 'DELETE', path: '/blueprints/:id', desc: 'Delete a blueprint' },
+                  { method: 'POST', path: '/blueprints/:id/sync', desc: 'Trigger blueprint sync' },
+                ]},
+                { group: 'Env Groups', endpoints: [
+                  { method: 'GET', path: '/env-groups', desc: 'List env groups' },
+                  { method: 'POST', path: '/env-groups', desc: 'Create an env group' },
+                  { method: 'GET', path: '/env-groups/:id', desc: 'Get env group details' },
+                  { method: 'PATCH', path: '/env-groups/:id', desc: 'Update an env group' },
+                  { method: 'DELETE', path: '/env-groups/:id', desc: 'Delete an env group' },
+                  { method: 'GET', path: '/env-groups/:id/vars', desc: 'List group variables' },
+                  { method: 'PUT', path: '/env-groups/:id/vars', desc: 'Bulk update group variables' },
+                  { method: 'POST', path: '/env-groups/:id/link', desc: 'Link a service' },
+                  { method: 'DELETE', path: '/env-groups/:id/link/:serviceId', desc: 'Unlink a service' },
+                  { method: 'GET', path: '/env-groups/:id/services', desc: 'List linked services' },
+                ]},
+                { group: 'Projects & Environments', endpoints: [
+                  { method: 'GET', path: '/projects', desc: 'List projects' },
+                  { method: 'POST', path: '/projects', desc: 'Create a project' },
+                  { method: 'GET', path: '/projects/:id', desc: 'Get project details' },
+                  { method: 'PATCH', path: '/projects/:id', desc: 'Update a project' },
+                  { method: 'DELETE', path: '/projects/:id', desc: 'Delete a project' },
+                  { method: 'GET', path: '/projects/:id/environments', desc: 'List environments' },
+                  { method: 'POST', path: '/projects/:id/environments', desc: 'Create an environment' },
+                  { method: 'PATCH', path: '/environments/:id', desc: 'Update an environment' },
+                  { method: 'DELETE', path: '/environments/:id', desc: 'Delete an environment' },
+                  { method: 'GET', path: '/project-folders', desc: 'List project folders' },
+                  { method: 'POST', path: '/project-folders', desc: 'Create a project folder' },
+                  { method: 'PATCH', path: '/project-folders/:id', desc: 'Update or move a folder' },
+                  { method: 'DELETE', path: '/project-folders/:id', desc: 'Delete a folder' },
+                ]},
+                { group: 'Registered Domains & DNS', endpoints: [
+                  { method: 'GET', path: '/domains', desc: 'List registered domains' },
+                  { method: 'POST', path: '/domains', desc: 'Register a domain' },
+                  { method: 'GET', path: '/domains/:id', desc: 'Get domain details' },
+                  { method: 'DELETE', path: '/domains/:id', desc: 'Delete a registered domain' },
+                  { method: 'GET', path: '/domains/:id/dns', desc: 'List DNS records' },
+                  { method: 'POST', path: '/domains/:id/dns', desc: 'Create a DNS record' },
+                  { method: 'PUT', path: '/domains/:id/dns/:recordId', desc: 'Update a DNS record' },
+                  { method: 'DELETE', path: '/domains/:id/dns/:recordId', desc: 'Delete a DNS record' },
+                ]},
+                { group: 'Workspace & Billing', endpoints: [
+                  { method: 'GET', path: '/workspaces/:id/members', desc: 'List workspace members' },
+                  { method: 'POST', path: '/workspaces/:id/members', desc: 'Invite a member' },
+                  { method: 'PATCH', path: '/workspaces/:id/members/:userId', desc: 'Update member role' },
+                  { method: 'DELETE', path: '/workspaces/:id/members/:userId', desc: 'Remove a member' },
+                  { method: 'GET', path: '/workspaces/:id/audit-logs', desc: 'List audit logs' },
+                  { method: 'GET', path: '/billing', desc: 'Get billing overview' },
+                ]},
+                { group: 'Support', endpoints: [
+                  { method: 'GET', path: '/support/tickets', desc: 'List support tickets' },
+                  { method: 'POST', path: '/support/tickets', desc: 'Create a ticket' },
+                  { method: 'GET', path: '/support/tickets/:id', desc: 'Get ticket details' },
+                  { method: 'POST', path: '/support/tickets/:id/messages', desc: 'Reply to a ticket' },
+                ]},
+              ].map(section => (
+                <div key={section.group} className="mb-6">
+                  <h4 className="text-sm font-semibold text-content-primary mb-2">{section.group}</h4>
+                  <div className="space-y-1.5">
+                    {section.endpoints.map(e => (
+                      <div key={e.method + e.path} className="flex items-center gap-3 px-4 py-2 rounded-lg border border-border-default bg-surface-secondary/30">
+                        <code className={`px-2 py-0.5 rounded text-xs font-mono font-bold min-w-[52px] text-center ${
+                          e.method === 'GET' ? 'bg-status-success/10 text-status-success' :
+                          e.method === 'POST' ? 'bg-brand/10 text-brand' :
+                          e.method === 'PUT' ? 'bg-status-warning/10 text-status-warning' :
+                          e.method === 'PATCH' ? 'bg-status-warning/10 text-status-warning' :
+                          'bg-status-error/10 text-status-error'
+                        }`}>{e.method}</code>
+                        <code className="text-xs font-mono text-content-primary flex-1">{e.path}</code>
+                        <span className="text-xs text-content-secondary hidden sm:block">{e.desc}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </div>
+              ))}
             </section>
 
             {/* ── MCP Server ─────────────────────────────── */}
@@ -1330,11 +1444,11 @@ npm run build`} />
                       ['Env Groups', 'list, create, get, update, delete, list vars, set vars, link, unlink, list linked services'],
                       ['Metrics', 'get resource usage, get usage history'],
                       ['Projects', 'list, create, get, update, delete'],
-                      ['Environments', 'list, create, get, update, delete'],
+                      ['Environments', 'list, create, update, delete'],
 
-                      ['Project Folders', 'list, create, get, update, delete, move'],
-                      ['Preview Environments', 'list, create, get, delete'],
-                      ['Support Tickets', 'list, create, get, reply, close'],
+                      ['Project Folders', 'list, create, update, delete'],
+                      ['Preview Environments', 'list'],
+                      ['Support Tickets', 'list, create, get, reply'],
                       ['Billing', 'get overview'],
                       ['Registered Domains', 'list, register, get, delete'],
                       ['DNS Records', 'list, create, update, delete'],
