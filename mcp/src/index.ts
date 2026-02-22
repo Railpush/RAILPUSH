@@ -48,6 +48,20 @@ const server = new McpServer({
 });
 
 // ════════════════════════════════════════════════════════════════════════
+//  AUTH / IDENTITY
+// ════════════════════════════════════════════════════════════════════════
+
+server.tool(
+  "whoami",
+  "Get the currently authenticated user's profile — name, email, workspace, and role. Useful for verifying API key validity and checking permissions.",
+  {},
+  async () => {
+    try { return text(await client.getCurrentUser()); }
+    catch (e) { return err(e); }
+  },
+);
+
+// ════════════════════════════════════════════════════════════════════════
 //  SERVICES
 // ════════════════════════════════════════════════════════════════════════
 
@@ -223,6 +237,19 @@ server.tool(
   },
   async ({ service_id, deploy_id }) => {
     try { return text(await client.rollbackDeploy(service_id, deploy_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_deploy_queue_position",
+  "Check a deploy's position in the build queue. Useful when a deploy is queued and you want to know how long until it starts building.",
+  {
+    service_id: z.string().describe("Service ID"),
+    deploy_id: z.string().describe("Deploy ID"),
+  },
+  async ({ service_id, deploy_id }) => {
+    try { return text(await client.getDeployQueuePosition(service_id, deploy_id)); }
     catch (e) { return err(e); }
   },
 );
@@ -462,6 +489,23 @@ server.tool(
   { store_id: z.string().describe("Key-value store ID") },
   async ({ store_id }) => {
     try { return text(await client.getKeyValue(store_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "update_key_value_store",
+  "Update a Redis/key-value store configuration (plan, maxmemory_policy).",
+  {
+    store_id: z.string().describe("Key-value store ID"),
+    plan: z.enum(["free", "starter", "standard", "pro"]).optional().describe("New plan tier"),
+    maxmemory_policy: z.string().optional().describe("Redis maxmemory policy"),
+  },
+  async ({ store_id, ...updates }) => {
+    try {
+      const data = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
+      return text(await client.updateKeyValue(store_id, data));
+    }
     catch (e) { return err(e); }
   },
 );
@@ -774,6 +818,19 @@ server.tool(
   },
 );
 
+server.tool(
+  "get_metrics_history",
+  "Get historical resource usage metrics (CPU, memory) for a service over time. Useful for trend analysis and capacity planning.",
+  {
+    service_id: z.string().describe("Service ID"),
+    period: z.enum(["1h", "6h", "24h", "7d", "30d"]).optional().describe("Time period (default: 24h)"),
+  },
+  async ({ service_id, period }) => {
+    try { return text(await client.getMetricsHistory(service_id, period ? { period } : undefined)); }
+    catch (e) { return err(e); }
+  },
+);
+
 // ════════════════════════════════════════════════════════════════════════
 //  PROJECTS
 // ════════════════════════════════════════════════════════════════════════
@@ -784,6 +841,92 @@ server.tool(
   { workspace_id: z.string().optional().describe("Workspace ID") },
   async ({ workspace_id }) => {
     try { return text(await client.listProjects(workspace_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "create_project",
+  "Create a new project to organize services into a logical group.",
+  {
+    name: z.string().describe("Project name"),
+    workspace_id: z.string().optional().describe("Workspace ID"),
+  },
+  async (args) => {
+    try { return text(await client.createProject(args as Record<string, unknown>)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_project",
+  "Get details of a project, including its services and environments.",
+  { project_id: z.string().describe("Project ID") },
+  async ({ project_id }) => {
+    try { return text(await client.getProject(project_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "update_project",
+  "Update a project's name or configuration.",
+  {
+    project_id: z.string().describe("Project ID"),
+    name: z.string().optional().describe("New project name"),
+  },
+  async ({ project_id, ...updates }) => {
+    try {
+      const data = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
+      return text(await client.updateProject(project_id, data));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "delete_project",
+  "Delete a project. Services within the project are not deleted.",
+  { project_id: z.string().describe("Project ID") },
+  async ({ project_id }) => {
+    try { return text(await client.deleteProject(project_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+// ════════════════════════════════════════════════════════════════════════
+//  ENVIRONMENTS
+// ════════════════════════════════════════════════════════════════════════
+
+server.tool(
+  "list_environments",
+  "List environments (e.g. staging, production) for a project.",
+  { project_id: z.string().describe("Project ID") },
+  async ({ project_id }) => {
+    try { return text(await client.listEnvironments(project_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "create_environment",
+  "Create a new environment within a project (e.g. staging, preview).",
+  {
+    project_id: z.string().describe("Project ID"),
+    name: z.string().describe("Environment name (e.g. staging, production)"),
+  },
+  async ({ project_id, ...data }) => {
+    try { return text(await client.createEnvironment(project_id, data as Record<string, unknown>)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "delete_environment",
+  "Delete an environment from a project.",
+  { environment_id: z.string().describe("Environment ID") },
+  async ({ environment_id }) => {
+    try { return text(await client.deleteEnvironment(environment_id)); }
     catch (e) { return err(e); }
   },
 );
@@ -811,6 +954,239 @@ server.tool(
   },
   async ({ owner, repo }) => {
     try { return text(await client.listGitHubBranches(owner, repo)); }
+    catch (e) { return err(e); }
+  },
+);
+
+// ════════════════════════════════════════════════════════════════════════
+//  SUPPORT TICKETS
+// ════════════════════════════════════════════════════════════════════════
+
+server.tool(
+  "list_support_tickets",
+  "List your support tickets.",
+  {},
+  async () => {
+    try { return text(await client.listSupportTickets()); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "create_support_ticket",
+  "Create a new support ticket to get help from the RailPush team.",
+  {
+    subject: z.string().describe("Ticket subject"),
+    message: z.string().describe("Detailed description of the issue or question"),
+    priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("Ticket priority (default: normal)"),
+  },
+  async ({ subject, message, priority }) => {
+    try { return text(await client.createSupportTicket({ subject, message, priority })); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_support_ticket",
+  "Get details and message history of a support ticket.",
+  { ticket_id: z.string().describe("Ticket ID") },
+  async ({ ticket_id }) => {
+    try { return text(await client.getSupportTicket(ticket_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "reply_to_support_ticket",
+  "Add a reply message to an existing support ticket.",
+  {
+    ticket_id: z.string().describe("Ticket ID"),
+    message: z.string().describe("Reply message"),
+  },
+  async ({ ticket_id, message }) => {
+    try { return text(await client.addSupportTicketMessage(ticket_id, message)); }
+    catch (e) { return err(e); }
+  },
+);
+
+// ════════════════════════════════════════════════════════════════════════
+//  BILLING
+// ════════════════════════════════════════════════════════════════════════
+
+server.tool(
+  "get_billing_overview",
+  "Get billing overview including current plan, usage, credits, and payment method status.",
+  {},
+  async () => {
+    try { return text(await client.getBillingOverview()); }
+    catch (e) { return err(e); }
+  },
+);
+
+// ════════════════════════════════════════════════════════════════════════
+//  REGISTERED DOMAINS
+// ════════════════════════════════════════════════════════════════════════
+
+server.tool(
+  "list_registered_domains",
+  "List all domains registered through RailPush's domain registrar.",
+  {},
+  async () => {
+    try { return text(await client.listRegisteredDomains()); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_registered_domain",
+  "Get details of a registered domain, including expiry, auto-renew status, and nameservers.",
+  { domain_id: z.string().describe("Domain ID") },
+  async ({ domain_id }) => {
+    try { return text(await client.getRegisteredDomain(domain_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "list_dns_records",
+  "List DNS records for a registered domain.",
+  { domain_id: z.string().describe("Domain ID") },
+  async ({ domain_id }) => {
+    try { return text(await client.listDnsRecords(domain_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "create_dns_record",
+  "Create a DNS record for a registered domain.",
+  {
+    domain_id: z.string().describe("Domain ID"),
+    type: z.enum(["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA"]).describe("Record type"),
+    name: z.string().describe("Record name (e.g. @ or subdomain)"),
+    content: z.string().describe("Record content (e.g. IP address, target hostname)"),
+    ttl: z.number().optional().describe("TTL in seconds (default: 3600)"),
+    priority: z.number().optional().describe("Priority (for MX and SRV records)"),
+  },
+  async ({ domain_id, ...record }) => {
+    try { return text(await client.createDnsRecord(domain_id, record as Record<string, unknown>)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "update_dns_record",
+  "Update an existing DNS record for a registered domain.",
+  {
+    domain_id: z.string().describe("Domain ID"),
+    record_id: z.string().describe("DNS Record ID"),
+    type: z.enum(["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA"]).optional().describe("Record type"),
+    name: z.string().optional().describe("Record name"),
+    content: z.string().optional().describe("Record content"),
+    ttl: z.number().optional().describe("TTL in seconds"),
+    priority: z.number().optional().describe("Priority"),
+  },
+  async ({ domain_id, record_id, ...updates }) => {
+    try {
+      const data = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
+      return text(await client.updateDnsRecord(domain_id, record_id, data));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "delete_dns_record",
+  "Delete a DNS record from a registered domain.",
+  {
+    domain_id: z.string().describe("Domain ID"),
+    record_id: z.string().describe("DNS Record ID"),
+  },
+  async ({ domain_id, record_id }) => {
+    try { return text(await client.deleteDnsRecord(domain_id, record_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+// ════════════════════════════════════════════════════════════════════════
+//  WORKSPACE MEMBERS
+// ════════════════════════════════════════════════════════════════════════
+
+server.tool(
+  "list_workspace_members",
+  "List all members of a workspace and their roles.",
+  { workspace_id: z.string().describe("Workspace ID") },
+  async ({ workspace_id }) => {
+    try { return text(await client.listWorkspaceMembers(workspace_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "add_workspace_member",
+  "Invite a new member to a workspace by email.",
+  {
+    workspace_id: z.string().describe("Workspace ID"),
+    email: z.string().describe("Email address of the person to invite"),
+    role: z.enum(["admin", "member", "viewer"]).optional().describe("Role (default: member)"),
+  },
+  async ({ workspace_id, email, role }) => {
+    try { return text(await client.addWorkspaceMember(workspace_id, { email, role })); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "update_workspace_member_role",
+  "Change a workspace member's role.",
+  {
+    workspace_id: z.string().describe("Workspace ID"),
+    user_id: z.string().describe("User ID of the member"),
+    role: z.enum(["admin", "member", "viewer"]).describe("New role"),
+  },
+  async ({ workspace_id, user_id, role }) => {
+    try { return text(await client.updateWorkspaceMemberRole(workspace_id, user_id, { role })); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "remove_workspace_member",
+  "Remove a member from a workspace.",
+  {
+    workspace_id: z.string().describe("Workspace ID"),
+    user_id: z.string().describe("User ID of the member to remove"),
+  },
+  async ({ workspace_id, user_id }) => {
+    try { return text(await client.removeWorkspaceMember(workspace_id, user_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+// ════════════════════════════════════════════════════════════════════════
+//  AUDIT LOGS
+// ════════════════════════════════════════════════════════════════════════
+
+server.tool(
+  "list_audit_logs",
+  "List audit logs for a workspace. Shows who did what and when — service creates, deploys, config changes, member adds, etc.",
+  { workspace_id: z.string().describe("Workspace ID") },
+  async ({ workspace_id }) => {
+    try { return text(await client.listAuditLogs(workspace_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+// ════════════════════════════════════════════════════════════════════════
+//  PREVIEW ENVIRONMENTS
+// ════════════════════════════════════════════════════════════════════════
+
+server.tool(
+  "list_preview_environments",
+  "List all preview environments — ephemeral environments created from pull requests.",
+  {},
+  async () => {
+    try { return text(await client.listPreviewEnvironments()); }
     catch (e) { return err(e); }
   },
 );

@@ -64,10 +64,17 @@ export class RailPushClient {
       throw new RailPushAPIError(res.status, text);
     }
     if (!text) return {};
+
+    // Detect HTML responses (SPA fallback / routing miss) and surface them as errors
+    const contentType = res.headers.get("content-type") ?? "";
+    if (contentType.includes("text/html") || text.trimStart().startsWith("<!doctype") || text.trimStart().startsWith("<!DOCTYPE") || text.trimStart().startsWith("<html")) {
+      throw new RailPushAPIError(res.status, `Expected JSON but received HTML — the API endpoint ${method} ${url} is likely not registered. Check the server route configuration.`);
+    }
+
     try {
       return JSON.parse(text);
     } catch {
-      return { raw: text };
+      throw new RailPushAPIError(res.status, `Expected JSON but could not parse response: ${text.slice(0, 200)}`);
     }
   }
 
@@ -194,25 +201,29 @@ export class RailPushClient {
   }
 
   async enableHA(dbId: string) {
-    return this.request("POST", `/databases/${dbId}/ha`);
+    return this.request("POST", `/databases/${dbId}/ha/enable`);
   }
 
   // ── Key-Value (Redis) ────────────────────────────────────────────────
 
   async listKeyValues(workspaceId?: string) {
-    return this.request("GET", "/key-value", undefined, workspaceId ? { workspace_id: workspaceId } : undefined);
+    return this.request("GET", "/keyvalue", undefined, workspaceId ? { workspace_id: workspaceId } : undefined);
   }
 
   async createKeyValue(data: Record<string, unknown>) {
-    return this.request("POST", "/key-value", data);
+    return this.request("POST", "/keyvalue", data);
   }
 
   async getKeyValue(id: string) {
-    return this.request("GET", `/key-value/${id}`);
+    return this.request("GET", `/keyvalue/${id}`);
+  }
+
+  async updateKeyValue(id: string, data: Record<string, unknown>) {
+    return this.request("PATCH", `/keyvalue/${id}`, data);
   }
 
   async deleteKeyValue(id: string) {
-    return this.request("DELETE", `/key-value/${id}`);
+    return this.request("DELETE", `/keyvalue/${id}`);
   }
 
   // ── Logs ─────────────────────────────────────────────────────────────
@@ -231,7 +242,7 @@ export class RailPushClient {
   }
 
   async getAIFixStatus(serviceId: string) {
-    return this.request("GET", `/services/${serviceId}/ai-fix`);
+    return this.request("GET", `/services/${serviceId}/ai-fix/status`);
   }
 
   // ── One-Off Jobs ─────────────────────────────────────────────────────
@@ -295,7 +306,7 @@ export class RailPushClient {
   }
 
   async updateEnvGroup(id: string, data: { name: string }) {
-    return this.request("PUT", `/env-groups/${id}`, data);
+    return this.request("PATCH", `/env-groups/${id}`, data);
   }
 
   async deleteEnvGroup(id: string) {
@@ -311,15 +322,15 @@ export class RailPushClient {
   }
 
   async linkServiceToEnvGroup(groupId: string, serviceId: string) {
-    return this.request("POST", `/env-groups/${groupId}/links`, { service_id: serviceId });
+    return this.request("POST", `/env-groups/${groupId}/link`, { service_id: serviceId });
   }
 
   async unlinkServiceFromEnvGroup(groupId: string, serviceId: string) {
-    return this.request("DELETE", `/env-groups/${groupId}/links/${serviceId}`);
+    return this.request("DELETE", `/env-groups/${groupId}/link/${serviceId}`);
   }
 
   async listEnvGroupLinkedServices(groupId: string) {
-    return this.request("GET", `/env-groups/${groupId}/links`);
+    return this.request("GET", `/env-groups/${groupId}/services`);
   }
 
   // ── Metrics ──────────────────────────────────────────────────────────
@@ -332,6 +343,142 @@ export class RailPushClient {
 
   async listProjects(workspaceId?: string) {
     return this.request("GET", "/projects", undefined, workspaceId ? { workspace_id: workspaceId } : undefined);
+  }
+
+  // ── Projects ──────────────────────────────────────────────────────────
+
+  async createProject(data: Record<string, unknown>) {
+    return this.request("POST", "/projects", data);
+  }
+
+  async getProject(id: string) {
+    return this.request("GET", `/projects/${id}`);
+  }
+
+  async updateProject(id: string, data: Record<string, unknown>) {
+    return this.request("PATCH", `/projects/${id}`, data);
+  }
+
+  async deleteProject(id: string) {
+    return this.request("DELETE", `/projects/${id}`);
+  }
+
+  // ── Environments ────────────────────────────────────────────────────
+
+  async listEnvironments(projectId: string) {
+    return this.request("GET", `/projects/${projectId}/environments`);
+  }
+
+  async createEnvironment(projectId: string, data: Record<string, unknown>) {
+    return this.request("POST", `/projects/${projectId}/environments`, data);
+  }
+
+  async updateEnvironment(envId: string, data: Record<string, unknown>) {
+    return this.request("PATCH", `/environments/${envId}`, data);
+  }
+
+  async deleteEnvironment(envId: string) {
+    return this.request("DELETE", `/environments/${envId}`);
+  }
+
+  // ── Metrics History ─────────────────────────────────────────────────
+
+  async getMetricsHistory(serviceId: string, opts?: { period?: string }) {
+    const query: Record<string, string> = {};
+    if (opts?.period) query.period = opts.period;
+    return this.request("GET", `/services/${serviceId}/metrics/history`, undefined, query);
+  }
+
+  // ── Support Tickets ─────────────────────────────────────────────────
+
+  async listSupportTickets() {
+    return this.request("GET", "/support/tickets");
+  }
+
+  async createSupportTicket(data: { subject: string; message: string; priority?: string }) {
+    return this.request("POST", "/support/tickets", data);
+  }
+
+  async getSupportTicket(id: string) {
+    return this.request("GET", `/support/tickets/${id}`);
+  }
+
+  async addSupportTicketMessage(ticketId: string, message: string) {
+    return this.request("POST", `/support/tickets/${ticketId}/messages`, { message });
+  }
+
+  // ── Billing ─────────────────────────────────────────────────────────
+
+  async getBillingOverview() {
+    return this.request("GET", "/billing");
+  }
+
+  // ── Registered Domains ──────────────────────────────────────────────
+
+  async listRegisteredDomains() {
+    return this.request("GET", "/domains");
+  }
+
+  async registerDomain(data: Record<string, unknown>) {
+    return this.request("POST", "/domains", data);
+  }
+
+  async getRegisteredDomain(id: string) {
+    return this.request("GET", `/domains/${id}`);
+  }
+
+  async deleteRegisteredDomain(id: string) {
+    return this.request("DELETE", `/domains/${id}`);
+  }
+
+  async listDnsRecords(domainId: string) {
+    return this.request("GET", `/domains/${domainId}/dns`);
+  }
+
+  async createDnsRecord(domainId: string, data: Record<string, unknown>) {
+    return this.request("POST", `/domains/${domainId}/dns`, data);
+  }
+
+  async updateDnsRecord(domainId: string, recordId: string, data: Record<string, unknown>) {
+    return this.request("PUT", `/domains/${domainId}/dns/${recordId}`, data);
+  }
+
+  async deleteDnsRecord(domainId: string, recordId: string) {
+    return this.request("DELETE", `/domains/${domainId}/dns/${recordId}`);
+  }
+
+  // ── Auth / User ─────────────────────────────────────────────────────
+
+  async getCurrentUser() {
+    return this.request("GET", "/auth/user");
+  }
+
+  // ── Workspaces ──────────────────────────────────────────────────────
+
+  async listWorkspaceMembers(workspaceId: string) {
+    return this.request("GET", `/workspaces/${workspaceId}/members`);
+  }
+
+  async addWorkspaceMember(workspaceId: string, data: { email: string; role?: string }) {
+    return this.request("POST", `/workspaces/${workspaceId}/members`, data);
+  }
+
+  async updateWorkspaceMemberRole(workspaceId: string, userId: string, data: { role: string }) {
+    return this.request("PATCH", `/workspaces/${workspaceId}/members/${userId}`, data);
+  }
+
+  async removeWorkspaceMember(workspaceId: string, userId: string) {
+    return this.request("DELETE", `/workspaces/${workspaceId}/members/${userId}`);
+  }
+
+  async listAuditLogs(workspaceId: string) {
+    return this.request("GET", `/workspaces/${workspaceId}/audit-logs`);
+  }
+
+  // ── Preview Environments ────────────────────────────────────────────
+
+  async listPreviewEnvironments() {
+    return this.request("GET", "/preview-environments");
   }
 
   // ── GitHub ───────────────────────────────────────────────────────────
