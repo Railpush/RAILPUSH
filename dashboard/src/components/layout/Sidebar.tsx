@@ -19,14 +19,15 @@ interface SidebarItem {
   path: string;
   active?: boolean;
   tone?: 'default' | 'ops';
+  onClick?: () => void;
 }
 
-function NavItem({ icon, label, path, active, collapsed, tone = 'default' }: SidebarItem & { active: boolean; collapsed?: boolean }) {
+function NavItem({ icon, label, path, active, collapsed, tone = 'default', onClick }: SidebarItem & { active: boolean; collapsed?: boolean }) {
   const navigate = useNavigate();
   const isOpsTone = tone === 'ops';
   return (
     <button
-      onClick={() => navigate(path)}
+      onClick={onClick ?? (() => navigate(path))}
       title={collapsed ? label : undefined}
       className={cn(
         'w-full flex items-center gap-3 rounded-lg text-[13px] transition-all duration-200 cursor-pointer border relative overflow-hidden group',
@@ -110,6 +111,8 @@ export function Sidebar() {
     'app-sidebar h-screen fixed left-0 top-0 bg-surface-secondary border-r border-border-default flex flex-col overflow-y-auto z-40 transition-all duration-300 ease-[cubic-bezier(0.2,0,0,1)]'
   );
 
+  const navigate = useNavigate();
+
   // Service detail sidebar
   if (serviceId) {
     const base = `/services/${serviceId}`;
@@ -128,7 +131,7 @@ export function Sidebar() {
         </div>
 
         <div className="p-3">
-          <NavItem icon={<ArrowLeft className="w-4 h-4" />} label="Back to Dashboard" path="/" active={false} collapsed={collapsed} />
+          <NavItem icon={<ArrowLeft className="w-4 h-4" />} label="Back" path="/" active={false} collapsed={collapsed} onClick={() => navigate(-1)} />
         </div>
 
         {!collapsed && (
@@ -175,7 +178,7 @@ export function Sidebar() {
         </div>
 
         <div className="p-3">
-          <NavItem icon={<ArrowLeft className="w-4 h-4" />} label="Back to Dashboard" path="/" active={false} collapsed={collapsed} />
+          <NavItem icon={<ArrowLeft className="w-4 h-4" />} label="Back" path="/" active={false} collapsed={collapsed} onClick={() => navigate(-1)} />
         </div>
 
         {!collapsed && (
