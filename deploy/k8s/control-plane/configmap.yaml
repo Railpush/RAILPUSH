@@ -32,7 +32,7 @@ data:
   DB_PORT: "5432"
   DB_NAME: "railpush"
   DB_USER: "railpush"
-  DB_SSLMODE: "disable"
+  DB_SSLMODE: "prefer"
 
   # Persist RailPush state (certs/backups/builds).
   DATA_DIR: "/var/lib/railpush"

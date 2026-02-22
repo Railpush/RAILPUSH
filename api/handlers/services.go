@@ -503,10 +503,12 @@ func (h *ServiceHandler) DeleteService(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r)
 	id := mux.Vars(r)["id"]
 	svc, err := models.GetService(id)
-	if err != nil || svc == nil {
-		// Still try to delete from DB even if service not found in model
-		models.DeleteService(id)
-		utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to look up service")
+		return
+	}
+	if svc == nil {
+		utils.RespondError(w, http.StatusNotFound, "service not found")
 		return
 	}
 	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleDeveloper) {

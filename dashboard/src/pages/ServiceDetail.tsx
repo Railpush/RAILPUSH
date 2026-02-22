@@ -11,6 +11,8 @@ import { buildDefaultServiceUrl } from '../lib/serviceUrl';
 import { services as servicesApi, deploys as deploysApi } from '../lib/api';
 import type { Service, Deploy } from '../types';
 
+interface QuickMetrics { cpu_percent: string; memory_used: string; memory_percent: string }
+
 function CopyUrlButton({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -31,6 +33,7 @@ export function ServiceDetail() {
   const [deployList, setDeployList] = useState<Deploy[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<QuickMetrics | null>(null);
 
   const refresh = () => {
     if (!serviceId) return;
@@ -42,6 +45,11 @@ export function ServiceDetail() {
       setDeployList(d);
       setLoading(false);
     });
+    // Fetch real metrics (best-effort)
+    fetch(`/api/v1/services/${serviceId}/metrics`, { credentials: 'include' })
+      .then(r => r.ok ? r.json() : null)
+      .then(m => { if (m) setMetrics(m); })
+      .catch(() => {});
   };
 
   useEffect(() => { refresh(); }, [serviceId]);
@@ -156,15 +164,15 @@ export function ServiceDetail() {
           <div className="grid grid-cols-3 gap-4">
             <Card className="glass-panel p-4 flex flex-col items-center justify-center text-center space-y-1 hover:border-border-hover transition-colors">
               <span className="text-xs uppercase tracking-wider text-content-tertiary">CPU Usage</span>
-              <span className="text-xl font-bold text-content-primary">0.02%</span>
+              <span className="text-xl font-bold text-content-primary">{metrics?.cpu_percent ?? '—'}</span>
             </Card>
             <Card className="glass-panel p-4 flex flex-col items-center justify-center text-center space-y-1 hover:border-border-hover transition-colors">
               <span className="text-xs uppercase tracking-wider text-content-tertiary">Memory</span>
-              <span className="text-xl font-bold text-content-primary">45 MB</span>
+              <span className="text-xl font-bold text-content-primary">{metrics?.memory_used ?? '—'}</span>
             </Card>
             <Card className="glass-panel p-4 flex flex-col items-center justify-center text-center space-y-1 hover:border-border-hover transition-colors">
-              <span className="text-xs uppercase tracking-wider text-content-tertiary">Uptime</span>
-              <span className="text-xl font-bold text-content-primary">99.9%</span>
+              <span className="text-xs uppercase tracking-wider text-content-tertiary">Memory %</span>
+              <span className="text-xl font-bold text-content-primary">{metrics?.memory_percent ?? '—'}</span>
             </Card>
           </div>
 

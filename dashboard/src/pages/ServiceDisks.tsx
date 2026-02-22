@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, HardDrive } from 'lucide-react';
+import { HardDrive } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
@@ -29,18 +29,14 @@ export function ServiceDisks() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-semibold text-content-primary">Disks</h1>
-        <Button size="sm" onClick={() => setShowAdd(true)}>
-          <Plus className="w-4 h-4" />
-          Add Disk
-        </Button>
+        <span className="text-xs font-medium text-amber-500 bg-amber-500/10 px-2.5 py-1 rounded-full">Coming Soon</span>
       </div>
 
       {disks.length === 0 ? (
         <EmptyState
           icon={<HardDrive className="w-6 h-6" />}
-          title="No persistent disks"
-          description="Attach a persistent disk to store data that persists across deploys."
-          action={{ label: 'Add Disk', onClick: () => setShowAdd(true) }}
+          title="Persistent disks coming soon"
+          description="Persistent disk support is under development. This feature will let you attach durable storage that persists across deploys."
         />
       ) : (
         <div className="space-y-3">

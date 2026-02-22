@@ -413,7 +413,7 @@ export function Projects() {
       }
     }
 
-    // Build tree from flat folder list.
+    // Build tree from flat folder list with cycle detection.
     const nodeMap = new Map<string, FolderNode>();
     for (const folder of folders) {
       nodeMap.set(folder.id, { folder, cards: cardsByFolder.get(folder.id) || [], children: [] });
@@ -422,7 +422,20 @@ export function Projects() {
     for (const folder of folders) {
       const node = nodeMap.get(folder.id)!;
       if (folder.parent_id && nodeMap.has(folder.parent_id)) {
-        nodeMap.get(folder.parent_id)!.children.push(node);
+        // Cycle detection: walk the ancestor chain and ensure this folder's id doesn't appear.
+        let isCycle = false;
+        let cur: string | undefined | null = folder.parent_id;
+        const visited = new Set<string>();
+        while (cur && nodeMap.has(cur)) {
+          if (cur === folder.id || visited.has(cur)) { isCycle = true; break; }
+          visited.add(cur);
+          cur = nodeMap.get(cur)!.folder.parent_id ?? null;
+        }
+        if (!isCycle) {
+          nodeMap.get(folder.parent_id)!.children.push(node);
+        } else {
+          rootFolders.push(node);
+        }
       } else {
         rootFolders.push(node);
       }
@@ -432,14 +445,16 @@ export function Projects() {
   }, [cards, folders]);
 
   const folderOptions = useMemo(() => {
-    // Build hierarchical labels (e.g. "Parent / Child / Grandchild").
+    // Build hierarchical labels (e.g. "Parent / Child / Grandchild") with cycle protection.
     const labelMap = new Map<string, string>();
-    const buildLabel = (folder: ProjectFolder): string => {
+    const buildLabel = (folder: ProjectFolder, ancestors?: Set<string>): string => {
       if (labelMap.has(folder.id)) return labelMap.get(folder.id)!;
-      if (folder.parent_id) {
+      const chain = ancestors ?? new Set<string>();
+      if (folder.parent_id && !chain.has(folder.parent_id)) {
         const parent = folders.find((f) => f.id === folder.parent_id);
         if (parent) {
-          const parentLabel = buildLabel(parent);
+          chain.add(folder.id);
+          const parentLabel = buildLabel(parent, chain);
           const label = `${parentLabel} / ${folder.name}`;
           labelMap.set(folder.id, label);
           return label;
@@ -515,7 +530,10 @@ export function Projects() {
             <span
               className={cn(
                 'h-2.5 w-2.5 rounded-full border border-white/40 shadow-[0_0_0_4px_rgba(255,255,255,0.18)]',
-                health.tone === 'healthy' ? 'bg-emerald-500' : 'bg-rose-500',
+                health.tone === 'healthy' && 'bg-emerald-500',
+                health.tone === 'partial' && 'bg-amber-500',
+                health.tone === 'down' && 'bg-rose-500',
+                health.tone === 'empty' && 'bg-gray-400',
               )}
             />
                      </span>
@@ -524,7 +542,9 @@ export function Projects() {
     );
   };
 
+  const MAX_FOLDER_DEPTH = 10;
   const renderFolderNode = (node: FolderNode, depth: number): React.ReactNode => {
+    if (depth > MAX_FOLDER_DEPTH) return null; // Safety limit to prevent stack overflow
     const isCollapsed = collapsedFolders.has(node.folder.id);
     const hasContent = node.cards.length > 0 || node.children.length > 0;
     const totalProjects = node.cards.length;

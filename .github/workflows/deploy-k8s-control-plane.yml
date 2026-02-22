@@ -12,7 +12,7 @@ on:
 
 concurrency:
   group: k8s-control-plane-deploy
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -108,13 +108,32 @@ jobs:
           \${SUDO} docker push "\${IMAGE_DEV}"
 
           kctl apply -k "${KUSTOMIZE_PATH}"
+
+          # Roll out control-plane first, then worker (sequential to detect failures early).
           kctl -n railpush set image deploy/railpush-control-plane control-plane="\${IMAGE_SHA}"
+          if ! kctl -n railpush rollout status deploy/railpush-control-plane --timeout=10m; then
+            echo "Control-plane rollout failed — rolling back both deployments"
+            kctl -n railpush rollout undo deploy/railpush-control-plane
+            kctl -n railpush rollout undo deploy/railpush-worker 2>/dev/null || true
+            exit 1
+          fi
+
           kctl -n railpush set image deploy/railpush-worker worker="\${IMAGE_SHA}"
-          kctl -n railpush rollout status deploy/railpush-control-plane --timeout=10m
-          kctl -n railpush rollout status deploy/railpush-worker --timeout=10m
+          if ! kctl -n railpush rollout status deploy/railpush-worker --timeout=10m; then
+            echo "Worker rollout failed — rolling back both deployments"
+            kctl -n railpush rollout undo deploy/railpush-worker
+            kctl -n railpush rollout undo deploy/railpush-control-plane
+            exit 1
+          fi
+
           kctl -n railpush get deploy railpush-control-plane railpush-worker
 
-          curl -fsS --max-time 20 https://apps.railpush.com/healthz >/dev/null
+          if ! curl -fsS --max-time 20 https://apps.railpush.com/healthz >/dev/null; then
+            echo "Health check failed — rolling back"
+            kctl -n railpush rollout undo deploy/railpush-control-plane
+            kctl -n railpush rollout undo deploy/railpush-worker
+            exit 1
+          fi
           curl -fsS --max-time 20 https://apps.railpush.com/readyz >/dev/null
           SSH
 

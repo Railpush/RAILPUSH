@@ -375,7 +375,7 @@ server.tool(
   "Update a database configuration (currently supports plan changes).",
   {
     database_id: z.string().describe("Database ID"),
-    plan: z.string().describe("New plan tier"),
+    plan: z.enum(["free", "starter", "standard", "pro"]).describe("New plan tier"),
   },
   async ({ database_id, plan }) => {
     try { return text(await client.updateDatabase(database_id, { plan })); }
@@ -738,6 +738,19 @@ server.tool(
 );
 
 server.tool(
+  "update_env_group",
+  "Update an environment variable group (e.g. rename it).",
+  {
+    group_id: z.string().describe("Env group ID"),
+    name: z.string().describe("New name for the env group"),
+  },
+  async ({ group_id, name }) => {
+    try { return text(await client.updateEnvGroup(group_id, { name })); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
   "delete_env_group",
   "Delete an environment variable group.",
   { group_id: z.string().describe("Env group ID") },
@@ -986,6 +999,19 @@ server.tool(
 );
 
 server.tool(
+  "update_environment",
+  "Update an environment's properties (e.g. rename it).",
+  {
+    environment_id: z.string().describe("Environment ID"),
+    name: z.string().optional().describe("New name for the environment"),
+  },
+  async ({ environment_id, ...data }) => {
+    try { return text(await client.updateEnvironment(environment_id, data as Record<string, unknown>)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
   "delete_environment",
   "Delete an environment from a project.",
   { environment_id: z.string().describe("Environment ID") },
@@ -1107,6 +1133,28 @@ server.tool(
   { domain_id: z.string().describe("Domain ID") },
   async ({ domain_id }) => {
     try { return text(await client.getRegisteredDomain(domain_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "register_domain",
+  "Register a new domain through RailPush's domain registrar.",
+  {
+    name: z.string().describe("Domain name to register (e.g. example.com)"),
+  },
+  async ({ name }) => {
+    try { return text(await client.registerDomain({ name })); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "delete_registered_domain",
+  "Remove a registered domain from your account.",
+  { domain_id: z.string().describe("Domain ID") },
+  async ({ domain_id }) => {
+    try { return text(await client.deleteRegisteredDomain(domain_id)); }
     catch (e) { return err(e); }
   },
 );

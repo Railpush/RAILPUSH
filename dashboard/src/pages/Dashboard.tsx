@@ -405,7 +405,7 @@ export function Dashboard({ scope = 'all' }: DashboardProps) {
                                 <div>
                                   <div className="font-semibold text-content-primary group-hover:text-brand transition-colors">{service.name}</div>
                                   <div className="text-xs text-content-tertiary flex items-center gap-1.5 mt-0.5">
-                                    <span className="font-mono opacity-80">main</span>
+                                    <span className="font-mono opacity-80">{service.branch || 'main'}</span>
                                   </div>
                                 </div>
                               </div>

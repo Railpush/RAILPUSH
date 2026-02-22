@@ -122,7 +122,9 @@ func main() {
 	r.PathPrefix("/").HandlerFunc(spaHandler)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-	srv := &http.Server{Addr: addr, Handler: r, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second}
+	// WriteTimeout is 0 (no timeout) because WebSocket connections are long-lived.
+	// Individual HTTP handlers rely on context/request timeouts instead.
+	srv := &http.Server{Addr: addr, Handler: r, ReadTimeout: 15 * time.Second, WriteTimeout: 0}
 
 	go func() {
 		log.Printf("RailPush API listening on %s", addr)

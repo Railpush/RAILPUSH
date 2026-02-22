@@ -12,7 +12,7 @@ on:
 
 concurrency:
   group: production-deploy
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -67,6 +67,10 @@ jobs:
           PORT="${DEPLOY_PORT:-22}"
           RSYNC_SSH="ssh -p ${PORT}"
 
+          # Ensure target directories exist on the server before rsync --delete
+          ssh -p "${PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "mkdir -p /opt/railpush/railpush-api /opt/railpush/dashboard"
+
           rsync -az --delete \
             --exclude '.git' \
             --exclude '.github' \
@@ -117,7 +121,10 @@ jobs:
             go mod download
             go build -o "${NEW_BIN}" .
           elif command -v docker >/dev/null 2>&1; then
-            docker run --rm -v /opt/railpush/railpush-api:/src -w /src golang:1.22 \
+            docker run --rm \
+              -v /opt/railpush/railpush-api:/src \
+              -v /opt/railpush:/opt/railpush \
+              -w /src golang:1.24-alpine \
               sh -lc "go mod download && go build -o ${NEW_BIN} ."
           else
             echo "No Go compiler found on server."
@@ -131,8 +138,8 @@ jobs:
 
           HEALTH_OK=0
           for i in $(seq 1 20); do
-            CODE="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/v1/auth/user || true)"
-            if [ "${CODE}" != "000" ] && [ "${CODE}" -lt 500 ]; then
+            CODE="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/healthz || true)"
+            if [ "${CODE}" = "200" ]; then
               HEALTH_OK=1
               break
             fi

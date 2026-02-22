@@ -1,7 +1,7 @@
 FROM alpine:3.20
 
 # Keep kubectl close to the cluster version to avoid API incompatibilities.
-ARG KUBECTL_VERSION=v1.34.3
+ARG KUBECTL_VERSION=v1.32.3
 
 RUN apk add --no-cache ca-certificates curl zstd coreutils
 
