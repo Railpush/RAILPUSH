@@ -53,6 +53,48 @@ func BulkUpsertEnvVars(ownerType, ownerID string, vars []EnvVar) error {
 	return tx.Commit()
 }
 
+// MergeUpsertEnvVars inserts or updates the provided vars without removing
+// existing vars whose keys are not in the input.  This is the additive
+// counterpart to BulkUpsertEnvVars (which replaces everything).
+func MergeUpsertEnvVars(ownerType, ownerID string, vars []EnvVar) error {
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return err
+	}
+	for _, v := range vars {
+		if _, err := tx.Exec(`
+			INSERT INTO env_vars (owner_type, owner_id, key, encrypted_value, is_secret)
+			VALUES ($1,$2,$3,$4,$5)
+			ON CONFLICT (owner_type, owner_id, key)
+			DO UPDATE SET encrypted_value = EXCLUDED.encrypted_value,
+			             is_secret       = EXCLUDED.is_secret`,
+			ownerType, ownerID, v.Key, v.EncryptedValue, v.IsSecret); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// DeleteEnvVarsByKeys removes only the specified keys for the given owner.
+func DeleteEnvVarsByKeys(ownerType, ownerID string, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
+		if _, err := tx.Exec("DELETE FROM env_vars WHERE owner_type=$1 AND owner_id=$2 AND key=$3",
+			ownerType, ownerID, k); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func DeleteEnvVars(ownerType, ownerID string) error {
 	_, err := database.DB.Exec("DELETE FROM env_vars WHERE owner_type=$1 AND owner_id=$2", ownerType, ownerID)
 	return err

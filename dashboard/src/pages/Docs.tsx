@@ -805,6 +805,28 @@ envVarGroups:
                 </div>
               </div>
 
+              <h3 className="text-lg font-semibold mb-3">API: Replace vs Upsert</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                Two methods are available for updating env vars via the API:
+              </p>
+              <div className="space-y-3 mb-6">
+                <div className="rounded-lg border border-border-primary bg-surface-secondary p-4">
+                  <code className="text-xs font-mono text-brand">PUT /services/:id/env-vars</code>
+                  <span className="text-xs text-content-tertiary ml-2">&mdash; Full replace. Existing vars not in the payload are <strong>deleted</strong>.</span>
+                </div>
+                <div className="rounded-lg border border-border-primary bg-surface-secondary p-4">
+                  <code className="text-xs font-mono text-brand">PATCH /services/:id/env-vars</code>
+                  <span className="text-xs text-content-tertiary ml-2">&mdash; Additive upsert. Only the provided keys are created/updated. Missing keys are left untouched. Optionally pass <code className="text-xs bg-surface-tertiary px-1 rounded">"delete": ["KEY"]</code> to remove specific keys.</span>
+                </div>
+              </div>
+              <CodeBlock filename="PATCH body" code={`{
+  "env_vars": [
+    { "key": "NEW_VAR", "value": "hello" },
+    { "key": "EXISTING_VAR", "value": "updated" }
+  ],
+  "delete": ["OLD_UNUSED_VAR"]
+}`} />
+
               <h3 className="text-lg font-semibold mb-3">Env Groups</h3>
               <p className="text-sm text-content-secondary mb-4">
                 Env groups let you share configuration across multiple services. Define them in your blueprint or create them in the dashboard. When a group is updated, all linked services receive the changes.
@@ -1190,7 +1212,8 @@ curl https://railpush.com/api/v1/services \\
                 ]},
                 { group: 'Env Vars & Domains', endpoints: [
                   { method: 'GET', path: '/services/:id/env-vars', desc: 'List env vars' },
-                  { method: 'PUT', path: '/services/:id/env-vars', desc: 'Bulk update env vars' },
+                  { method: 'PUT', path: '/services/:id/env-vars', desc: 'Bulk replace all env vars' },
+                  { method: 'PATCH', path: '/services/:id/env-vars', desc: 'Upsert env vars (additive)' },
                   { method: 'GET', path: '/services/:id/custom-domains', desc: 'List custom domains' },
                   { method: 'POST', path: '/services/:id/custom-domains', desc: 'Add custom domain' },
                   { method: 'DELETE', path: '/services/:id/custom-domains/:domain', desc: 'Remove custom domain' },
@@ -1326,7 +1349,7 @@ curl https://railpush.com/api/v1/services \\
                   <div>
                     <div className="text-sm font-semibold mb-1">AI-native infrastructure</div>
                     <div className="text-sm text-content-secondary">
-                      With 99 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
+                      With 100 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
                     </div>
                   </div>
                 </div>
@@ -1417,7 +1440,7 @@ npm run build`} />
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Available Tools</h3>
               <p className="text-content-secondary text-sm leading-relaxed mb-4">
-                The MCP server exposes 99 tools organized by category. Agents discover these automatically.
+                The MCP server exposes 100 tools organized by category. Agents discover these automatically.
               </p>
 
               <div className="overflow-x-auto mb-8">
@@ -1433,7 +1456,7 @@ npm run build`} />
                       ['Auth', 'whoami'],
                       ['Services', 'list, get, create, update, delete, restart, suspend, resume'],
                       ['Deploys', 'trigger, list, get, rollback, queue position'],
-                      ['Env Vars', 'list, set (bulk replace)'],
+                      ['Env Vars', 'list, set (bulk replace), upsert (additive)'],
                       ['Custom Domains', 'list, add, delete'],
                       ['Databases', 'list, create, get, update, delete, backup, list backups, replicas, create replica, promote replica, enable HA'],
                       ['Key-Value (Redis)', 'list, create, get, update, delete'],

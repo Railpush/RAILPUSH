@@ -144,6 +144,13 @@ export class RailPushClient {
     return this.request("PUT", `/services/${serviceId}/env-vars`, vars);
   }
 
+  async mergeEnvVars(serviceId: string, envVars: Array<{ key: string; value: string; is_secret?: boolean }>, deleteKeys?: string[]) {
+    return this.request("PATCH", `/services/${serviceId}/env-vars`, {
+      env_vars: envVars,
+      delete: deleteKeys ?? [],
+    });
+  }
+
   // ── Custom Domains ───────────────────────────────────────────────────
 
   async listCustomDomains(serviceId: string) {

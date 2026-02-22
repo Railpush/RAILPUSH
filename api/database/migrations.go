@@ -398,4 +398,9 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 	`ALTER TABLE blueprints ADD COLUMN IF NOT EXISTS folder_id UUID`,
 	`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='blueprints_folder_id_fkey') THEN ALTER TABLE blueprints ADD CONSTRAINT blueprints_folder_id_fkey FOREIGN KEY (folder_id) REFERENCES project_folders(id) ON DELETE SET NULL; END IF; END $$`,
 	`CREATE INDEX IF NOT EXISTS idx_blueprints_folder_id ON blueprints(folder_id)`,
+
+	// Env vars: unique per owner+key so we can use ON CONFLICT for additive upsert.
+	// Deduplicate any pre-existing duplicates first (keep the newest row).
+	`DELETE FROM env_vars WHERE id NOT IN (SELECT DISTINCT ON (owner_type, owner_id, key) id FROM env_vars ORDER BY owner_type, owner_id, key, created_at DESC)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_env_vars_owner_key ON env_vars(owner_type, owner_id, key)`,
 }

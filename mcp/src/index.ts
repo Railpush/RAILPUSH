@@ -291,6 +291,24 @@ server.tool(
   },
 );
 
+server.tool(
+  "upsert_env_vars",
+  "Add or update environment variables for a service WITHOUT removing existing vars. Unlike set_env_vars (which replaces everything), this is additive — keys not in the list are left untouched. Optionally specify keys to delete.",
+  {
+    service_id: z.string().describe("Service ID"),
+    env_vars: z.array(z.object({
+      key: z.string().describe("Variable name (e.g. DATABASE_URL)"),
+      value: z.string().describe("Variable value"),
+      is_secret: z.boolean().optional().describe("Mark as secret (default: false)"),
+    })).optional().describe("Env vars to add or update"),
+    delete: z.array(z.string()).optional().describe("Env var keys to remove"),
+  },
+  async ({ service_id, env_vars, delete: deleteKeys }) => {
+    try { return text(await client.mergeEnvVars(service_id, env_vars ?? [], deleteKeys)); }
+    catch (e) { return err(e); }
+  },
+);
+
 // ════════════════════════════════════════════════════════════════════════
 //  CUSTOM DOMAINS
 // ════════════════════════════════════════════════════════════════════════

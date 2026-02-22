@@ -57,6 +57,78 @@ func (h *EnvVarHandler) ListEnvVars(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, result)
 }
 
+// MergeEnvVars handles PATCH /services/{id}/env-vars — additive upsert.
+// Provided keys are created or updated; keys not in the payload are left untouched.
+// Optionally, keys listed in "delete" are removed.
+func (h *EnvVarHandler) MergeEnvVars(w http.ResponseWriter, r *http.Request) {
+	serviceID := mux.Vars(r)["id"]
+	userID := middleware.GetUserID(r)
+	svc, err := models.GetService(serviceID)
+	if err != nil || svc == nil {
+		utils.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if err := services.EnsureWorkspaceAccess(userID, svc.WorkspaceID, models.RoleDeveloper); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	var req struct {
+		EnvVars []struct {
+			Key      string `json:"key"`
+			Value    string `json:"value"`
+			IsSecret bool   `json:"is_secret"`
+		} `json:"env_vars"`
+		Delete []string `json:"delete"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Upsert provided vars.
+	if len(req.EnvVars) > 0 {
+		vars := make([]models.EnvVar, 0, len(req.EnvVars))
+		for _, item := range req.EnvVars {
+			key := strings.TrimSpace(item.Key)
+			if key == "" {
+				continue
+			}
+			encrypted, err := utils.Encrypt(item.Value, h.Config.Crypto.EncryptionKey)
+			if err != nil {
+				utils.RespondError(w, http.StatusInternalServerError, "encryption failed")
+				return
+			}
+			vars = append(vars, models.EnvVar{Key: key, EncryptedValue: encrypted, IsSecret: item.IsSecret})
+		}
+		if err := models.MergeUpsertEnvVars("service", serviceID, vars); err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to upsert env vars: "+err.Error())
+			return
+		}
+	}
+
+	// Delete specified keys.
+	if len(req.Delete) > 0 {
+		trimmed := make([]string, 0, len(req.Delete))
+		for _, k := range req.Delete {
+			k = strings.TrimSpace(k)
+			if k != "" {
+				trimmed = append(trimmed, k)
+			}
+		}
+		if err := models.DeleteEnvVarsByKeys("service", serviceID, trimmed); err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to delete env vars: "+err.Error())
+			return
+		}
+	}
+
+	services.Audit(svc.WorkspaceID, userID, "service.env_vars_merged", "service", svc.ID, map[string]interface{}{
+		"upserted": len(req.EnvVars),
+		"deleted":  len(req.Delete),
+	})
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
 func (h *EnvVarHandler) BulkUpdateEnvVars(w http.ResponseWriter, r *http.Request) {
 	serviceID := mux.Vars(r)["id"]
 	userID := middleware.GetUserID(r)
