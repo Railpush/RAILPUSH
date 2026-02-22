@@ -679,12 +679,13 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 			"nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
 			"nginx.ingress.kubernetes.io/proxy-body-size":    "50m",
 		}
-		// Static sites: add CDN-friendly headers (enable upstream caching, CORS for fonts/assets)
+		// Static sites: add CDN-friendly headers (enable upstream caching, CORS for fonts/assets).
+		// NOTE: Do NOT use configuration-snippet or server-snippet — they are blocked by the
+		// ingress controller's default security policy (--enable-snippet-directives=false).
 		if serviceType == "static" {
 			ingressAnnotations["nginx.ingress.kubernetes.io/enable-cors"] = "true"
 			ingressAnnotations["nginx.ingress.kubernetes.io/cors-allow-origin"] = "*"
 			ingressAnnotations["nginx.ingress.kubernetes.io/cors-allow-methods"] = "GET, HEAD, OPTIONS"
-			ingressAnnotations["nginx.ingress.kubernetes.io/configuration-snippet"] = `more_set_headers "Vary: Accept-Encoding";`
 			// Tighter timeouts for static assets
 			ingressAnnotations["nginx.ingress.kubernetes.io/proxy-read-timeout"] = "60"
 			ingressAnnotations["nginx.ingress.kubernetes.io/proxy-send-timeout"] = "60"

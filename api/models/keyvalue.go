@@ -85,3 +85,8 @@ func UpdateManagedKeyValuePlan(id, plan string) error {
 	_, err := database.DB.Exec("UPDATE managed_keyvalue SET plan=$1 WHERE id=$2", plan, id)
 	return err
 }
+
+func UpdateManagedKeyValueMaxmemoryPolicy(id, policy string) error {
+	_, err := database.DB.Exec("UPDATE managed_keyvalue SET maxmemory_policy=$1 WHERE id=$2", policy, id)
+	return err
+}

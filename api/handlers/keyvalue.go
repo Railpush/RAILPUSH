@@ -226,6 +226,8 @@ func (h *KeyValueHandler) UpdateKeyValue(w http.ResponseWriter, r *http.Request)
 
 	planProvided := false
 	desiredPlan := oldPlan
+	policyProvided := false
+	desiredPolicy := kv.MaxmemoryPolicy
 	var updates map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
@@ -240,9 +242,34 @@ func (h *KeyValueHandler) UpdateKeyValue(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	if !planProvided || desiredPlan == oldPlan {
+	if v, ok := updates["maxmemory_policy"].(string); ok {
+		policyProvided = true
+		if p, ok := services.NormalizeRedisMaxmemoryPolicy(v); ok {
+			desiredPolicy = p
+		} else {
+			utils.RespondError(w, http.StatusBadRequest, "invalid maxmemory_policy")
+			return
+		}
+	}
+
+	// Apply maxmemory_policy change (independent of plan change).
+	policyChanged := policyProvided && desiredPolicy != kv.MaxmemoryPolicy
+	if policyChanged {
+		if err := models.UpdateManagedKeyValueMaxmemoryPolicy(kv.ID, desiredPolicy); err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to update maxmemory policy")
+			return
+		}
+		kv.MaxmemoryPolicy = desiredPolicy
+	}
+
+	planChanged := planProvided && desiredPlan != oldPlan
+	if !planChanged && !policyChanged {
 		utils.RespondJSON(w, http.StatusOK, kv)
 		return
+	}
+	if !planChanged {
+		// Only policy changed — still need to re-apply K8s resources, skip billing section.
+		goto applyKube
 	}
 
 	// Free tier: limit 1 free key-value per workspace
@@ -292,6 +319,7 @@ func (h *KeyValueHandler) UpdateKeyValue(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+applyKube:
 	// Best-effort: apply Kubernetes resource updates immediately.
 	if h.Config != nil && h.Config.Kubernetes.Enabled && strings.HasPrefix(strings.TrimSpace(kv.ContainerID), "k8s:") {
 		if pw, err := utils.Decrypt(kv.EncryptedPassword, h.Config.Crypto.EncryptionKey); err == nil && strings.TrimSpace(pw) != "" {
@@ -315,7 +343,8 @@ func (h *KeyValueHandler) UpdateKeyValue(w http.ResponseWriter, r *http.Request)
 	}
 
 	services.Audit(kv.WorkspaceID, userID, "keyvalue.updated", "keyvalue", kv.ID, map[string]interface{}{
-		"plan": kv.Plan,
+		"plan":              kv.Plan,
+		"maxmemory_policy":  kv.MaxmemoryPolicy,
 	})
 
 	utils.RespondJSON(w, http.StatusOK, kv)
