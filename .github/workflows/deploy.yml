@@ -117,17 +117,18 @@ jobs:
           if [ -x /usr/local/go/bin/go ]; then
             /usr/local/go/bin/go mod download
             /usr/local/go/bin/go build -o "${NEW_BIN}" .
-          elif command -v go >/dev/null 2>&1; then
+          elif command -v go >/dev/null 2>&1 && go version >/dev/null 2>&1; then
             go mod download
             go build -o "${NEW_BIN}" .
           elif command -v docker >/dev/null 2>&1; then
+            echo "Go not found, using Docker to build..."
             docker run --rm \
               -v /opt/railpush/railpush-api:/src \
               -v /opt/railpush:/opt/railpush \
               -w /src golang:1.24-alpine \
               sh -lc "go mod download && go build -o ${NEW_BIN} ."
           else
-            echo "No Go compiler found on server."
+            echo "No Go compiler or Docker found on server."
             exit 1
           fi
 
