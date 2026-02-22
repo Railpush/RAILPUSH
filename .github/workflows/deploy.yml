@@ -126,7 +126,7 @@ jobs:
               -v /opt/railpush/railpush-api:/src \
               -v /opt/railpush:/opt/railpush \
               -w /src golang:1.24-alpine \
-              sh -lc "go mod download && go build -o ${NEW_BIN} ."
+              sh -c "export PATH=/usr/local/go/bin:\$PATH && go mod download && CGO_ENABLED=0 go build -o ${NEW_BIN} ."
           else
             echo "No Go compiler or Docker found on server."
             exit 1
