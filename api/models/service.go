@@ -28,6 +28,7 @@ type Service struct {
 	StartCommand      string    `json:"start_command"`
 	DockerfilePath    string    `json:"dockerfile_path"`
 	DockerContext     string    `json:"docker_context"`
+	BuildContext      string    `json:"build_context"`
 	ImageURL          string    `json:"image_url"`
 	HealthCheckPath   string    `json:"health_check_path"`
 	Port              int       `json:"port"`
@@ -51,6 +52,11 @@ type Service struct {
 }
 
 const serviceSelectCols = `id, COALESCE(workspace_id::text,''), COALESCE(project_id::text,''), COALESCE(environment_id::text,''), COALESCE(name,''), COALESCE(subdomain,''), COALESCE(type,''), COALESCE(runtime,''), COALESCE(repo_url,''), COALESCE(branch,'main'), COALESCE(build_command,''), COALESCE(start_command,''), COALESCE(dockerfile_path,''), COALESCE(docker_context,''), COALESCE(image_url,''), COALESCE(health_check_path,''), COALESCE(port,10000), COALESCE(auto_deploy,false), COALESCE(is_suspended,false), COALESCE(max_shutdown_delay,30), COALESCE(pre_deploy_command,''), COALESCE(static_publish_path,''), COALESCE(schedule,''), COALESCE(plan,'starter'), COALESCE(instances,1), COALESCE(docker_access,false), COALESCE(base_image,''), COALESCE(build_include,''), COALESCE(build_exclude,''), COALESCE(status,'created'), COALESCE(container_id,''), COALESCE(host_port,0), created_at, updated_at`
+
+// fillAliases populates computed alias fields (e.g. build_context mirrors docker_context).
+func (s *Service) fillAliases() {
+	s.BuildContext = s.DockerContext
+}
 
 func serviceStrPtrOrNil(v string) *string {
 	if v == "" {
@@ -82,6 +88,7 @@ func ListServices(workspaceID string) ([]Service, error) {
 		}
 		s.ProjectID = serviceStrPtrOrNil(projectID)
 		s.EnvironmentID = serviceStrPtrOrNil(environmentID)
+		s.fillAliases()
 		svcs = append(svcs, s)
 	}
 	return svcs, nil
@@ -113,6 +120,7 @@ func ListServicesByProject(projectID string) ([]Service, error) {
 		}
 		s.ProjectID = serviceStrPtrOrNil(pid)
 		s.EnvironmentID = serviceStrPtrOrNil(eid)
+		s.fillAliases()
 		svcs = append(svcs, s)
 	}
 	if svcs == nil {
@@ -142,6 +150,7 @@ func GetServiceByWorkspaceAndName(workspaceID string, name string) (*Service, er
 	}
 	s.ProjectID = serviceStrPtrOrNil(projectID)
 	s.EnvironmentID = serviceStrPtrOrNil(environmentID)
+	s.fillAliases()
 	return s, nil
 }
 
@@ -165,6 +174,7 @@ func ListAutoDeployServicesByRepoBranch(repoURL string, branch string) ([]Servic
 		}
 		s.ProjectID = serviceStrPtrOrNil(projectID)
 		s.EnvironmentID = serviceStrPtrOrNil(environmentID)
+		s.fillAliases()
 		svcs = append(svcs, s)
 	}
 	return svcs, nil
@@ -190,6 +200,7 @@ func ListBaseServicesForPreview(repoURL string, baseBranch string) ([]Service, e
 		}
 		s.ProjectID = serviceStrPtrOrNil(projectID)
 		s.EnvironmentID = serviceStrPtrOrNil(environmentID)
+		s.fillAliases()
 		svcs = append(svcs, s)
 	}
 	return svcs, nil
@@ -206,6 +217,7 @@ func GetService(id string) (*Service, error) {
 	}
 	s.ProjectID = serviceStrPtrOrNil(projectID)
 	s.EnvironmentID = serviceStrPtrOrNil(environmentID)
+	s.fillAliases()
 	return s, err
 }
 

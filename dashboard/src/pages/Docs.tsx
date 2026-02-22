@@ -96,6 +96,7 @@ const sections = [
   { id: 'docker', label: 'Docker Deploys', icon: Box },
   { id: 'static-sites', label: 'Static Sites', icon: FileText },
   { id: 'cron-jobs', label: 'Cron Jobs', icon: Clock },
+  { id: 'networking', label: 'Networking', icon: Zap },
   { id: 'disks', label: 'Persistent Disks', icon: HardDrive },
   { id: 'scaling', label: 'Scaling', icon: Cpu },
   { id: 'cli', label: 'CLI & API', icon: Terminal },
@@ -551,7 +552,8 @@ envVarGroups:
                       ['startCommand', 'String', 'No', 'Start command (ignored for static sites)'],
                       ['dockerCommand', 'String', 'No', 'Docker CMD override'],
                       ['dockerfilePath', 'String', 'No', 'Custom Dockerfile path'],
-                      ['dockerContext', 'String', 'No', 'Docker build context directory'],
+                      ['dockerContext', 'String', 'No', 'Build context directory (alias: buildContext)'],
+                      ['buildContext', 'String', 'No', 'Alias for dockerContext (preferred for non-Docker builds)'],
                       ['rootDir', 'String', 'No', 'Root directory for monorepos'],
                       ['port', 'Int', 'No', 'HTTP port (default: 10000, web/pserv only)'],
                       ['plan', 'String', 'No', 'free, starter (default), standard, pro'],
@@ -729,9 +731,16 @@ envVarGroups:
         - docs/**
         - "*.md"`} />
 
-              <h3 className="text-lg font-semibold mt-8 mb-3">Per-Service Build Context</h3>
+              <h3 className="text-lg font-semibold mt-8 mb-3">Per-Service Build Context (buildInclude / buildExclude)</h3>
               <p className="text-sm text-content-secondary mb-4">
-                Control which files each service sees during build. Useful for monorepos where multiple services share a directory.
+                Control which files each service sees during build. These fields accept <strong>comma-separated glob patterns</strong> in YAML array form. Patterns follow standard glob syntax (<code className="text-xs bg-surface-tertiary px-1 rounded">*</code>, <code className="text-xs bg-surface-tertiary px-1 rounded">**</code>, <code className="text-xs bg-surface-tertiary px-1 rounded">?</code>).
+              </p>
+              <div className="space-y-2 text-sm text-content-secondary mb-4">
+                <div className="flex items-start gap-2"><code className="text-xs bg-surface-tertiary px-1.5 py-0.5 rounded text-brand font-mono shrink-0">buildInclude</code> <span>Whitelist &mdash; only matching files are included in the Docker build context. All other files are excluded via <code className="text-xs bg-surface-tertiary px-1 rounded">.dockerignore</code>.</span></div>
+                <div className="flex items-start gap-2"><code className="text-xs bg-surface-tertiary px-1.5 py-0.5 rounded text-brand font-mono shrink-0">buildExclude</code> <span>Blacklist &mdash; matching files are added to <code className="text-xs bg-surface-tertiary px-1 rounded">.dockerignore</code>. All other files are included.</span></div>
+              </div>
+              <p className="text-sm text-content-secondary mb-4">
+                If both are set, <code className="text-xs bg-surface-tertiary px-1 rounded">buildInclude</code> takes precedence. Useful for monorepos where multiple services share a directory.
               </p>
               <CodeBlock filename="buildInclude (whitelist)" code={`services:
   # Only include specific files in the build
@@ -741,7 +750,8 @@ envVarGroups:
     buildInclude:
       - worker.py
       - requirements.txt
-      - schema.sql`} />
+      - schema.sql
+      - lib/**          # glob: include entire lib directory`} />
               <div className="mt-4" />
               <CodeBlock filename="buildExclude (blacklist)" code={`services:
   # Exclude specific files from the build
@@ -751,12 +761,24 @@ envVarGroups:
     buildExclude:
       - worker.py
       - sync.log
-      - "*.md"`} />
+      - "*.md"          # glob: exclude all markdown files
+      - "tests/**"      # glob: exclude test directory`} />
 
-              <h3 className="text-lg font-semibold mt-8 mb-3">Custom Base Image</h3>
+              <h3 className="text-lg font-semibold mt-8 mb-3">Custom Base Image (baseImage)</h3>
               <p className="text-sm text-content-secondary mb-4">
-                Override the default base image for auto-generated Dockerfiles. Useful for multi-runtime builds (e.g. Python + Node.js).
+                Override the default base image for Nixpacks auto-generated Dockerfiles. This is useful when your service needs multiple runtimes (e.g., Python + Node.js) or system libraries not in the default image. The <code className="text-xs bg-surface-tertiary px-1 rounded">baseImage</code> replaces the <code className="text-xs bg-surface-tertiary px-1 rounded">FROM</code> line in the generated Dockerfile.
               </p>
+              <div className="rounded-xl border border-status-warning/20 bg-status-warning/5 p-5 mb-4">
+                <div className="flex items-start gap-3">
+                  <Zap className="w-5 h-5 text-status-warning shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-sm font-semibold mb-1">Runtime compatibility</div>
+                    <div className="text-sm text-content-secondary">
+                      The base image must be compatible with your chosen runtime. For <code className="text-xs bg-surface-tertiary px-1 rounded">runtime: node</code>, the image must have Node.js installed. For <code className="text-xs bg-surface-tertiary px-1 rounded">runtime: python</code>, Python must be available. If using <code className="text-xs bg-surface-tertiary px-1 rounded">runtime: docker</code> with a custom Dockerfile, <code className="text-xs bg-surface-tertiary px-1 rounded">baseImage</code> is ignored.
+                    </div>
+                  </div>
+                </div>
+              </div>
               <CodeBlock filename="baseImage example" code={`services:
   - type: web
     name: fullstack-app
@@ -906,11 +928,51 @@ services:
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Deploy Triggers</h3>
               <div className="space-y-2 text-sm text-content-secondary">
-                <div className="flex items-center gap-2"><code className="px-2 py-0.5 rounded bg-surface-tertiary text-xs font-mono text-brand">manual</code> Triggered from the dashboard</div>
-                <div className="flex items-center gap-2"><code className="px-2 py-0.5 rounded bg-surface-tertiary text-xs font-mono text-brand">auto</code> Triggered by a git push</div>
-                <div className="flex items-center gap-2"><code className="px-2 py-0.5 rounded bg-surface-tertiary text-xs font-mono text-brand">rollback</code> Reverts to a previous deploy's image</div>
+                <div className="flex items-center gap-2"><code className="px-2 py-0.5 rounded bg-surface-tertiary text-xs font-mono text-brand">manual</code> Triggered from the dashboard or API</div>
+                <div className="flex items-center gap-2"><code className="px-2 py-0.5 rounded bg-surface-tertiary text-xs font-mono text-brand">auto</code> Triggered by a git push (when auto_deploy is enabled)</div>
+                <div className="flex items-center gap-2"><code className="px-2 py-0.5 rounded bg-surface-tertiary text-xs font-mono text-brand">rollback</code> Reverts to a previous deploy&rsquo;s image</div>
                 <div className="flex items-center gap-2"><code className="px-2 py-0.5 rounded bg-surface-tertiary text-xs font-mono text-brand">blueprint</code> Triggered by a blueprint sync</div>
               </div>
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Zero-Downtime Deploys</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                All services use Kubernetes rolling updates by default. During a deploy, a new pod is created alongside the existing one. Traffic only switches to the new pod after it passes health checks. The old pod is terminated only after the new one is fully ready. This means <strong>zero downtime</strong> for every deploy.
+              </p>
+              <div className="rounded-xl border border-brand/20 bg-brand/5 p-5 mb-6">
+                <div className="flex items-start gap-3">
+                  <Shield className="w-5 h-5 text-brand shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-sm font-semibold mb-1">Rolling update guarantee</div>
+                    <div className="text-sm text-content-secondary">
+                      Your service is never fully down during a deploy. If the new version fails health checks, the old version continues serving traffic and the deploy is marked as failed.
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Pre-Deploy Command</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                The <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-xs font-mono">preDeployCommand</code> runs inside the built container image <strong>before</strong> the new version starts receiving traffic. It has access to:
+              </p>
+              <div className="space-y-2 text-sm text-content-secondary mb-4">
+                <div className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand shrink-0" /> All environment variables (including env groups)</div>
+                <div className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand shrink-0" /> The complete filesystem from the build step</div>
+                <div className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand shrink-0" /> Network access (can reach databases, external APIs)</div>
+              </div>
+              <p className="text-sm text-content-secondary mb-4">
+                Common uses: database migrations, cache warming, asset compilation, schema validation. If the pre-deploy command exits with a non-zero code, the deploy is marked as failed and the old version continues serving.
+              </p>
+              <CodeBlock filename="railpush.yaml" code={`services:
+  - type: web
+    name: my-api
+    preDeployCommand: "npx prisma migrate deploy"
+    # Or for Python:
+    # preDeployCommand: "python manage.py migrate --noinput"`} />
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Real-Time Build Logs</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                Build output is streamed in real-time to the dashboard via WebSocket. You can watch your build progress live in the service detail page. The WebSocket endpoint is also available via the API at <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-xs font-mono">/ws/builds/:deployId</code>.
+              </p>
             </section>
 
             {/* ── Docker Deploys ──────────────────────────── */}
@@ -934,8 +996,13 @@ services:
     name: my-app
     runtime: docker
     dockerfilePath: ./docker/Dockerfile.prod
-    dockerContext: .
+    buildContext: .     # alias for dockerContext — both work
     dockerCommand: node server.js`} />
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Build Context</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                The <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-xs font-mono">buildContext</code> (or <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-xs font-mono">dockerContext</code>) field sets the working directory for builds. For Docker builds, it&rsquo;s the Docker build context. For Nixpacks/Buildpack builds, it determines the root of the application. Both field names are accepted interchangeably.
+              </p>
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Prebuilt Image</h3>
               <p className="text-sm text-content-secondary mb-4">
@@ -958,7 +1025,7 @@ services:
                 <h2 className="text-2xl font-bold tracking-tight">Static Sites</h2>
               </div>
               <p className="text-content-secondary text-base leading-relaxed mt-4 mb-6">
-                Deploy static sites, SPAs, and JAMstack applications. RailPush runs your build command, then serves the output directory with CDN-optimized caching — hashed assets are served with immutable 1-year cache headers, while HTML is always fresh. CORS headers are enabled for cross-origin asset loading.
+                Deploy static sites, SPAs, and JAMstack applications. RailPush runs your build command, then serves the output directory with CDN-optimized caching &mdash; hashed assets are served with immutable 1-year cache headers, while HTML is always fresh. CORS headers are enabled for cross-origin asset loading.
               </p>
               <CodeBlock filename="railpush.yaml" code={`services:
   - type: static
@@ -968,6 +1035,86 @@ services:
     envVars:
       - key: VITE_API_URL
         value: https://api.myapp.com`} />
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">type: static vs type: web with runtime: static</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                Both produce a static site, but they work differently:
+              </p>
+              <div className="overflow-x-auto mb-6">
+                <table className="w-full text-sm border border-border-default rounded-lg overflow-hidden">
+                  <thead><tr className="bg-surface-tertiary/50"><th className="text-left px-4 py-2 text-content-secondary font-medium border-b border-border-default">Feature</th><th className="text-left px-4 py-2 text-content-secondary font-medium border-b border-border-default"><code className="text-xs">type: static</code></th><th className="text-left px-4 py-2 text-content-secondary font-medium border-b border-border-default"><code className="text-xs">type: web</code> + <code className="text-xs">runtime: static</code></th></tr></thead>
+                  <tbody className="text-content-secondary">
+                    <tr className="border-b border-border-default/50"><td className="px-4 py-2">Served by</td><td className="px-4 py-2">nginx (optimized static file server)</td><td className="px-4 py-2">Nixpacks static buildpack</td></tr>
+                    <tr className="border-b border-border-default/50"><td className="px-4 py-2">Build step</td><td className="px-4 py-2">Runs buildCommand, serves staticPublishPath</td><td className="px-4 py-2">Nixpacks detects and builds</td></tr>
+                    <tr className="border-b border-border-default/50"><td className="px-4 py-2">Best for</td><td className="px-4 py-2">Pre-built sites, SPAs (React, Vue, Svelte)</td><td className="px-4 py-2">Sites needing Nixpacks auto-detection</td></tr>
+                    <tr><td className="px-4 py-2">Recommendation</td><td className="px-4 py-2 text-brand font-medium">Preferred for most static sites</td><td className="px-4 py-2">Use if you need Nixpacks features</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            {/* ── Networking ─────────────────────────────── */}
+            <section id="networking" className="scroll-mt-20 mb-20">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-10 h-10 rounded-xl bg-brand/10 flex items-center justify-center">
+                  <Zap className="w-5 h-5 text-brand" />
+                </div>
+                <h2 className="text-2xl font-bold tracking-tight">Networking</h2>
+              </div>
+              <p className="text-content-secondary text-base leading-relaxed mt-4 mb-6">
+                RailPush services run on a Kubernetes cluster with built-in service discovery, TLS termination, and load balancing.
+              </p>
+
+              <h3 className="text-lg font-semibold mb-3">Public Access</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                Every <code className="text-xs bg-surface-tertiary px-1 rounded">web</code> service gets a public URL at <code className="text-xs bg-surface-tertiary px-1 rounded">service-name.railpush.com</code> with automatic TLS. Custom domains can be added with automatic certificate provisioning via Let&rsquo;s Encrypt.
+              </p>
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Private Networking (Internal DNS)</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                Services within the same cluster can communicate using <strong>Kubernetes internal DNS</strong> without going through the public internet. Use the internal hostname:
+              </p>
+              <CodeBlock filename="Internal service URL" code={`# Format: <service-subdomain>.railpush.svc.cluster.local:<port>
+# Example: connect to "my-api" service on port 10000
+http://my-api.railpush.svc.cluster.local:10000
+
+# In your service's env vars:
+API_URL=http://my-api.railpush.svc.cluster.local:10000`} />
+
+              <div className="rounded-xl border border-brand/20 bg-brand/5 p-5 mt-4 mb-6">
+                <div className="flex items-start gap-3">
+                  <Shield className="w-5 h-5 text-brand shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-sm font-semibold mb-1">Private by default</div>
+                    <div className="text-sm text-content-secondary">
+                      Internal DNS traffic stays within the cluster network and never traverses the public internet. <code className="text-xs bg-surface-tertiary px-1 rounded">worker</code> and <code className="text-xs bg-surface-tertiary px-1 rounded">pserv</code> (private service) types have no public ingress &mdash; they&rsquo;re only reachable via internal DNS.
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Service Types &amp; Network Exposure</h3>
+              <div className="overflow-x-auto mb-6">
+                <table className="w-full text-sm border border-border-default rounded-lg overflow-hidden">
+                  <thead><tr className="bg-surface-tertiary/50"><th className="text-left px-4 py-2 text-content-secondary font-medium border-b border-border-default">Type</th><th className="text-left px-4 py-2 text-content-secondary font-medium border-b border-border-default">Public URL</th><th className="text-left px-4 py-2 text-content-secondary font-medium border-b border-border-default">Internal DNS</th><th className="text-left px-4 py-2 text-content-secondary font-medium border-b border-border-default">Use Case</th></tr></thead>
+                  <tbody className="text-content-secondary">
+                    <tr className="border-b border-border-default/50"><td className="px-4 py-2 font-mono text-xs text-brand">web</td><td className="px-4 py-2">Yes</td><td className="px-4 py-2">Yes</td><td className="px-4 py-2">HTTP APIs, web apps</td></tr>
+                    <tr className="border-b border-border-default/50"><td className="px-4 py-2 font-mono text-xs text-brand">pserv</td><td className="px-4 py-2">No</td><td className="px-4 py-2">Yes</td><td className="px-4 py-2">Internal microservices</td></tr>
+                    <tr className="border-b border-border-default/50"><td className="px-4 py-2 font-mono text-xs text-brand">worker</td><td className="px-4 py-2">No</td><td className="px-4 py-2">Yes</td><td className="px-4 py-2">Background jobs, queue consumers</td></tr>
+                    <tr className="border-b border-border-default/50"><td className="px-4 py-2 font-mono text-xs text-brand">cron</td><td className="px-4 py-2">No</td><td className="px-4 py-2">No</td><td className="px-4 py-2">Scheduled tasks</td></tr>
+                    <tr><td className="px-4 py-2 font-mono text-xs text-brand">static</td><td className="px-4 py-2">Yes</td><td className="px-4 py-2">No</td><td className="px-4 py-2">Static sites, SPAs</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Port Configuration</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                Each service listens on a single port (default: <code className="text-xs bg-surface-tertiary px-1 rounded">10000</code>). The ingress controller handles TLS termination and routes traffic to your service&rsquo;s port. Configure it in your blueprint:
+              </p>
+              <CodeBlock filename="railpush.yaml" code={`services:
+  - type: web
+    name: my-api
+    port: 3000  # your app listens on this port`} />
             </section>
 
             {/* ── Cron Jobs ───────────────────────────────── */}

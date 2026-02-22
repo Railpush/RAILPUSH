@@ -551,6 +551,7 @@ type RenderService struct {
 	PreDeployCmd      string             `yaml:"preDeployCommand"`
 	DockerfilePath    string             `yaml:"dockerfilePath"`
 	DockerContext     string             `yaml:"dockerContext"`
+	BuildContextAlias string             `yaml:"buildContext"`
 	DockerCommand     string             `yaml:"dockerCommand"`
 	RootDir           string             `yaml:"rootDir"`
 	StaticPublishPath string             `yaml:"staticPublishPath"`
@@ -1419,6 +1420,9 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		}
 
 		dockerCtx := sdef.DockerContext
+		if dockerCtx == "" && sdef.BuildContextAlias != "" {
+			dockerCtx = sdef.BuildContextAlias
+		}
 		if dockerCtx == "" && sdef.RootDir != "" {
 			dockerCtx = sdef.RootDir
 		}

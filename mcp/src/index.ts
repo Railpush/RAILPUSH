@@ -97,7 +97,8 @@ server.tool(
     build_command: z.string().optional().describe("Build command"),
     start_command: z.string().optional().describe("Start command"),
     dockerfile_path: z.string().optional().describe("Path to Dockerfile (relative to repo root)"),
-    docker_context: z.string().optional().describe("Docker build context directory"),
+    docker_context: z.string().optional().describe("Build context directory (alias: build_context)"),
+    build_context: z.string().optional().describe("Build context directory (alias for docker_context)"),
     image_url: z.string().optional().describe("Pre-built Docker image URL (skips build)"),
     health_check_path: z.string().optional().describe("HTTP health check path (e.g. /healthz)"),
     port: z.number().optional().describe("Port the service listens on (default: 10000)"),
@@ -110,7 +111,8 @@ server.tool(
     base_image: z.string().optional().describe("Custom base Docker image"),
     workspace_id: z.string().optional().describe("Workspace ID"),
   },
-  async (args) => {
+  async ({ build_context, ...args }) => {
+    if (build_context && !args.docker_context) (args as Record<string, unknown>).docker_context = build_context;
     try { return text(await client.createService(args as Record<string, unknown>)); }
     catch (e) { return err(e); }
   },
@@ -132,7 +134,8 @@ server.tool(
     plan: z.enum(["free", "starter", "standard", "pro"]).optional().describe("Plan tier"),
     instances: z.number().optional().describe("Number of instances"),
     dockerfile_path: z.string().optional().describe("Dockerfile path"),
-    docker_context: z.string().optional().describe("Docker build context"),
+    docker_context: z.string().optional().describe("Build context directory (alias: build_context)"),
+    build_context: z.string().optional().describe("Build context directory (alias for docker_context)"),
     image_url: z.string().optional().describe("Pre-built image URL"),
     health_check_path: z.string().optional().describe("Health check path"),
     pre_deploy_command: z.string().optional().describe("Pre-deploy command"),
@@ -140,7 +143,8 @@ server.tool(
     schedule: z.string().optional().describe("Cron schedule"),
     max_shutdown_delay: z.number().optional().describe("Max shutdown delay seconds"),
   },
-  async ({ service_id, ...updates }) => {
+  async ({ service_id, build_context, ...updates }) => {
+    if (build_context && !updates.docker_context) (updates as Record<string, unknown>).docker_context = build_context;
     try {
       // Keep null values for project_id/environment_id (they mean "unassign"), but filter out undefined
       const data: Record<string, unknown> = {};

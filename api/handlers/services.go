@@ -354,6 +354,9 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	if v, ok := updates["docker_context"].(string); ok {
 		svc.DockerContext = v
 	}
+	if v, ok := updates["build_context"].(string); ok {
+		svc.DockerContext = v
+	}
 	if v, ok := updates["image_url"].(string); ok {
 		svc.ImageURL = v
 	}

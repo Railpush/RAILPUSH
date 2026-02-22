@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ExternalLink, RotateCw, GitBranch, ChevronDown, ShieldCheck, Clock, Activity, Box, Settings, Copy, Check, Loader2 } from 'lucide-react';
 import { StatusBadge } from '../components/ui/StatusBadge';
@@ -8,7 +8,7 @@ import { Dropdown } from '../components/ui/Dropdown';
 import { ServiceIcon } from '../components/ui/ServiceIcon';
 import { serviceTypeLabel, timeAgo, formatDuration } from '../lib/utils';
 import { buildDefaultServiceUrl } from '../lib/serviceUrl';
-import { services as servicesApi, deploys as deploysApi } from '../lib/api';
+import { services as servicesApi, deploys as deploysApi, connectBuildStream } from '../lib/api';
 import type { Service, Deploy } from '../types';
 
 interface QuickMetrics { cpu_percent: string; memory_used: string; memory_percent: string }
@@ -34,6 +34,9 @@ export function ServiceDetail() {
   const [loading, setLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<QuickMetrics | null>(null);
+  const [buildLines, setBuildLines] = useState<string[]>([]);
+  const buildWsRef = useRef<WebSocket | null>(null);
+  const buildLogEndRef = useRef<HTMLDivElement>(null);
 
   const refresh = () => {
     if (!serviceId) return;
@@ -53,6 +56,24 @@ export function ServiceDetail() {
   };
 
   useEffect(() => { refresh(); }, [serviceId]);
+
+  // Real-time build log streaming via WebSocket
+  const latestDeployForWs = deployList[0];
+  const isBuildInProgress = latestDeployForWs && ['pending', 'building', 'deploying'].includes(latestDeployForWs.status);
+  useEffect(() => {
+    if (!isBuildInProgress || !latestDeployForWs) return;
+    setBuildLines([]);
+    const ws = connectBuildStream(latestDeployForWs.id, (line: string) => {
+      setBuildLines(prev => [...prev, line]);
+      buildLogEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    });
+    buildWsRef.current = ws;
+    ws.onclose = () => {
+      // Build finished — refresh to get final state
+      setTimeout(refresh, 1500);
+    };
+    return () => { ws.close(); buildWsRef.current = null; };
+  }, [latestDeployForWs?.id, isBuildInProgress]);
 
   if (loading) {
     return (
@@ -217,11 +238,14 @@ export function ServiceDetail() {
             </div>
           )}
 
-          {/* Build Log */}
-          {latestDeploy?.build_log && (
+          {/* Build Log — streaming or completed */}
+          {(isBuildInProgress && buildLines.length > 0) || latestDeploy?.build_log ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between px-1">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-content-tertiary">Console Output</h2>
+                <h2 className="text-xs font-bold uppercase tracking-wider text-content-tertiary flex items-center gap-2">
+                  Console Output
+                  {isBuildInProgress && <Loader2 className="w-3 h-3 animate-spin text-brand" />}
+                </h2>
                 <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => navigate(`/services/${service.id}/logs`)}>View Logs</Button>
               </div>
               <div className="font-mono text-xs bg-[#0d1117] rounded-lg border border-border-default shadow-2xl overflow-hidden flex flex-col">
@@ -232,17 +256,20 @@ export function ServiceDetail() {
                     <div className="w-2.5 h-2.5 rounded-full bg-[#27C93F]" />
                   </div>
                   <div className="flex-1 text-center text-[10px] text-content-tertiary font-medium opacity-60">
-                    build · {latestDeploy.commit_sha?.slice(0, 7) || 'latest'}
+                    {isBuildInProgress ? 'building' : 'build'} · {latestDeploy?.commit_sha?.slice(0, 7) || 'latest'}
                   </div>
                 </div>
                 <div className="p-4 overflow-y-auto h-[320px]">
                   <pre className="text-content-secondary whitespace-pre-wrap break-all leading-relaxed">
-                    {latestDeploy.build_log}
+                    {isBuildInProgress && buildLines.length > 0
+                      ? buildLines.join('\n')
+                      : latestDeploy?.build_log}
                   </pre>
+                  <div ref={buildLogEndRef} />
                 </div>
               </div>
             </div>
-          )}
+          ) : null}
         </div>
 
         {/* Right Column: Sidebar Actions / Info */}
