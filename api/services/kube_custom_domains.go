@@ -206,17 +206,16 @@ func (k *KubeDeployer) UpsertCustomDomainRedirectIngress(svc *models.Service, do
 			Namespace: ns,
 			Labels:    labels,
 			Annotations: map[string]string{
-				// 301 permanent redirect to the target domain.
-				"nginx.ingress.kubernetes.io/permanent-redirect":      "https://" + redirectTarget + "/$1",
+				// 301 permanent redirect to the target domain (preserves path + query).
+				"nginx.ingress.kubernetes.io/permanent-redirect":      "https://" + redirectTarget,
 				"nginx.ingress.kubernetes.io/permanent-redirect-code": "301",
-				"nginx.ingress.kubernetes.io/use-regex":               "true",
 
 				// cert-manager for TLS on the source domain.
 				"cert-manager.io/cluster-issuer":            issuer,
 				"acme.cert-manager.io/http01-ingress-class": ingClass,
 
 				// Metadata.
-				"railpush.com/custom-domain":  domain,
+				"railpush.com/custom-domain":   domain,
 				"railpush.com/redirect-target": redirectTarget,
 			},
 		},
@@ -235,8 +234,8 @@ func (k *KubeDeployer) UpsertCustomDomainRedirectIngress(svc *models.Service, do
 						HTTP: &networkingv1.HTTPIngressRuleValue{
 							Paths: []networkingv1.HTTPIngressPath{
 								{
-									Path:     "/(.*)",
-									PathType: func() *networkingv1.PathType { pt := networkingv1.PathTypeImplementationSpecific; return &pt }(),
+									Path:     "/",
+									PathType: func() *networkingv1.PathType { pt := networkingv1.PathTypePrefix; return &pt }(),
 									Backend: networkingv1.IngressBackend{
 										Service: &networkingv1.IngressServiceBackend{
 											Name: svcName,
