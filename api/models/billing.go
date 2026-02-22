@@ -176,9 +176,13 @@ func CountBillingItemsBySubscriptionItemID(stripeSubscriptionItemID string) (int
 // CountBillingItemsBySubscriptionItemIDForUpdate counts billing items while holding
 // a row-level lock (FOR UPDATE) to prevent concurrent quantity race conditions.
 func CountBillingItemsBySubscriptionItemIDForUpdate(tx *sql.Tx, stripeSubscriptionItemID string) (int, error) {
+	// Lock matching rows first (FOR UPDATE cannot be used with aggregates in PostgreSQL),
+	// then count them.  The sub-select acquires row-level locks within the transaction.
 	var n int
 	if err := tx.QueryRow(
-		"SELECT COUNT(*) FROM billing_items WHERE stripe_subscription_item_id=$1 FOR UPDATE",
+		`SELECT COUNT(*) FROM (
+			SELECT 1 FROM billing_items WHERE stripe_subscription_item_id=$1 FOR UPDATE
+		) locked`,
 		stripeSubscriptionItemID,
 	).Scan(&n); err != nil {
 		return 0, err
