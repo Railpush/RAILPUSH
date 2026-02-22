@@ -470,17 +470,25 @@ if [ "$RUNTIME" = "node" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
   {
     printf '%s\n' "FROM $BASE_IMAGE_NODE"
     printf '%s\n' "WORKDIR /app"
+    if [ "$NEEDS_COREPACK" = "1" ]; then
+      printf '%s\n' "RUN corepack enable"
+    fi
+    # -- Layer caching: copy lockfiles first, install deps, then copy source.
+    # This ensures npm ci/install is cached unless dependencies change.
+    if [ -n "$RAILPUSH_SUBDIR" ]; then
+      printf 'COPY %s/package*.json %s/yarn.lock* %s/pnpm-lock.yaml* %s/.npmrc* ./\n' "$RAILPUSH_SUBDIR" "$RAILPUSH_SUBDIR" "$RAILPUSH_SUBDIR" "$RAILPUSH_SUBDIR"
+    else
+      printf '%s\n' "COPY package*.json yarn.lock* pnpm-lock.yaml* .npmrc* ./"
+    fi
+    if [ "$NEEDS_INSTALL" = "1" ]; then
+      printf '%s\n' "RUN if [ -f package-lock.json ]; then npm ci; elif [ -f yarn.lock ]; then yarn install --frozen-lockfile; elif [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else npm install; fi"
+    fi
+    # -- Now copy the rest of the source code.
     if [ -n "$RAILPUSH_SUBDIR" ]; then
       printf 'COPY %s/ .\n' "$RAILPUSH_SUBDIR"
     else
       printf '%s\n' "COPY . ."
       printf '%s\n' "RUN rm -rf .git"
-    fi
-    if [ "$NEEDS_COREPACK" = "1" ]; then
-      printf '%s\n' "RUN corepack enable"
-    fi
-    if [ "$NEEDS_INSTALL" = "1" ]; then
-      printf '%s\n' "RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi"
     fi
     printf '%s\n' "RUN $BUILD_COMMAND"
     printf '%s\n' "ENV NODE_ENV=production"
@@ -534,11 +542,18 @@ if [ "$RUNTIME" = "python" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
   {
     printf '%s\n' "FROM $BASE_IMAGE_PYTHON"
     printf '%s\n' "WORKDIR /app"
+    # -- Layer caching: copy dependency files first, install deps, then copy source.
+    if [ -n "$RAILPUSH_SUBDIR" ]; then
+      printf 'COPY %s/requirements*.txt %s/Pipfile* %s/pyproject.toml* %s/setup.py* %s/setup.cfg* ./\n' "$RAILPUSH_SUBDIR" "$RAILPUSH_SUBDIR" "$RAILPUSH_SUBDIR" "$RAILPUSH_SUBDIR" "$RAILPUSH_SUBDIR"
+    else
+      printf '%s\n' "COPY requirements*.txt Pipfile* pyproject.toml* setup.py* setup.cfg* ./"
+    fi
+    printf '%s\n' "RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; elif [ -f Pipfile ]; then pip install --no-cache-dir pipenv && pipenv install --deploy --system; elif [ -f pyproject.toml ]; then pip install --no-cache-dir .; fi"
+    # -- Now copy the rest of the source code.
     printf 'COPY %s .\n' "$COPY_FROM"
     if [ -z "$RAILPUSH_SUBDIR" ]; then
       printf '%s\n' "RUN rm -rf .git"
     fi
-    printf '%s\n' "RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; elif [ -f Pipfile ]; then pip install --no-cache-dir pipenv && pipenv install --deploy --system; elif [ -f pyproject.toml ]; then pip install --no-cache-dir .; fi"
     if [ -n "$BUILD_COMMAND" ]; then
       printf 'RUN %s\n' "$BUILD_COMMAND"
     fi
@@ -563,8 +578,15 @@ if [ "$RUNTIME" = "go" ] && [ ! -f "$DOCKERFILE_PATH" ]; then
     printf '%s\n' "FROM $BASE_IMAGE_GO AS build"
     printf '%s\n' "WORKDIR /src"
     printf '%s\n' "RUN apk add --no-cache git ca-certificates"
-    printf 'COPY %s .\n' "$COPY_FROM"
+    # -- Layer caching: copy go.mod/go.sum first, download modules, then copy source.
+    if [ -n "$RAILPUSH_SUBDIR" ]; then
+      printf 'COPY %s/go.mod %s/go.sum* ./\n' "$RAILPUSH_SUBDIR" "$RAILPUSH_SUBDIR"
+    else
+      printf '%s\n' "COPY go.mod go.sum* ./"
+    fi
     printf '%s\n' "RUN go mod download"
+    # -- Now copy the rest of the source code.
+    printf 'COPY %s .\n' "$COPY_FROM"
     if [ -n "$BUILD_COMMAND" ]; then
       printf 'RUN %s\n' "$BUILD_COMMAND"
     fi
@@ -656,14 +678,18 @@ fi
 							{
 								Name:  "kaniko",
 								Image: "gcr.io/kaniko-project/executor:v1.23.2",
-								Args: []string{
-									"--context=dir://" + effectiveDir,
-									"--dockerfile=" + dfRelForKaniko,
-									"--destination=" + destImage,
-									"--insecure-registry=" + registryHost,
+							Args: []string{
+								"--context=dir://" + effectiveDir,
+								"--dockerfile=" + dfRelForKaniko,
+								"--destination=" + destImage,
+								"--insecure-registry=" + registryHost,
 								"--cache=true",
 								"--cache-repo=" + registryHost + "/cache",
-								},
+								"--cache-copy-layers",
+								"--snapshot-mode=redo",
+								"--use-new-run",
+								"--compressed-caching=false",
+							},
 								VolumeMounts: []corev1.VolumeMount{
 									{Name: "workspace", MountPath: "/workspace"},
 								},

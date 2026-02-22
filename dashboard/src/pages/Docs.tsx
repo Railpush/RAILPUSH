@@ -969,6 +969,48 @@ services:
     # Or for Python:
     # preDeployCommand: "python manage.py migrate --noinput"`} />
 
+              <h3 className="text-lg font-semibold mt-8 mb-3">Build Caching</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                RailPush uses <strong>Docker layer caching</strong> to speed up builds. When you deploy, only layers that have changed are rebuilt &mdash; unchanged layers are pulled from the cache.
+              </p>
+
+              <h4 className="text-base font-semibold mt-6 mb-2">How it works</h4>
+              <div className="space-y-2 text-sm text-content-secondary mb-4">
+                <div className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand shrink-0" /> <strong>Dependency caching</strong>: auto-generated Dockerfiles copy lockfiles (package.json, requirements.txt, go.mod) <em>before</em> the source code. This means <code className="text-xs bg-surface-tertiary px-1 rounded">npm ci</code>, <code className="text-xs bg-surface-tertiary px-1 rounded">pip install</code>, and <code className="text-xs bg-surface-tertiary px-1 rounded">go mod download</code> are cached unless dependencies change.</div>
+                <div className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand shrink-0" /> <strong>Registry-backed cache</strong>: built layers are stored in a dedicated cache repository and shared across deploys. Subsequent builds pull cached layers instead of rebuilding.</div>
+                <div className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand shrink-0" /> <strong>Smart layer detection</strong>: the build system uses content-addressable layer hashes. If a layer&rsquo;s inputs haven&rsquo;t changed, it&rsquo;s reused automatically.</div>
+              </div>
+
+              <div className="rounded-xl border border-brand/20 bg-brand/5 p-5 mb-6">
+                <div className="flex items-start gap-3">
+                  <Zap className="w-5 h-5 text-brand shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-sm font-semibold mb-1">Typical speedup</div>
+                    <div className="text-sm text-content-secondary">
+                      For Node.js projects, a code-only change (no new dependencies) typically builds <strong>2&ndash;5x faster</strong> because the <code className="text-xs bg-surface-tertiary px-1 rounded">npm ci</code> layer is cached. First builds are uncached.
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <h4 className="text-base font-semibold mt-6 mb-2">Custom Dockerfiles</h4>
+              <p className="text-sm text-content-secondary mb-4">
+                If you use your own Dockerfile, structure it for optimal caching by copying dependency files before source code:
+              </p>
+              <CodeBlock filename="Dockerfile (optimized)" code={`FROM node:20-alpine
+WORKDIR /app
+
+# 1. Copy dependency files first (cached unless deps change)
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# 2. Copy source code (changes on every deploy)
+COPY . .
+RUN npm run build
+
+EXPOSE 10000
+CMD ["node", "dist/index.js"]`} />
+
               <h3 className="text-lg font-semibold mt-8 mb-3">Real-Time Build Logs</h3>
               <p className="text-sm text-content-secondary mb-4">
                 Build output is streamed in real-time to the dashboard via WebSocket. You can watch your build progress live in the service detail page. The WebSocket endpoint is also available via the API at <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-xs font-mono">/ws/builds/:deployId</code>.
