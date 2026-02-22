@@ -130,6 +130,18 @@ export interface CustomDomain {
   created_at: string;
 }
 
+export interface RewriteRule {
+  id: string;
+  service_id: string;
+  source_path: string;
+  dest_service_id: string;
+  dest_path: string;
+  rule_type: 'proxy' | 'redirect';
+  priority: number;
+  dest_service_name?: string;
+  created_at: string;
+}
+
 export interface ManagedDatabase {
   id: string;
   workspace_id: string;

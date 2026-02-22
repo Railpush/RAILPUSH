@@ -1,5 +1,5 @@
 import type {
-  Service, Deploy, EnvVar, ManagedDatabase, ManagedKeyValue, Blueprint, BlueprintResource, EnvGroup, CustomDomain, User, Backup, LogEntry, BillingOverview,
+  Service, Deploy, EnvVar, ManagedDatabase, ManagedKeyValue, Blueprint, BlueprintResource, EnvGroup, CustomDomain, RewriteRule, User, Backup, LogEntry, BillingOverview,
   GitHubRepo, GitHubBranch, RegisteredDomain, DnsRecord, DomainSearchResult, Project, ProjectFolder, Environment, PreviewEnvironment, OneOffJob, AutoscalingPolicy,
   DatabaseReplica, WorkspaceMember, AuditLogEntry, SamlSSOConfig, Incident, IncidentDetail, OpsOverview, OpsUserItem, OpsWorkspaceItem, OpsServiceItem, OpsDeployItem,
   OpsEmailOutboxItem, OpsBillingCustomerItem, OpsBillingCustomerDetail, OpsTicketItem, OpsTicketDetail, OpsWorkspaceCreditItem, OpsWorkspaceCreditDetail,
@@ -249,6 +249,15 @@ export const domains = {
     }),
   remove: (serviceId: string, domain: string) =>
     request<void>(`/services/${serviceId}/custom-domains/${domain}`, { method: 'DELETE' }),
+};
+
+// Rewrite Rules
+export const rewriteRules = {
+  list: (serviceId: string) => request<RewriteRule[]>(`/services/${serviceId}/rewrite-rules`),
+  add: (serviceId: string, rule: { source_path: string; dest_service_id: string; dest_path?: string; rule_type?: string }) =>
+    request<RewriteRule>(`/services/${serviceId}/rewrite-rules`, { method: 'POST', body: JSON.stringify(rule) }),
+  remove: (serviceId: string, ruleId: string) =>
+    request<void>(`/services/${serviceId}/rewrite-rules/${ruleId}`, { method: 'DELETE' }),
 };
 
 // Registered Domains

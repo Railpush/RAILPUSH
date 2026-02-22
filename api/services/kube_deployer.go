@@ -754,6 +754,11 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 		log.Printf("WARNING: reconcile custom domains service_id=%s: %v", svc.ID, err)
 	}
 
+	// Best-effort: keep rewrite-rule ingresses in sync.
+	if err := k.ReconcileRewriteRuleIngresses(svc); err != nil {
+		log.Printf("WARNING: reconcile rewrite rules service_id=%s: %v", svc.ID, err)
+	}
+
 	return name, nil
 }
 

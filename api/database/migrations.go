@@ -406,4 +406,18 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 
 	// Custom domain redirects: e.g. apex domain redirects to www subdomain.
 	`ALTER TABLE custom_domains ADD COLUMN IF NOT EXISTS redirect_target VARCHAR(255) DEFAULT ''`,
+
+	// Rewrite/proxy rules: route path prefixes from one service to another.
+	// e.g. /api/* on a static frontend proxied to a backend service.
+	`CREATE TABLE IF NOT EXISTS rewrite_rules (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		service_id UUID NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+		source_path VARCHAR(255) NOT NULL,
+		dest_service_id UUID NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+		dest_path VARCHAR(255) NOT NULL DEFAULT '/',
+		rule_type VARCHAR(20) NOT NULL DEFAULT 'proxy',
+		priority INT NOT NULL DEFAULT 0,
+		created_at TIMESTAMPTZ DEFAULT NOW()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_rewrite_rules_service_id ON rewrite_rules(service_id)`,
 }

@@ -176,6 +176,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	kvH := handlers.NewKeyValueHandler(cfg, worker, stripeService)
 	bpH := handlers.NewBlueprintHandler(cfg, worker)
 	domH := handlers.NewDomainHandler(cfg, worker)
+	rwH := handlers.NewRewriteRuleHandler(cfg, worker)
 	logH := handlers.NewLogHandler(cfg, worker)
 	whH := handlers.NewWebhookHandler(cfg, worker)
 	metH := handlers.NewMetricsHandler(cfg)
@@ -310,6 +311,10 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/services/{id}/custom-domains", domH.AddCustomDomain).Methods("POST")
 	authed.HandleFunc("/services/{id}/custom-domains", domH.ListCustomDomains).Methods("GET")
 	authed.HandleFunc("/services/{id}/custom-domains/{domain}", domH.DeleteCustomDomain).Methods("DELETE")
+
+	authed.HandleFunc("/services/{id}/rewrite-rules", rwH.AddRewriteRule).Methods("POST")
+	authed.HandleFunc("/services/{id}/rewrite-rules", rwH.ListRewriteRules).Methods("GET")
+	authed.HandleFunc("/services/{id}/rewrite-rules/{ruleId}", rwH.DeleteRewriteRule).Methods("DELETE")
 
 	authed.HandleFunc("/services/{id}/logs", logH.QueryLogs).Methods("GET")
 	authed.HandleFunc("/ops/services/{id}/logs", logH.QueryLogsOps).Methods("GET")

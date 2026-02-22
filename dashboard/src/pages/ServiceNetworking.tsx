@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, Trash2, CheckCircle, Globe2, Link, ArrowUpDown, MoreHorizontal, Shield, ShieldCheck, Clock } from 'lucide-react';
+import { Plus, Trash2, CheckCircle, Globe2, Link, ArrowUpDown, MoreHorizontal, Shield, ShieldCheck, Clock, ArrowRight } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
 import { CopyButton } from '../components/ui/CopyButton';
-import { domains as domainsApi, registeredDomains, services as servicesApi } from '../lib/api';
+import { domains as domainsApi, registeredDomains, services as servicesApi, rewriteRules as rewriteRulesApi } from '../lib/api';
 import { buildDefaultServiceHostname, buildDefaultServiceUrl, hostnameFromUrl } from '../lib/serviceUrl';
-import type { CustomDomain, RegisteredDomain, Service } from '../types';
+import type { CustomDomain, RegisteredDomain, Service, RewriteRule } from '../types';
 import { toast } from 'sonner';
 
 export function ServiceNetworking() {
@@ -25,6 +25,10 @@ export function ServiceNetworking() {
   const [sortAsc, setSortAsc] = useState(true);
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
   const [renderSubdomainEnabled, setRenderSubdomainEnabled] = useState(true);
+  const [rules, setRules] = useState<RewriteRule[]>([]);
+  const [workspaceServices, setWorkspaceServices] = useState<Service[]>([]);
+  const [newRule, setNewRule] = useState({ source_path: '', dest_service_id: '', dest_path: '' });
+  const [addingRule, setAddingRule] = useState(false);
 
   const refreshDomains = useCallback(() => {
     if (!serviceId) return;
@@ -33,17 +37,31 @@ export function ServiceNetworking() {
       .catch(() => {});
   }, [serviceId]);
 
+  const refreshRules = useCallback(() => {
+    if (!serviceId) return;
+    rewriteRulesApi.list(serviceId)
+      .then(setRules)
+      .catch(() => {});
+  }, [serviceId]);
+
   useEffect(() => {
     if (!serviceId) return;
     servicesApi.get(serviceId)
-      .then(setService)
+      .then((s) => {
+        setService(s);
+        // Load workspace services for rewrite rule destination picker.
+        servicesApi.list()
+          .then((all) => setWorkspaceServices(all.filter((svc: Service) => svc.id !== serviceId && (svc.type === 'web' || svc.type === 'worker'))))
+          .catch(() => {});
+      })
       .catch(() => {});
     refreshDomains();
+    refreshRules();
     registeredDomains.list()
       .then((d) => setOwnedDomains(d.filter((dom) => dom.status === 'active')))
       .catch(() => {});
     setLoading(false);
-  }, [serviceId, refreshDomains]);
+  }, [serviceId, refreshDomains, refreshRules]);
 
   // Auto-refresh domain status every 15s while any domain is pending
   useEffect(() => {
@@ -367,6 +385,111 @@ export function ServiceNetworking() {
               </div>
               <CopyButton text="65.21.134.49" />
             </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Rewrite & Proxy Rules */}
+      <div className="mb-8">
+        <Card className="!p-0 overflow-hidden">
+          <div className="px-6 pt-6 pb-4">
+            <h2 className="text-lg font-semibold text-content-primary">Rewrite & Proxy Rules</h2>
+            <p className="text-sm text-content-secondary mt-1">
+              Route specific URL paths to other services. For example, proxy <code className="text-xs font-mono bg-surface-tertiary px-1 py-0.5 rounded">/api/*</code> to a backend service while serving static files from this service.
+            </p>
+          </div>
+
+          {rules.length > 0 && (
+            <div className="border-t border-border-subtle">
+              {rules.map((rule) => (
+                <div
+                  key={rule.id}
+                  className="flex items-center gap-3 px-6 py-3.5 border-b border-border-subtle last:border-b-0 hover:bg-surface-secondary/50 transition-colors"
+                >
+                  <code className="text-sm font-mono text-brand bg-surface-tertiary px-2 py-1 rounded">{rule.source_path}*</code>
+                  <ArrowRight className="w-4 h-4 text-content-tertiary shrink-0" />
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-content-primary">{rule.dest_service_name || rule.dest_service_id}</span>
+                    <code className="text-xs font-mono text-content-tertiary bg-surface-tertiary px-1.5 py-0.5 rounded">{rule.dest_path}*</code>
+                  </div>
+                  <span className="ml-auto inline-flex items-center px-2 py-0.5 rounded-md bg-brand/10 text-brand text-[11px] font-medium uppercase">
+                    {rule.rule_type}
+                  </span>
+                  <button
+                    onClick={async () => {
+                      if (!serviceId) return;
+                      try {
+                        await rewriteRulesApi.remove(serviceId, rule.id);
+                        setRules(rules.filter((r) => r.id !== rule.id));
+                        toast.success('Rule removed');
+                      } catch {
+                        toast.error('Failed to remove rule');
+                      }
+                    }}
+                    className="p-1.5 rounded-md text-content-tertiary hover:text-status-error hover:bg-status-error-bg transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className={`px-6 py-4 ${rules.length > 0 ? 'border-t border-border-subtle' : ''}`}>
+            <div className="flex items-center gap-2">
+              <Input
+                placeholder="Source path (e.g. /api/)"
+                value={newRule.source_path}
+                onChange={(e) => setNewRule({ ...newRule, source_path: e.target.value })}
+                className="flex-1"
+              />
+              <ArrowRight className="w-4 h-4 text-content-tertiary shrink-0" />
+              <select
+                value={newRule.dest_service_id}
+                onChange={(e) => setNewRule({ ...newRule, dest_service_id: e.target.value })}
+                className="flex-1 bg-surface-tertiary border border-border-default rounded-md px-3 py-2 text-sm text-content-primary appearance-none focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 transition-all duration-150"
+              >
+                <option value="">Destination service...</option>
+                {workspaceServices.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+              <Input
+                placeholder="Dest path (e.g. /api/)"
+                value={newRule.dest_path}
+                onChange={(e) => setNewRule({ ...newRule, dest_path: e.target.value })}
+                className="flex-1"
+              />
+              <Button
+                onClick={async () => {
+                  if (!serviceId || !newRule.source_path || !newRule.dest_service_id) return;
+                  setAddingRule(true);
+                  try {
+                    const rule = await rewriteRulesApi.add(serviceId, {
+                      source_path: newRule.source_path,
+                      dest_service_id: newRule.dest_service_id,
+                      dest_path: newRule.dest_path || newRule.source_path,
+                    });
+                    setRules([...rules, rule]);
+                    setNewRule({ source_path: '', dest_service_id: '', dest_path: '' });
+                    toast.success('Rewrite rule added');
+                  } catch {
+                    toast.error('Failed to add rule');
+                  } finally {
+                    setAddingRule(false);
+                  }
+                }}
+                disabled={!newRule.source_path || !newRule.dest_service_id}
+                loading={addingRule}
+                className="shrink-0"
+              >
+                <Plus className="w-4 h-4" />
+                Add Rule
+              </Button>
+            </div>
+            <p className="text-xs text-content-tertiary mt-2">
+              All requests matching the source path will be proxied server-side to the destination service. No CORS headers needed.
+            </p>
           </div>
         </Card>
       </div>
