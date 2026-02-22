@@ -403,39 +403,6 @@ export function Landing() {
         </div>
       </section>
 
-      {/* ── Features ─────────────────────────────────── */}
-      <section id="features" className="py-32 px-6" ref={featuresReveal.ref}>
-        <div className="max-w-7xl mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-4">
-              Everything you need to ship
-            </h2>
-            <p className="text-content-secondary text-lg max-w-xl mx-auto">
-              From git push to production in seconds. No Dockerfiles, no YAML, no hassle.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {features.map((f, i) => (
-              <div
-                key={f.title}
-                className={`group rounded-xl border border-border-default bg-surface-secondary/50 p-6 hover:-translate-y-1 transition-all duration-300 ${
-                  featuresReveal.isVisible
-                    ? `animate-scale-in delay-${(i + 1) * 100}`
-                    : 'opacity-0'
-                }`}
-              >
-                <div className="w-10 h-10 rounded-lg bg-brand/10 flex items-center justify-center mb-4">
-                  <f.icon className="w-5 h-5 text-brand" />
-                </div>
-                <h3 className="text-base font-semibold mb-2">{f.title}</h3>
-                <p className="text-sm text-content-secondary leading-relaxed">{f.description}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
       {/* ── MCP Showcase ─────────────────────────────── */}
       <section className="py-32 px-6 bg-surface-secondary relative overflow-hidden" ref={mcpReveal.ref}>
         {/* Subtle gradient accent */}
@@ -541,6 +508,39 @@ export function Landing() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Features ─────────────────────────────────── */}
+      <section id="features" className="py-32 px-6" ref={featuresReveal.ref}>
+        <div className="max-w-7xl mx-auto">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-4">
+              Everything you need to ship
+            </h2>
+            <p className="text-content-secondary text-lg max-w-xl mx-auto">
+              From git push to production in seconds. No Dockerfiles, no YAML, no hassle.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {features.map((f, i) => (
+              <div
+                key={f.title}
+                className={`group rounded-xl border border-border-default bg-surface-secondary/50 p-6 hover:-translate-y-1 transition-all duration-300 ${
+                  featuresReveal.isVisible
+                    ? `animate-scale-in delay-${(i + 1) * 100}`
+                    : 'opacity-0'
+                }`}
+              >
+                <div className="w-10 h-10 rounded-lg bg-brand/10 flex items-center justify-center mb-4">
+                  <f.icon className="w-5 h-5 text-brand" />
+                </div>
+                <h3 className="text-base font-semibold mb-2">{f.title}</h3>
+                <p className="text-sm text-content-secondary leading-relaxed">{f.description}</p>
+              </div>
+            ))}
           </div>
         </div>
       </section>
