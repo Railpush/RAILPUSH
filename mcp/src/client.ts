@@ -84,6 +84,16 @@ export class RailPushClient {
     return this.request("GET", "/services", undefined, workspaceId ? { workspace_id: workspaceId } : undefined);
   }
 
+  async searchServices(filters: { type?: string; status?: string; runtime?: string; name?: string; suspended?: string }) {
+    const query: Record<string, string> = {};
+    if (filters.type) query.type = filters.type;
+    if (filters.status) query.status = filters.status;
+    if (filters.runtime) query.runtime = filters.runtime;
+    if (filters.name) query.name = filters.name;
+    if (filters.suspended) query.suspended = filters.suspended;
+    return this.request("GET", "/services", undefined, query);
+  }
+
   async createService(data: Record<string, unknown>) {
     return this.request("POST", "/services", data);
   }

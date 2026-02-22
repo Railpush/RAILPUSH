@@ -99,6 +99,40 @@ func (h *ServiceHandler) ListServices(w http.ResponseWriter, r *http.Request) {
 	if svcs == nil {
 		svcs = []models.Service{}
 	}
+
+	// Optional query-param filters (all optional, combine with AND).
+	filterType := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
+	filterStatus := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
+	filterRuntime := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("runtime")))
+	filterName := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("name")))
+	filterSuspended := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("suspended")))
+
+	if filterType != "" || filterStatus != "" || filterRuntime != "" || filterName != "" || filterSuspended != "" {
+		filtered := svcs[:0]
+		for _, s := range svcs {
+			if filterType != "" && strings.ToLower(s.Type) != filterType {
+				continue
+			}
+			if filterStatus != "" && strings.ToLower(s.Status) != filterStatus {
+				continue
+			}
+			if filterRuntime != "" && strings.ToLower(s.Runtime) != filterRuntime {
+				continue
+			}
+			if filterName != "" && !strings.Contains(strings.ToLower(s.Name), filterName) {
+				continue
+			}
+			if filterSuspended == "true" && !s.IsSuspended {
+				continue
+			}
+			if filterSuspended == "false" && s.IsSuspended {
+				continue
+			}
+			filtered = append(filtered, s)
+		}
+		svcs = filtered
+	}
+
 	for i := range svcs {
 		h.decorateServicePublicURL(&svcs[i])
 	}

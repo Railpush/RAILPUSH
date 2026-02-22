@@ -198,6 +198,95 @@ server.tool(
 );
 
 // ════════════════════════════════════════════════════════════════════════
+//  SEARCH & BULK OPERATIONS
+// ════════════════════════════════════════════════════════════════════════
+
+server.tool(
+  "search_services",
+  "Search and filter services. All filters are optional and combined with AND. Name filter uses substring match.",
+  {
+    type: z.enum(["web", "worker", "cron", "static", "pserv"]).optional().describe("Filter by service type"),
+    status: z.string().optional().describe("Filter by status (e.g. live, created, suspended)"),
+    runtime: z.string().optional().describe("Filter by runtime (e.g. node, python, go, docker)"),
+    name: z.string().optional().describe("Filter by name (substring match, case-insensitive)"),
+    suspended: z.boolean().optional().describe("Filter by suspension state"),
+  },
+  async ({ type, status, runtime, name, suspended }) => {
+    try {
+      return text(await client.searchServices({
+        type, status, runtime, name,
+        suspended: suspended !== undefined ? String(suspended) : undefined,
+      }));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "bulk_restart",
+  "Restart multiple services at once. Returns results for each service.",
+  {
+    service_ids: z.array(z.string()).describe("Array of service IDs to restart"),
+  },
+  async ({ service_ids }) => {
+    const results: Array<{ id: string; status: string; error?: string }> = [];
+    for (const id of service_ids) {
+      try { await client.restartService(id); results.push({ id, status: "restarted" }); }
+      catch (e) { results.push({ id, status: "failed", error: e instanceof Error ? e.message : String(e) }); }
+    }
+    return text(results);
+  },
+);
+
+server.tool(
+  "bulk_deploy",
+  "Trigger deploys for multiple services at once. Returns results for each service.",
+  {
+    service_ids: z.array(z.string()).describe("Array of service IDs to deploy"),
+  },
+  async ({ service_ids }) => {
+    const results: Array<{ id: string; status: string; error?: string }> = [];
+    for (const id of service_ids) {
+      try { await client.triggerDeploy(id); results.push({ id, status: "deploy_triggered" }); }
+      catch (e) { results.push({ id, status: "failed", error: e instanceof Error ? e.message : String(e) }); }
+    }
+    return text(results);
+  },
+);
+
+server.tool(
+  "bulk_suspend",
+  "Suspend multiple services at once. Returns results for each service.",
+  {
+    service_ids: z.array(z.string()).describe("Array of service IDs to suspend"),
+  },
+  async ({ service_ids }) => {
+    const results: Array<{ id: string; status: string; error?: string }> = [];
+    for (const id of service_ids) {
+      try { await client.suspendService(id); results.push({ id, status: "suspended" }); }
+      catch (e) { results.push({ id, status: "failed", error: e instanceof Error ? e.message : String(e) }); }
+    }
+    return text(results);
+  },
+);
+
+server.tool(
+  "bulk_resume",
+  "Resume multiple suspended services at once. Returns results for each service.",
+  {
+    service_ids: z.array(z.string()).describe("Array of service IDs to resume"),
+  },
+  async ({ service_ids }) => {
+    const results: Array<{ id: string; status: string; error?: string }> = [];
+    for (const id of service_ids) {
+      try { await client.resumeService(id); results.push({ id, status: "resumed" }); }
+      catch (e) { results.push({ id, status: "failed", error: e instanceof Error ? e.message : String(e) }); }
+    }
+    return text(results);
+  },
+);
+
+// ════════════════════════════════════════════════════════════════════════
 //  DEPLOYS
 // ════════════════════════════════════════════════════════════════════════
 

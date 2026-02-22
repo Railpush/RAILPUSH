@@ -1342,7 +1342,7 @@ curl https://railpush.com/api/v1/services \\
 
               {[
                 { group: 'Services', endpoints: [
-                  { method: 'GET', path: '/services', desc: 'List all services' },
+                  { method: 'GET', path: '/services', desc: 'List services (filter: ?type=web&status=live&runtime=node&name=api&suspended=false)' },
                   { method: 'POST', path: '/services', desc: 'Create a service' },
                   { method: 'GET', path: '/services/:id', desc: 'Get service details' },
                   { method: 'PATCH', path: '/services/:id', desc: 'Update a service' },
@@ -1496,7 +1496,7 @@ curl https://railpush.com/api/v1/services \\
                   <div>
                     <div className="text-sm font-semibold mb-1">AI-native infrastructure</div>
                     <div className="text-sm text-content-secondary">
-                      With 100 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
+                      With 105 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
                     </div>
                   </div>
                 </div>
@@ -1587,7 +1587,7 @@ npm run build`} />
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Available Tools</h3>
               <p className="text-content-secondary text-sm leading-relaxed mb-4">
-                The MCP server exposes 100 tools organized by category. Agents discover these automatically.
+                The MCP server exposes 105 tools organized by category. Agents discover these automatically.
               </p>
 
               <div className="overflow-x-auto mb-8">
@@ -1601,7 +1601,8 @@ npm run build`} />
                   <tbody className="text-content-secondary">
                     {[
                       ['Auth', 'whoami'],
-                      ['Services', 'list, get, create, update, delete, restart, suspend, resume'],
+                      ['Services', 'list, get, create, update, delete, restart, suspend, resume, search/filter'],
+                      ['Bulk Operations', 'bulk deploy, bulk restart, bulk suspend, bulk resume'],
                       ['Deploys', 'trigger, list, get, rollback, queue position'],
                       ['Env Vars', 'list, set (bulk replace), upsert (additive)'],
                       ['Custom Domains', 'list, add, delete'],
