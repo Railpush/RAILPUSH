@@ -1325,7 +1325,7 @@ curl https://railpush.com/api/v1/services \\
                   <div>
                     <div className="text-sm font-semibold mb-1">AI-native infrastructure</div>
                     <div className="text-sm text-content-secondary">
-                      With 94 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
+                      With 98 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
                     </div>
                   </div>
                 </div>
@@ -1416,7 +1416,7 @@ npm run build`} />
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Available Tools</h3>
               <p className="text-content-secondary text-sm leading-relaxed mb-4">
-                The MCP server exposes 94 tools organized by category. Agents discover these automatically.
+                The MCP server exposes 98 tools organized by category. Agents discover these automatically.
               </p>
 
               <div className="overflow-x-auto mb-8">
@@ -1449,6 +1449,7 @@ npm run build`} />
                       ['Project Folders', 'list, create, update, delete'],
                       ['Preview Environments', 'list'],
                       ['Support Tickets', 'list, create, get, reply'],
+                      ['Ops Tickets', 'list all, get (with internal notes), update status, reply as ops'],
                       ['Billing', 'get overview'],
                       ['Registered Domains', 'list, register, get, delete'],
                       ['DNS Records', 'list, create, update, delete'],

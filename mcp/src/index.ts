@@ -1100,6 +1100,68 @@ server.tool(
 );
 
 // ════════════════════════════════════════════════════════════════════════
+//  OPS: SUPPORT TICKETS (admin/ops role required)
+// ════════════════════════════════════════════════════════════════════════
+
+server.tool(
+  "list_ops_tickets",
+  "List all support tickets across all users (ops/admin). Filter by status or search by subject/email/workspace.",
+  {
+    status: z.enum(["open", "pending", "solved", "closed"]).optional().describe("Filter by ticket status"),
+    query: z.string().optional().describe("Search by subject, email, or workspace name"),
+    limit: z.number().optional().describe("Max results (default 50, max 200)"),
+    offset: z.number().optional().describe("Pagination offset"),
+  },
+  async ({ status, query, limit, offset }) => {
+    try { return text(await client.listOpsTickets({ status, query, limit, offset })); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_ops_ticket",
+  "Get full ticket details including all messages and internal notes (ops/admin). Shows creator email, workspace name, and internal messages that customers cannot see.",
+  { ticket_id: z.string().describe("Ticket ID") },
+  async ({ ticket_id }) => {
+    try { return text(await client.getOpsTicket(ticket_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "update_support_ticket_status",
+  "Update a support ticket's status, priority, or assignment (ops/admin). Use this to close, solve, or triage tickets.",
+  {
+    ticket_id: z.string().describe("Ticket ID"),
+    status: z.enum(["open", "pending", "solved", "closed"]).optional().describe("New status"),
+    priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("New priority"),
+    assigned_to: z.string().optional().describe("User ID to assign the ticket to"),
+  },
+  async ({ ticket_id, status, priority, assigned_to }) => {
+    const data: Record<string, string> = {};
+    if (status) data.status = status;
+    if (priority) data.priority = priority;
+    if (assigned_to) data.assigned_to = assigned_to;
+    try { return text(await client.updateOpsTicket(ticket_id, data)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "reply_to_ticket_as_ops",
+  "Reply to a support ticket as ops/admin. Can post public replies visible to the customer, or internal notes only visible to ops staff.",
+  {
+    ticket_id: z.string().describe("Ticket ID"),
+    message: z.string().describe("Reply message body"),
+    is_internal: z.boolean().optional().describe("If true, the message is an internal note not visible to the customer (default: false)"),
+  },
+  async ({ ticket_id, message, is_internal }) => {
+    try { return text(await client.addOpsTicketMessage(ticket_id, message, is_internal ?? false)); }
+    catch (e) { return err(e); }
+  },
+);
+
+// ════════════════════════════════════════════════════════════════════════
 //  BILLING
 // ════════════════════════════════════════════════════════════════════════
 

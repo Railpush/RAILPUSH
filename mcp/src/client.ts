@@ -425,6 +425,30 @@ export class RailPushClient {
     return this.request("POST", `/support/tickets/${ticketId}/messages`, { message });
   }
 
+  // ── Ops: Support Tickets (admin/ops role required) ─────────────────
+
+  async listOpsTickets(params?: { status?: string; query?: string; limit?: number; offset?: number }) {
+    const qs = new URLSearchParams();
+    if (params?.status) qs.set("status", params.status);
+    if (params?.query) qs.set("query", params.query);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    if (params?.offset) qs.set("offset", String(params.offset));
+    const q = qs.toString();
+    return this.request("GET", `/ops/tickets${q ? `?${q}` : ""}`);
+  }
+
+  async getOpsTicket(id: string) {
+    return this.request("GET", `/ops/tickets/${id}`);
+  }
+
+  async updateOpsTicket(id: string, data: { status?: string; priority?: string; assigned_to?: string }) {
+    return this.request("PATCH", `/ops/tickets/${id}`, data);
+  }
+
+  async addOpsTicketMessage(ticketId: string, message: string, isInternal = false) {
+    return this.request("POST", `/ops/tickets/${ticketId}/messages`, { message, is_internal: isInternal });
+  }
+
   // ── Billing ─────────────────────────────────────────────────────────
 
   async getBillingOverview() {
