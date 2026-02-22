@@ -73,7 +73,8 @@ func (h *DomainHandler) AddCustomDomain(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var req struct {
-		Domain string `json:"domain"`
+		Domain         string `json:"domain"`
+		RedirectTarget string `json:"redirect_target"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Domain == "" {
 		utils.RespondError(w, http.StatusBadRequest, "domain is required")
@@ -87,6 +88,18 @@ func (h *DomainHandler) AddCustomDomain(w http.ResponseWriter, r *http.Request) 
 	}
 	if !isValidHostname(domain) {
 		utils.RespondError(w, http.StatusBadRequest, "invalid domain")
+		return
+	}
+
+	redirectTarget := strings.ToLower(strings.TrimSpace(req.RedirectTarget))
+	redirectTarget = strings.TrimSuffix(redirectTarget, ".")
+	if redirectTarget != "" && !isValidHostname(redirectTarget) {
+		utils.RespondError(w, http.StatusBadRequest, "invalid redirect_target domain")
+		return
+	}
+	// Prevent self-redirect.
+	if redirectTarget == domain {
+		utils.RespondError(w, http.StatusBadRequest, "redirect_target cannot be the same as the domain")
 		return
 	}
 
@@ -109,7 +122,7 @@ func (h *DomainHandler) AddCustomDomain(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	d := &models.CustomDomain{ServiceID: serviceID, Domain: domain}
+	d := &models.CustomDomain{ServiceID: serviceID, Domain: domain, RedirectTarget: redirectTarget}
 	if err := models.CreateCustomDomain(d); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to add domain: "+err.Error())
 		return
@@ -120,16 +133,33 @@ func (h *DomainHandler) AddCustomDomain(w http.ResponseWriter, r *http.Request) 
 
 	if h.Config.Kubernetes.Enabled {
 		if kd, err := h.Worker.GetKubeDeployer(); err == nil && kd != nil {
-			if _, err := kd.UpsertCustomDomainIngress(svc, domain); err != nil {
-				_ = models.SetCustomDomainStatus(serviceID, domain, false, false)
-				services.Audit(svc.WorkspaceID, userID, "domain.custom_added", "custom_domain", d.ID, map[string]interface{}{
-					"domain":          domain,
-					"tls_provisioned": false,
-					"verified":        false,
-					"ingress_error":   err.Error(),
-				})
-				utils.RespondJSON(w, http.StatusCreated, d)
-				return
+			if redirectTarget != "" {
+				// Redirect domain: create ingress with redirect annotation.
+				if _, err := kd.UpsertCustomDomainRedirectIngress(svc, domain, redirectTarget); err != nil {
+					_ = models.SetCustomDomainStatus(serviceID, domain, false, false)
+					services.Audit(svc.WorkspaceID, userID, "domain.custom_added", "custom_domain", d.ID, map[string]interface{}{
+						"domain":          domain,
+						"redirect_target": redirectTarget,
+						"tls_provisioned": false,
+						"verified":        false,
+						"ingress_error":   err.Error(),
+					})
+					utils.RespondJSON(w, http.StatusCreated, d)
+					return
+				}
+			} else {
+				// Normal domain: create standard proxy ingress.
+				if _, err := kd.UpsertCustomDomainIngress(svc, domain); err != nil {
+					_ = models.SetCustomDomainStatus(serviceID, domain, false, false)
+					services.Audit(svc.WorkspaceID, userID, "domain.custom_added", "custom_domain", d.ID, map[string]interface{}{
+						"domain":          domain,
+						"tls_provisioned": false,
+						"verified":        false,
+						"ingress_error":   err.Error(),
+					})
+					utils.RespondJSON(w, http.StatusCreated, d)
+					return
+				}
 			}
 			if ready, err := kd.IsCustomDomainTLSReady(serviceID, domain); err == nil && ready {
 				tlsProvisioned = true
@@ -173,6 +203,7 @@ func (h *DomainHandler) AddCustomDomain(w http.ResponseWriter, r *http.Request) 
 
 	services.Audit(svc.WorkspaceID, userID, "domain.custom_added", "custom_domain", d.ID, map[string]interface{}{
 		"domain":          domain,
+		"redirect_target": redirectTarget,
 		"tls_provisioned": tlsProvisioned,
 		"verified":        verified,
 	})

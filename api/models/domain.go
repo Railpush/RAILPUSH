@@ -8,21 +8,25 @@ import (
 )
 
 type CustomDomain struct {
-	ID             string    `json:"id"`
-	ServiceID      string    `json:"service_id"`
-	Domain         string    `json:"domain"`
-	Verified       bool      `json:"verified"`
-	TLSProvisioned bool      `json:"tls_provisioned"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID              string    `json:"id"`
+	ServiceID       string    `json:"service_id"`
+	Domain          string    `json:"domain"`
+	Verified        bool      `json:"verified"`
+	TLSProvisioned  bool      `json:"tls_provisioned"`
+	RedirectTarget  string    `json:"redirect_target,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 func CreateCustomDomain(d *CustomDomain) error {
-	return database.DB.QueryRow("INSERT INTO custom_domains (service_id, domain) VALUES ($1,$2) RETURNING id, created_at",
-		d.ServiceID, d.Domain).Scan(&d.ID, &d.CreatedAt)
+	return database.DB.QueryRow(
+		"INSERT INTO custom_domains (service_id, domain, redirect_target) VALUES ($1,$2,$3) RETURNING id, created_at",
+		d.ServiceID, d.Domain, d.RedirectTarget).Scan(&d.ID, &d.CreatedAt)
 }
 
 func ListCustomDomains(serviceID string) ([]CustomDomain, error) {
-	rows, err := database.DB.Query("SELECT id, service_id, domain, verified, tls_provisioned, created_at FROM custom_domains WHERE service_id=$1", serviceID)
+	rows, err := database.DB.Query(
+		"SELECT id, service_id, domain, verified, tls_provisioned, COALESCE(redirect_target,''), created_at FROM custom_domains WHERE service_id=$1",
+		serviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +34,7 @@ func ListCustomDomains(serviceID string) ([]CustomDomain, error) {
 	var domains []CustomDomain
 	for rows.Next() {
 		var d CustomDomain
-		if err := rows.Scan(&d.ID, &d.ServiceID, &d.Domain, &d.Verified, &d.TLSProvisioned, &d.CreatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.ServiceID, &d.Domain, &d.Verified, &d.TLSProvisioned, &d.RedirectTarget, &d.CreatedAt); err != nil {
 			return nil, err
 		}
 		domains = append(domains, d)
@@ -69,8 +73,10 @@ func SetCustomDomainStatus(serviceID, domain string, verified bool, provisioned 
 
 func GetCustomDomain(serviceID, domain string) (*CustomDomain, error) {
 	d := &CustomDomain{}
-	err := database.DB.QueryRow("SELECT id, service_id, domain, verified, tls_provisioned, created_at FROM custom_domains WHERE service_id=$1 AND domain=$2", serviceID, domain).Scan(
-		&d.ID, &d.ServiceID, &d.Domain, &d.Verified, &d.TLSProvisioned, &d.CreatedAt)
+	err := database.DB.QueryRow(
+		"SELECT id, service_id, domain, verified, tls_provisioned, COALESCE(redirect_target,''), created_at FROM custom_domains WHERE service_id=$1 AND domain=$2",
+		serviceID, domain).Scan(
+		&d.ID, &d.ServiceID, &d.Domain, &d.Verified, &d.TLSProvisioned, &d.RedirectTarget, &d.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -79,8 +85,10 @@ func GetCustomDomain(serviceID, domain string) (*CustomDomain, error) {
 
 func GetCustomDomainByDomain(domain string) (*CustomDomain, error) {
 	d := &CustomDomain{}
-	err := database.DB.QueryRow("SELECT id, service_id, domain, verified, tls_provisioned, created_at FROM custom_domains WHERE lower(domain)=lower($1) LIMIT 1", domain).Scan(
-		&d.ID, &d.ServiceID, &d.Domain, &d.Verified, &d.TLSProvisioned, &d.CreatedAt)
+	err := database.DB.QueryRow(
+		"SELECT id, service_id, domain, verified, tls_provisioned, COALESCE(redirect_target,''), created_at FROM custom_domains WHERE lower(domain)=lower($1) LIMIT 1",
+		domain).Scan(
+		&d.ID, &d.ServiceID, &d.Domain, &d.Verified, &d.TLSProvisioned, &d.RedirectTarget, &d.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

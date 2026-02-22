@@ -126,6 +126,7 @@ export interface CustomDomain {
   domain: string;
   verified: boolean;
   tls_provisioned: boolean;
+  redirect_target?: string;
   created_at: string;
 }
 

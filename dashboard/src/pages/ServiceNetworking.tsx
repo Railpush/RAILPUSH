@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, Trash2, CheckCircle, AlertCircle, ExternalLink, Globe2, Link } from 'lucide-react';
+import { Plus, Trash2, CheckCircle, Globe2, Link, ArrowUpDown, MoreHorizontal, Shield, ShieldCheck, Clock } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
@@ -15,36 +15,60 @@ export function ServiceNetworking() {
   const [service, setService] = useState<Service | null>(null);
   const [domainList, setDomainList] = useState<CustomDomain[]>([]);
   const [newDomain, setNewDomain] = useState('');
+  const [redirectTarget, setRedirectTarget] = useState('');
+  const [showRedirect, setShowRedirect] = useState(false);
   const [, setLoading] = useState(true);
   const [ownedDomains, setOwnedDomains] = useState<RegisteredDomain[]>([]);
   const [selectedOwnedDomain, setSelectedOwnedDomain] = useState('');
   const [linking, setLinking] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [sortAsc, setSortAsc] = useState(true);
+  const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  const [renderSubdomainEnabled, setRenderSubdomainEnabled] = useState(true);
+
+  const refreshDomains = useCallback(() => {
+    if (!serviceId) return;
+    domainsApi.list(serviceId)
+      .then(setDomainList)
+      .catch(() => {});
+  }, [serviceId]);
 
   useEffect(() => {
     if (!serviceId) return;
     servicesApi.get(serviceId)
       .then(setService)
       .catch(() => {});
-
-    domainsApi.list(serviceId)
-      .then(setDomainList)
-      .catch(() => {})
-      .finally(() => setLoading(false));
-
+    refreshDomains();
     registeredDomains.list()
       .then((d) => setOwnedDomains(d.filter((dom) => dom.status === 'active')))
       .catch(() => {});
-  }, [serviceId]);
+    setLoading(false);
+  }, [serviceId, refreshDomains]);
+
+  // Auto-refresh domain status every 15s while any domain is pending
+  useEffect(() => {
+    const hasPending = domainList.some(d => !d.verified || !d.tls_provisioned);
+    if (!hasPending) return;
+    const interval = setInterval(refreshDomains, 15000);
+    return () => clearInterval(interval);
+  }, [domainList, refreshDomains]);
 
   const addDomain = async () => {
     if (!serviceId || !newDomain.trim()) return;
+    setAdding(true);
     try {
-      const d = await domainsApi.add(serviceId, newDomain);
+      const d = await domainsApi.add(serviceId, newDomain, showRedirect ? redirectTarget || undefined : undefined);
       setDomainList([...domainList, d]);
       setNewDomain('');
+      setRedirectTarget('');
+      setShowRedirect(false);
       toast.success('Domain added');
+      // Refresh after a short delay so cert-manager status can update
+      setTimeout(refreshDomains, 3000);
     } catch {
       toast.error('Failed to add domain');
+    } finally {
+      setAdding(false);
     }
   };
 
@@ -53,6 +77,7 @@ export function ServiceNetworking() {
     try {
       await domainsApi.remove(serviceId, domain);
       setDomainList(domainList.filter((d) => d.domain !== domain));
+      setMenuOpen(null);
       toast.success('Domain removed');
     } catch {
       toast.error('Failed to remove domain');
@@ -83,33 +108,204 @@ export function ServiceNetworking() {
   const linkedNames = new Set(domainList.map((d) => d.domain));
   const availableToLink = ownedDomains.filter((d) => !linkedNames.has(d.domain_name));
 
+  // Sort domains
+  const sortedDomains = [...domainList].sort((a, b) => {
+    const cmp = a.domain.localeCompare(b.domain);
+    return sortAsc ? cmp : -cmp;
+  });
+
   return (
     <div>
       <h1 className="text-2xl font-semibold text-content-primary mb-6">Networking</h1>
 
-      {/* Default URL */}
+      {/* Custom Domains — Render-style table */}
       <div className="mb-8">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-content-tertiary mb-3">
-          Default URL
-        </h2>
-        <Card>
-          {defaultUrl ? (
-            <>
-              <div className="flex items-center justify-between gap-2">
-                <a href={defaultUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-brand hover:text-brand-hover transition-colors flex items-center gap-1 break-all">
-                  {defaultUrl}
-                  <ExternalLink className="w-3.5 h-3.5 shrink-0" />
-                </a>
-                <CopyButton text={defaultUrl} />
-              </div>
-              <p className="text-xs text-content-tertiary mt-2">
-                This URL is generated from your service name and will auto-issue TLS when routed through your deploy domain.
-              </p>
-            </>
-          ) : (
-            <p className="text-sm text-content-secondary">
-              Your working URL will appear after this service completes its first deploy.
+        <Card className="!p-0 overflow-hidden">
+          <div className="px-6 pt-6 pb-4">
+            <h2 className="text-lg font-semibold text-content-primary">Custom Domains</h2>
+            <p className="text-sm text-content-secondary mt-1">
+              You can point <a href="#" className="text-brand hover:text-brand-hover underline">custom domains</a> you own to this service.
             </p>
+          </div>
+
+          {sortedDomains.length > 0 && (
+            <div className="border-t border-border-subtle">
+              {/* Table header */}
+              <div className="grid grid-cols-[1fr_160px_160px_48px] px-6 py-3 border-b border-border-subtle">
+                <button
+                  className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-content-tertiary hover:text-content-secondary transition-colors"
+                  onClick={() => setSortAsc(!sortAsc)}
+                >
+                  Name
+                  <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-surface-tertiary text-[10px] font-bold">
+                    {domainList.length}
+                  </span>
+                  <ArrowUpDown className="w-3 h-3" />
+                </button>
+                <div className="text-xs font-semibold uppercase tracking-wider text-content-tertiary">
+                  Verified Status
+                </div>
+                <div className="text-xs font-semibold uppercase tracking-wider text-content-tertiary">
+                  Certificate Status
+                </div>
+                <div />
+              </div>
+
+              {/* Table rows */}
+              {sortedDomains.map((d) => (
+                <div
+                  key={d.id}
+                  className="grid grid-cols-[1fr_160px_160px_48px] items-center px-6 py-3.5 border-b border-border-subtle last:border-b-0 hover:bg-surface-secondary/50 transition-colors"
+                >
+                  {/* Domain name + redirect badge */}
+                  <div className="flex items-center gap-2 min-w-0">
+                    <a
+                      href={`https://${d.domain}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm font-medium text-brand hover:text-brand-hover transition-colors truncate"
+                    >
+                      {d.domain}
+                    </a>
+                    {d.redirect_target && (
+                      <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-md bg-surface-tertiary text-[11px] text-content-secondary font-medium">
+                        redirects to {d.redirect_target}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Verified status */}
+                  <div>
+                    {d.verified ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-status-success-bg text-status-success text-xs font-medium">
+                        <CheckCircle className="w-3.5 h-3.5" />
+                        Verified
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-status-warning-bg text-status-warning text-xs font-medium">
+                        <Clock className="w-3.5 h-3.5" />
+                        Pending
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Certificate status */}
+                  <div>
+                    {d.tls_provisioned ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-status-success-bg text-status-success text-xs font-medium">
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        Certificate Issued
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-status-warning-bg text-status-warning text-xs font-medium">
+                        <Shield className="w-3.5 h-3.5" />
+                        Provisioning
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Actions menu */}
+                  <div className="relative flex justify-end">
+                    <button
+                      onClick={() => setMenuOpen(menuOpen === d.id ? null : d.id)}
+                      className="p-1.5 rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary transition-colors"
+                    >
+                      <MoreHorizontal className="w-4 h-4" />
+                    </button>
+                    {menuOpen === d.id && (
+                      <>
+                        <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(null)} />
+                        <div className="absolute right-0 top-full mt-1 z-20 w-44 bg-surface-primary border border-border-default rounded-lg shadow-xl py-1">
+                          <button
+                            onClick={() => removeDomain(d.domain)}
+                            className="w-full text-left px-3 py-2 text-sm text-status-error hover:bg-status-error-bg transition-colors flex items-center gap-2"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Remove Domain
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add custom domain form */}
+          <div className={`px-6 py-4 ${sortedDomains.length > 0 ? 'border-t border-border-subtle' : ''}`}>
+            <div className="flex items-center gap-2">
+              <div className="flex-1">
+                <Input
+                  placeholder="example.com"
+                  value={newDomain}
+                  onChange={(e) => setNewDomain(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addDomain()}
+                />
+              </div>
+              {showRedirect && (
+                <div className="flex-1">
+                  <Input
+                    placeholder="Redirect to (e.g. www.example.com)"
+                    value={redirectTarget}
+                    onChange={(e) => setRedirectTarget(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && addDomain()}
+                  />
+                </div>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => { setShowRedirect(!showRedirect); setRedirectTarget(''); }}
+                className="text-xs shrink-0"
+              >
+                {showRedirect ? 'Cancel Redirect' : 'Add as Redirect'}
+              </Button>
+              <Button onClick={addDomain} disabled={!newDomain.trim()} loading={adding} className="shrink-0">
+                <Plus className="w-4 h-4" />
+                Add Custom Domain
+              </Button>
+            </div>
+            {showRedirect && (
+              <p className="text-xs text-content-tertiary mt-2">
+                The domain will 301-redirect all traffic to the target domain. Useful for redirecting apex to www (or vice versa).
+              </p>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      {/* Render Subdomain toggle */}
+      <div className="mb-8">
+        <Card>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-base font-semibold text-content-primary">Render Subdomain</h3>
+              <p className="text-sm text-content-secondary mt-1">
+                If enabled, your service remains reachable at its <code className="text-xs font-mono bg-surface-tertiary px-1.5 py-0.5 rounded">onrender.com</code> subdomain in addition to all custom domains. Disable to serve exclusively from custom domains.
+              </p>
+            </div>
+            <div className="flex items-center gap-3 shrink-0">
+              <button
+                onClick={() => setRenderSubdomainEnabled(!renderSubdomainEnabled)}
+                className={`relative w-11 h-6 rounded-full transition-colors ${renderSubdomainEnabled ? 'bg-brand' : 'bg-surface-tertiary'}`}
+              >
+                <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${renderSubdomainEnabled ? 'left-[22px]' : 'left-0.5'}`} />
+              </button>
+              <span className="text-sm font-medium text-content-primary">
+                {renderSubdomainEnabled ? 'Enabled' : 'Disabled'}
+              </span>
+            </div>
+          </div>
+          {renderSubdomainEnabled && defaultUrl && (
+            <div className="mt-3 pt-3 border-t border-border-subtle">
+              <p className="text-sm text-content-secondary">
+                Your service <strong>is</strong> reachable at{' '}
+                <a href={defaultUrl} target="_blank" rel="noopener noreferrer" className="text-brand hover:text-brand-hover">
+                  {defaultUrl}
+                </a>.
+              </p>
+            </div>
           )}
         </Card>
       </div>
@@ -147,57 +343,30 @@ export function ServiceNetworking() {
         </div>
       )}
 
-      {/* Custom Domains */}
+      {/* DNS Instructions */}
       <div className="mb-8">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-content-tertiary mb-3">
-          Custom Domains
-        </h2>
-
-        {domainList.length > 0 && (
-          <div className="bg-surface-secondary border border-border-default rounded-lg overflow-hidden mb-4">
-            {domainList.map((d) => (
-              <div key={d.id} className="flex items-center justify-between px-4 py-3 border-b border-border-subtle last:border-0">
-                <div className="flex items-center gap-3">
-                  {d.verified ? (
-                    <CheckCircle className="w-4 h-4 text-status-success" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 text-status-warning" />
-                  )}
-                  <div>
-                    <a href={`https://${d.domain}`} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-content-primary hover:text-brand transition-colors">
-                      {d.domain}
-                    </a>
-                    <div className="text-xs text-content-tertiary mt-0.5">
-                      {d.verified ? 'Verified' : 'Pending verification'} &middot;
-                      TLS: {d.tls_provisioned ? 'Active' : 'Provisioning'}
-                    </div>
-                  </div>
-                </div>
-                <button
-                  onClick={() => removeDomain(d.domain)}
-                  className="p-1.5 rounded-md text-content-tertiary hover:text-status-error hover:bg-status-error-bg transition-colors"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
         <Card>
+          <h3 className="text-sm font-semibold text-content-primary mb-2">DNS Configuration</h3>
           <p className="text-sm text-content-secondary mb-3">
-            Add a custom domain and point a CNAME record to <code className="text-xs font-mono bg-surface-tertiary px-1.5 py-0.5 rounded">{defaultHost || 'your-service-domain'}</code>
+            Point your domain's DNS to this service using one of the following methods:
           </p>
-          <div className="flex items-center gap-2">
-            <Input
-              placeholder="example.com"
-              value={newDomain}
-              onChange={(e) => setNewDomain(e.target.value)}
-            />
-            <Button onClick={addDomain} disabled={!newDomain.trim()}>
-              <Plus className="w-4 h-4" />
-              Add Domain
-            </Button>
+          <div className="space-y-2 text-sm">
+            <div className="flex items-start gap-3 bg-surface-tertiary rounded-lg px-4 py-3">
+              <span className="text-xs font-semibold text-content-tertiary uppercase mt-0.5 w-14 shrink-0">CNAME</span>
+              <div className="flex-1 min-w-0">
+                <code className="text-xs font-mono text-brand break-all">{defaultHost || 'your-service.apps.railpush.com'}</code>
+                <p className="text-xs text-content-tertiary mt-1">Recommended for subdomains (e.g. www, app, api)</p>
+              </div>
+              {defaultHost && <CopyButton text={defaultHost} />}
+            </div>
+            <div className="flex items-start gap-3 bg-surface-tertiary rounded-lg px-4 py-3">
+              <span className="text-xs font-semibold text-content-tertiary uppercase mt-0.5 w-14 shrink-0">A Record</span>
+              <div className="flex-1 min-w-0">
+                <code className="text-xs font-mono text-brand">65.21.134.49</code>
+                <p className="text-xs text-content-tertiary mt-1">Required for apex/root domains (e.g. example.com)</p>
+              </div>
+              <CopyButton text="65.21.134.49" />
+            </div>
           </div>
         </Card>
       </div>

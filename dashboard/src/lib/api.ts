@@ -242,8 +242,11 @@ export const github = {
 // Custom Domains
 export const domains = {
   list: (serviceId: string) => request<CustomDomain[]>(`/services/${serviceId}/custom-domains`),
-  add: (serviceId: string, domain: string) =>
-    request<CustomDomain>(`/services/${serviceId}/custom-domains`, { method: 'POST', body: JSON.stringify({ domain }) }),
+  add: (serviceId: string, domain: string, redirectTarget?: string) =>
+    request<CustomDomain>(`/services/${serviceId}/custom-domains`, {
+      method: 'POST',
+      body: JSON.stringify({ domain, ...(redirectTarget ? { redirect_target: redirectTarget } : {}) }),
+    }),
   remove: (serviceId: string, domain: string) =>
     request<void>(`/services/${serviceId}/custom-domains/${domain}`, { method: 'DELETE' }),
 };

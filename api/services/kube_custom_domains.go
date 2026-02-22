@@ -166,6 +166,113 @@ func (k *KubeDeployer) UpsertCustomDomainIngress(svc *models.Service, domain str
 	return secretName, nil
 }
 
+// UpsertCustomDomainRedirectIngress creates an Ingress that 301-redirects all
+// traffic from `domain` to `redirectTarget` (e.g. apex -> www).
+// It still uses cert-manager for TLS on the source domain.
+func (k *KubeDeployer) UpsertCustomDomainRedirectIngress(svc *models.Service, domain, redirectTarget string) (string, error) {
+	if k == nil || k.Client == nil || k.Config == nil {
+		return "", fmt.Errorf("kube deployer not initialized")
+	}
+	if svc == nil {
+		return "", fmt.Errorf("missing service")
+	}
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	redirectTarget = strings.ToLower(strings.TrimSpace(redirectTarget))
+	if domain == "" || redirectTarget == "" {
+		return "", fmt.Errorf("missing domain or redirect target")
+	}
+
+	ns := k.namespace()
+	svcName := kubeServiceName(svc.ID)
+	ingName := kubeCustomDomainIngressName(svc.ID, domain)
+	secretName := kubeCustomDomainTLSSecretName(svc.ID, domain)
+	labels := kubeServiceLabels(svc)
+	labels["app.kubernetes.io/component"] = "custom-domain"
+	labels["railpush.com/custom-domain-hash"] = kubeCustomDomainHash(domain)
+
+	port := int32(svc.Port)
+	if port <= 0 {
+		port = 10000
+	}
+	issuer := k.customDomainIssuer()
+	ingClass := strings.TrimSpace(k.Config.Kubernetes.IngressClass)
+	if ingClass == "" {
+		ingClass = "nginx"
+	}
+
+	ing := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ingName,
+			Namespace: ns,
+			Labels:    labels,
+			Annotations: map[string]string{
+				// 301 permanent redirect to the target domain.
+				"nginx.ingress.kubernetes.io/permanent-redirect":      "https://" + redirectTarget + "/$1",
+				"nginx.ingress.kubernetes.io/permanent-redirect-code": "301",
+				"nginx.ingress.kubernetes.io/use-regex":               "true",
+
+				// cert-manager for TLS on the source domain.
+				"cert-manager.io/cluster-issuer":            issuer,
+				"acme.cert-manager.io/http01-ingress-class": ingClass,
+
+				// Metadata.
+				"railpush.com/custom-domain":  domain,
+				"railpush.com/redirect-target": redirectTarget,
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: &ingClass,
+			TLS: []networkingv1.IngressTLS{
+				{
+					Hosts:      []string{domain},
+					SecretName: secretName,
+				},
+			},
+			Rules: []networkingv1.IngressRule{
+				{
+					Host: domain,
+					IngressRuleValue: networkingv1.IngressRuleValue{
+						HTTP: &networkingv1.HTTPIngressRuleValue{
+							Paths: []networkingv1.HTTPIngressPath{
+								{
+									Path:     "/(.*)",
+									PathType: func() *networkingv1.PathType { pt := networkingv1.PathTypeImplementationSpecific; return &pt }(),
+									Backend: networkingv1.IngressBackend{
+										Service: &networkingv1.IngressServiceBackend{
+											Name: svcName,
+											Port: networkingv1.ServiceBackendPort{Number: port},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if existing, err := k.Client.NetworkingV1().Ingresses(ns).Get(ctx, ingName, metav1.GetOptions{}); err == nil && existing != nil {
+		ing.ResourceVersion = existing.ResourceVersion
+		if _, err := k.Client.NetworkingV1().Ingresses(ns).Update(ctx, ing, metav1.UpdateOptions{}); err != nil {
+			return secretName, fmt.Errorf("update redirect ingress: %w", err)
+		}
+		return secretName, nil
+	} else if apierrors.IsNotFound(err) {
+		if _, err := k.Client.NetworkingV1().Ingresses(ns).Create(ctx, ing, metav1.CreateOptions{}); err != nil {
+			return secretName, fmt.Errorf("create redirect ingress: %w", err)
+		}
+		return secretName, nil
+	} else if err != nil {
+		return secretName, fmt.Errorf("get redirect ingress: %w", err)
+	}
+
+	return secretName, nil
+}
+
 func (k *KubeDeployer) DeleteCustomDomainIngress(serviceID string, domain string) error {
 	if k == nil || k.Client == nil {
 		return fmt.Errorf("kube deployer not initialized")
@@ -232,8 +339,14 @@ func (k *KubeDeployer) ReconcileCustomDomainIngresses(svc *models.Service) error
 		return err
 	}
 	for _, d := range domains {
-		if _, err := k.UpsertCustomDomainIngress(svc, d.Domain); err != nil {
-			return err
+		if d.RedirectTarget != "" {
+			if _, err := k.UpsertCustomDomainRedirectIngress(svc, d.Domain, d.RedirectTarget); err != nil {
+				return err
+			}
+		} else {
+			if _, err := k.UpsertCustomDomainIngress(svc, d.Domain); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -403,4 +403,7 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 	// Deduplicate any pre-existing duplicates first (keep the newest row).
 	`DELETE FROM env_vars WHERE id NOT IN (SELECT DISTINCT ON (owner_type, owner_id, key) id FROM env_vars ORDER BY owner_type, owner_id, key, created_at DESC)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_env_vars_owner_key ON env_vars(owner_type, owner_id, key)`,
+
+	// Custom domain redirects: e.g. apex domain redirects to www subdomain.
+	`ALTER TABLE custom_domains ADD COLUMN IF NOT EXISTS redirect_target VARCHAR(255) DEFAULT ''`,
 }
