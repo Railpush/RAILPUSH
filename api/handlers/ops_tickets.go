@@ -41,6 +41,7 @@ type opsTicketItem struct {
 	CreatedByEmail      string     `json:"created_by_email"`
 	CreatedByUsername   string     `json:"created_by_username"`
 	Subject             string     `json:"subject"`
+	Category            string     `json:"category"`
 	Status              string     `json:"status"`
 	Priority            string     `json:"priority"`
 	AssignedTo          string     `json:"assigned_to"`
@@ -68,22 +69,24 @@ func (h *OpsTicketsHandler) ListTickets(w http.ResponseWriter, r *http.Request) 
 	}
 
 	status := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
+	category := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("category")))
 	q := strings.TrimSpace(r.URL.Query().Get("query"))
 	like := "%" + q + "%"
 
 	rows, err := database.DB.Query(
 		`SELECT t.id::text, COALESCE(t.workspace_id::text,''), COALESCE(w.name,''), COALESCE(t.created_by::text,''),
 		        COALESCE(u.email,''), COALESCE(u.username,''), COALESCE(t.subject,''),
-		        COALESCE(t.status,'open'), COALESCE(t.priority,'normal'), COALESCE(t.assigned_to::text,''),
+		        COALESCE(t.category,'support'), COALESCE(t.status,'open'), COALESCE(t.priority,'normal'), COALESCE(t.assigned_to::text,''),
 		        t.last_customer_reply_at, t.last_ops_reply_at, t.created_at, t.updated_at
 		   FROM support_tickets t
 		   LEFT JOIN workspaces w ON w.id = t.workspace_id
 		   LEFT JOIN users u ON u.id = t.created_by
 		  WHERE ($1 = '' OR COALESCE(t.status,'') = $1)
 		    AND ($2 = '' OR COALESCE(t.subject,'') ILIKE $3 OR COALESCE(u.email,'') ILIKE $3 OR COALESCE(w.name,'') ILIKE $3)
+		    AND ($6 = '' OR COALESCE(t.category,'support') = $6)
 		  ORDER BY t.updated_at DESC, t.created_at DESC
 		  LIMIT $4 OFFSET $5`,
-		status, q, like, limit, offset,
+		status, q, like, limit, offset, category,
 	)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to list tickets")
@@ -98,7 +101,7 @@ func (h *OpsTicketsHandler) ListTickets(w http.ResponseWriter, r *http.Request) 
 		if err := rows.Scan(
 			&it.ID, &it.WorkspaceID, &it.WorkspaceName, &it.CreatedBy,
 			&it.CreatedByEmail, &it.CreatedByUsername, &it.Subject,
-			&it.Status, &it.Priority, &it.AssignedTo,
+			&it.Category, &it.Status, &it.Priority, &it.AssignedTo,
 			&lastCust, &lastOps, &it.CreatedAt, &it.UpdatedAt,
 		); err != nil {
 			continue
@@ -166,6 +169,7 @@ func (h *OpsTicketsHandler) GetTicket(w http.ResponseWriter, r *http.Request) {
 			"created_by_email":     creatorEmail,
 			"created_by_username":  creatorUsername,
 			"subject":              t.Subject,
+			"category":             t.Category,
 			"status":               t.Status,
 			"priority":             t.Priority,
 			"assigned_to":          t.AssignedTo,
@@ -187,13 +191,19 @@ func (h *OpsTicketsHandler) UpdateTicket(w http.ResponseWriter, r *http.Request)
 		Status     string `json:"status"`
 		Priority   string `json:"priority"`
 		AssignedTo string `json:"assigned_to"`
+		Category   string `json:"category"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	if err := models.UpdateSupportTicketOpsFields(id, strings.ToLower(strings.TrimSpace(req.Status)), strings.ToLower(strings.TrimSpace(req.Priority)), strings.TrimSpace(req.AssignedTo)); err != nil {
+	cat := strings.ToLower(strings.TrimSpace(req.Category))
+	if cat != "" {
+		cat = models.NormalizeSupportTicketCategory(cat)
+	}
+
+	if err := models.UpdateSupportTicketOpsFields(id, strings.ToLower(strings.TrimSpace(req.Status)), strings.ToLower(strings.TrimSpace(req.Priority)), strings.TrimSpace(req.AssignedTo), cat); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to update ticket")
 		return
 	}

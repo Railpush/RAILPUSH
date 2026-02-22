@@ -293,17 +293,18 @@ export const ops = {
   getBillingCustomer: (id: string) => request<OpsBillingCustomerDetail>(`/ops/billing/customers/${encodeURIComponent(id)}`),
 
   // Tickets
-  listTickets: (params?: { query?: string; status?: string; limit?: number; offset?: number }) => {
+  listTickets: (params?: { query?: string; status?: string; category?: string; limit?: number; offset?: number }) => {
     const qs = new URLSearchParams();
     if (params?.query) qs.set('query', params.query);
     if (params?.status) qs.set('status', params.status);
+    if (params?.category) qs.set('category', params.category);
     if (params?.limit) qs.set('limit', String(params.limit));
     if (params?.offset) qs.set('offset', String(params.offset));
     const suffix = qs.toString() ? `?${qs}` : '';
     return request<OpsTicketItem[]>(`/ops/tickets${suffix}`);
   },
   getTicket: (id: string) => request<OpsTicketDetail>(`/ops/tickets/${encodeURIComponent(id)}`),
-  updateTicket: (id: string, data: { status?: string; priority?: string; assigned_to?: string }) =>
+  updateTicket: (id: string, data: { status?: string; priority?: string; assigned_to?: string; category?: string }) =>
     request<{ status: string }>(`/ops/tickets/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) }),
   createTicketMessage: (id: string, data: { message: string; is_internal?: boolean }) =>
     request<SupportTicketMessage>(`/ops/tickets/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify(data) }),
@@ -449,7 +450,7 @@ export const support = {
     const suffix = qs.toString() ? `?${qs}` : '';
     return request<SupportTicket[]>(`/support/tickets${suffix}`);
   },
-  createTicket: (data: { subject: string; message: string; priority?: string }) =>
+  createTicket: (data: { subject: string; message: string; priority?: string; category?: string }) =>
     request<{ ticket: SupportTicket; messages: SupportTicketMessage[] }>('/support/tickets', { method: 'POST', body: JSON.stringify(data) }),
   getTicket: (id: string) => request<{ ticket: SupportTicket; messages: SupportTicketMessage[] }>(`/support/tickets/${encodeURIComponent(id)}`),
   createMessage: (id: string, data: { message: string }) =>

@@ -23,6 +23,12 @@ const priorityOptions = [
   { value: 'urgent', label: 'Urgent' },
 ];
 
+const categoryOptions = [
+  { value: 'support', label: 'Support' },
+  { value: 'feature_request', label: 'Feature Request' },
+  { value: 'bug_report', label: 'Bug Report' },
+];
+
 export function OpsTicketDetailPage() {
   const navigate = useNavigate();
   const { ticketId } = useParams<{ ticketId: string }>();
@@ -35,6 +41,7 @@ export function OpsTicketDetailPage() {
 
   const [status, setStatus] = useState('open');
   const [priority, setPriority] = useState('normal');
+  const [ticketCategory, setTicketCategory] = useState('support');
   const [assignedTo, setAssignedTo] = useState('');
 
   const [message, setMessage] = useState('');
@@ -53,6 +60,7 @@ export function OpsTicketDetailPage() {
         setData(d);
         setStatus(d.ticket.status || 'open');
         setPriority(d.ticket.priority || 'normal');
+        setTicketCategory(d.ticket.category || 'support');
         setAssignedTo(d.ticket.assigned_to || '');
       })
       .catch((e) => {
@@ -72,14 +80,14 @@ export function OpsTicketDetailPage() {
 
   const changed = useMemo(() => {
     if (!data) return false;
-    return (data.ticket.status || '') !== status || (data.ticket.priority || '') !== priority || (data.ticket.assigned_to || '') !== assignedTo;
-  }, [assignedTo, data, priority, status]);
+    return (data.ticket.status || '') !== status || (data.ticket.priority || '') !== priority || (data.ticket.category || 'support') !== ticketCategory || (data.ticket.assigned_to || '') !== assignedTo;
+  }, [assignedTo, data, priority, status, ticketCategory]);
 
   const save = async () => {
     if (!ticketId) return;
     setSaving(true);
     try {
-      await ops.updateTicket(ticketId, { status, priority, assigned_to: assignedTo || '' });
+      await ops.updateTicket(ticketId, { status, priority, category: ticketCategory, assigned_to: assignedTo || '' });
       load();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to update ticket');
@@ -179,6 +187,21 @@ export function OpsTicketDetailPage() {
                       className="ml-2 h-9 px-2 rounded-md bg-surface-secondary border border-border-default text-sm"
                     >
                       {priorityOptions.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="text-sm text-content-secondary">
+                    Category
+                    <select
+                      value={ticketCategory}
+                      onChange={(e) => setTicketCategory(e.target.value)}
+                      className="ml-2 h-9 px-2 rounded-md bg-surface-secondary border border-border-default text-sm"
+                    >
+                      {categoryOptions.map((o) => (
                         <option key={o.value} value={o.value}>
                           {o.label}
                         </option>

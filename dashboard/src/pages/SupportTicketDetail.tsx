@@ -5,7 +5,14 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Skeleton } from '../components/ui/Skeleton';
 import { ApiError, support } from '../lib/api';
-import type { SupportTicket, SupportTicketMessage } from '../types';
+import { cn } from '../lib/utils';
+import type { SupportTicket, SupportTicketMessage, TicketCategory } from '../types';
+
+const categoryLabels: Record<TicketCategory, string> = {
+  support: 'Support',
+  feature_request: 'Feature Request',
+  bug_report: 'Bug Report',
+};
 
 export function SupportTicketDetailPage() {
   const navigate = useNavigate();
@@ -71,7 +78,18 @@ export function SupportTicketDetailPage() {
             Back to Support
           </button>
           <h1 className="text-2xl font-semibold text-content-primary mt-2">Ticket</h1>
-          {ticket && <p className="text-sm text-content-secondary mt-1">{ticket.subject}</p>}
+          {ticket && (
+            <div className="flex items-center gap-2 mt-1">
+              <p className="text-sm text-content-secondary">{ticket.subject}</p>
+              <span className={cn('text-xs px-2 py-0.5 rounded-full border inline-flex',
+                ticket.category === 'feature_request' ? 'border-purple-400/30 bg-purple-500/10 text-purple-300' :
+                ticket.category === 'bug_report' ? 'border-red-400/30 bg-red-500/10 text-red-300' :
+                'border-border-default bg-surface-secondary text-content-secondary'
+              )}>
+                {categoryLabels[ticket.category as TicketCategory] || ticket.category || 'Support'}
+              </span>
+            </div>
+          )}
         </div>
         <Button variant="secondary" onClick={load} loading={loading}>
           <RefreshCcw className="w-4 h-4" />

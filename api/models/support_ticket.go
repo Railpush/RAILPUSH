@@ -12,6 +12,7 @@ type SupportTicket struct {
 	WorkspaceID         string     `json:"workspace_id"`
 	CreatedBy           string     `json:"created_by"`
 	Subject             string     `json:"subject"`
+	Category            string     `json:"category"`
 	Status              string     `json:"status"`
 	Priority            string     `json:"priority"`
 	AssignedTo          string     `json:"assigned_to"`
@@ -19,6 +20,16 @@ type SupportTicket struct {
 	LastOpsReplyAt      *time.Time `json:"last_ops_reply_at,omitempty"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
+}
+
+// NormalizeSupportTicketCategory validates and returns a canonical category value.
+func NormalizeSupportTicketCategory(raw string) string {
+	switch raw {
+	case "support", "feature_request", "bug_report":
+		return raw
+	default:
+		return "support"
+	}
 }
 
 type SupportTicketMessage struct {
@@ -31,11 +42,14 @@ type SupportTicketMessage struct {
 }
 
 func CreateSupportTicket(t *SupportTicket) error {
+	if t.Category == "" {
+		t.Category = "support"
+	}
 	return database.DB.QueryRow(
-		`INSERT INTO support_tickets (workspace_id, created_by, subject, status, priority, assigned_to)
-		 VALUES (NULLIF($1,'')::uuid, $2, $3, COALESCE(NULLIF($4,''), 'open'), COALESCE(NULLIF($5,''), 'normal'), NULLIF($6,'')::uuid)
+		`INSERT INTO support_tickets (workspace_id, created_by, subject, category, status, priority, assigned_to)
+		 VALUES (NULLIF($1,'')::uuid, $2, $3, COALESCE(NULLIF($4,''), 'support'), COALESCE(NULLIF($5,''), 'open'), COALESCE(NULLIF($6,''), 'normal'), NULLIF($7,'')::uuid)
 		 RETURNING id, created_at, updated_at`,
-		t.WorkspaceID, t.CreatedBy, t.Subject, t.Status, t.Priority, t.AssignedTo,
+		t.WorkspaceID, t.CreatedBy, t.Subject, t.Category, t.Status, t.Priority, t.AssignedTo,
 	).Scan(&t.ID, &t.CreatedAt, &t.UpdatedAt)
 }
 
@@ -44,12 +58,12 @@ func GetSupportTicket(id string) (*SupportTicket, error) {
 	var lastCust, lastOps sql.NullTime
 	err := database.DB.QueryRow(
 		`SELECT id::text, COALESCE(workspace_id::text,''), COALESCE(created_by::text,''), COALESCE(subject,''),
-		        COALESCE(status,'open'), COALESCE(priority,'normal'), COALESCE(assigned_to::text,''),
+		        COALESCE(category,'support'), COALESCE(status,'open'), COALESCE(priority,'normal'), COALESCE(assigned_to::text,''),
 		        last_customer_reply_at, last_ops_reply_at, created_at, updated_at
 		   FROM support_tickets
 		  WHERE id=$1`,
 		id,
-	).Scan(&t.ID, &t.WorkspaceID, &t.CreatedBy, &t.Subject, &t.Status, &t.Priority, &t.AssignedTo, &lastCust, &lastOps, &t.CreatedAt, &t.UpdatedAt)
+	).Scan(&t.ID, &t.WorkspaceID, &t.CreatedBy, &t.Subject, &t.Category, &t.Status, &t.Priority, &t.AssignedTo, &lastCust, &lastOps, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -70,7 +84,7 @@ func GetSupportTicket(id string) (*SupportTicket, error) {
 func ListSupportTicketsForUser(userID string, limit, offset int) ([]SupportTicket, error) {
 	rows, err := database.DB.Query(
 		`SELECT id::text, COALESCE(workspace_id::text,''), COALESCE(created_by::text,''), COALESCE(subject,''),
-		        COALESCE(status,'open'), COALESCE(priority,'normal'), COALESCE(assigned_to::text,''),
+		        COALESCE(category,'support'), COALESCE(status,'open'), COALESCE(priority,'normal'), COALESCE(assigned_to::text,''),
 		        last_customer_reply_at, last_ops_reply_at, created_at, updated_at
 		   FROM support_tickets
 		  WHERE created_by=$1
@@ -87,7 +101,7 @@ func ListSupportTicketsForUser(userID string, limit, offset int) ([]SupportTicke
 	for rows.Next() {
 		var t SupportTicket
 		var lastCust, lastOps sql.NullTime
-		if err := rows.Scan(&t.ID, &t.WorkspaceID, &t.CreatedBy, &t.Subject, &t.Status, &t.Priority, &t.AssignedTo, &lastCust, &lastOps, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.WorkspaceID, &t.CreatedBy, &t.Subject, &t.Category, &t.Status, &t.Priority, &t.AssignedTo, &lastCust, &lastOps, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			continue
 		}
 		if lastCust.Valid {
@@ -143,15 +157,16 @@ func ListSupportTicketMessages(ticketID string, limit int) ([]SupportTicketMessa
 	return out, nil
 }
 
-func UpdateSupportTicketOpsFields(ticketID, status, priority, assignedTo string) error {
+func UpdateSupportTicketOpsFields(ticketID, status, priority, assignedTo, category string) error {
 	_, err := database.DB.Exec(
 		`UPDATE support_tickets
 		    SET status = COALESCE(NULLIF($2,''), status),
 		        priority = COALESCE(NULLIF($3,''), priority),
 		        assigned_to = NULLIF($4,'')::uuid,
+		        category = COALESCE(NULLIF($5,''), category),
 		        updated_at = NOW()
 		  WHERE id=$1`,
-		ticketID, status, priority, assignedTo,
+		ticketID, status, priority, assignedTo, category,
 	)
 	return err
 }

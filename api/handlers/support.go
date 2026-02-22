@@ -50,6 +50,7 @@ func (h *SupportHandler) CreateTicket(w http.ResponseWriter, r *http.Request) {
 		Message    string `json:"message"`
 		WorkspaceID string `json:"workspace_id"`
 		Priority   string `json:"priority"`
+		Category   string `json:"category"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128*1024)).Decode(&req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
@@ -74,6 +75,7 @@ func (h *SupportHandler) CreateTicket(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID: workspaceID,
 		CreatedBy:   userID,
 		Subject:     subject,
+		Category:    models.NormalizeSupportTicketCategory(strings.ToLower(strings.TrimSpace(req.Category))),
 		Status:      "open",
 		Priority:    strings.ToLower(strings.TrimSpace(req.Priority)),
 	}

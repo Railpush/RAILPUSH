@@ -6,13 +6,21 @@ import { Button } from '../components/ui/Button';
 import { Skeleton } from '../components/ui/Skeleton';
 import { ApiError, ops } from '../lib/api';
 import { cn, truncate } from '../lib/utils';
-import type { OpsTicketItem } from '../types';
+import type { OpsTicketItem, TicketCategory } from '../types';
 
 type StatusFilter = 'all' | 'open' | 'pending' | 'solved' | 'closed';
+type CategoryFilter = 'all' | 'support' | 'feature_request' | 'bug_report';
+
+const categoryLabels: Record<TicketCategory, string> = {
+  support: 'Support',
+  feature_request: 'Feature Request',
+  bug_report: 'Bug Report',
+};
 
 export function OpsTicketsPage() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<StatusFilter>('open');
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all');
   const [query, setQuery] = useState('');
   const [rows, setRows] = useState<OpsTicketItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -26,7 +34,7 @@ export function OpsTicketsPage() {
     setForbidden(false);
     setError(null);
     ops
-      .listTickets({ status: status === 'all' ? '' : status, query: q, limit: 200 })
+      .listTickets({ status: status === 'all' ? '' : status, category: categoryFilter === 'all' ? '' : categoryFilter, query: q, limit: 200 })
       .then(setRows)
       .catch((e) => {
         if (e instanceof ApiError && e.status === 403) {
@@ -41,7 +49,7 @@ export function OpsTicketsPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, q]);
+  }, [status, categoryFilter, q]);
 
   return (
     <div className="space-y-6">
@@ -62,7 +70,7 @@ export function OpsTicketsPage() {
 
       <Card className="p-0 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-border-default/60">
-          <div className="flex items-center gap-2 text-sm">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
             {([
               { key: 'open', label: 'Open' },
               { key: 'pending', label: 'Pending' },
@@ -76,6 +84,26 @@ export function OpsTicketsPage() {
                 className={cn(
                   'px-3 py-1.5 rounded-full border transition-colors',
                   status === t.key
+                    ? 'bg-surface-tertiary text-content-primary border-border-default'
+                    : 'bg-surface-secondary border-border-default text-content-secondary hover:bg-surface-tertiary'
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+            <div className="w-px h-5 bg-border-default mx-1" />
+            {([
+              { key: 'all', label: 'All Types' },
+              { key: 'support', label: 'Support' },
+              { key: 'feature_request', label: 'Feature Req' },
+              { key: 'bug_report', label: 'Bug Report' },
+            ] as const).map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setCategoryFilter(t.key)}
+                className={cn(
+                  'px-3 py-1.5 rounded-full border transition-colors',
+                  categoryFilter === t.key
                     ? 'bg-surface-tertiary text-content-primary border-border-default'
                     : 'bg-surface-secondary border-border-default text-content-secondary hover:bg-surface-tertiary'
                 )}
@@ -117,8 +145,9 @@ export function OpsTicketsPage() {
         ) : (
           <div className="overflow-hidden">
             <div className="grid grid-cols-12 px-4 py-2 text-[11px] uppercase tracking-[0.12em] text-content-tertiary border-b border-border-default/60">
-              <div className="col-span-5">Ticket</div>
-              <div className="col-span-3">Customer</div>
+              <div className="col-span-4">Ticket</div>
+              <div className="col-span-2">Customer</div>
+              <div className="col-span-2">Category</div>
               <div className="col-span-2">Status</div>
               <div className="col-span-2 text-right">Updated</div>
             </div>
@@ -128,13 +157,22 @@ export function OpsTicketsPage() {
                 onClick={() => navigate(`/ops/tickets/${encodeURIComponent(t.id)}`)}
                 className="w-full text-left grid grid-cols-12 px-4 py-3 border-b border-border-subtle hover:bg-surface-tertiary/40 transition-colors"
               >
-                <div className="col-span-5 min-w-0">
+                <div className="col-span-4 min-w-0">
                   <div className="text-sm font-semibold text-content-primary truncate">{t.subject}</div>
                   <div className="text-xs text-content-tertiary truncate">{t.workspace_name || truncate(t.workspace_id, 10) || '—'} · {truncate(t.id, 10)}</div>
                 </div>
-                <div className="col-span-3 min-w-0">
+                <div className="col-span-2 min-w-0">
                   <div className="text-sm text-content-secondary truncate">{t.created_by_email || t.created_by_username || truncate(t.created_by, 10)}</div>
                   <div className="text-xs text-content-tertiary truncate">priority: {t.priority || 'normal'}</div>
+                </div>
+                <div className="col-span-2 text-sm">
+                  <span className={cn('text-xs px-2 py-0.5 rounded-full border inline-flex',
+                    t.category === 'feature_request' ? 'border-purple-400/30 bg-purple-500/10 text-purple-300' :
+                    t.category === 'bug_report' ? 'border-red-400/30 bg-red-500/10 text-red-300' :
+                    'border-border-default bg-surface-secondary text-content-secondary'
+                  )}>
+                    {categoryLabels[t.category as TicketCategory] || t.category || 'Support'}
+                  </span>
                 </div>
                 <div className="col-span-2 text-sm text-content-secondary">{t.status}</div>
                 <div className="col-span-2 text-right text-xs text-content-tertiary">

@@ -576,11 +576,14 @@ export interface OpsEmailOutboxItem {
 }
 
 // Support (customer-facing)
+export type TicketCategory = 'support' | 'feature_request' | 'bug_report';
+
 export interface SupportTicket {
   id: string;
   workspace_id: string;
   created_by: string;
   subject: string;
+  category: TicketCategory;
   status: string;
   priority: string;
   assigned_to: string;

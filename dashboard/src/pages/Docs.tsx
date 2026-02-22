@@ -1281,7 +1281,7 @@ curl https://railpush.com/api/v1/services \\
                 ]},
                 { group: 'Support', endpoints: [
                   { method: 'GET', path: '/support/tickets', desc: 'List support tickets' },
-                  { method: 'POST', path: '/support/tickets', desc: 'Create a ticket' },
+                  { method: 'POST', path: '/support/tickets', desc: 'Create a ticket (accepts category: support, feature_request, bug_report)' },
                   { method: 'GET', path: '/support/tickets/:id', desc: 'Get ticket details' },
                   { method: 'POST', path: '/support/tickets/:id/messages', desc: 'Reply to a ticket' },
                 ]},
@@ -1448,8 +1448,8 @@ npm run build`} />
 
                       ['Project Folders', 'list, create, update, delete'],
                       ['Preview Environments', 'list'],
-                      ['Support Tickets', 'list, create, get, reply'],
-                      ['Ops Tickets', 'list all, get (with internal notes), update status, reply as ops'],
+                      ['Support Tickets', 'list, create (with category: support/feature_request/bug_report), get, reply'],
+                      ['Ops Tickets', 'list all (filter by status/category), get (with internal notes), update status/category, reply as ops'],
                       ['Billing', 'get overview'],
                       ['Registered Domains', 'list, register, get, delete'],
                       ['DNS Records', 'list, create, update, delete'],

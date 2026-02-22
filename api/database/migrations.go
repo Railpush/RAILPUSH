@@ -385,6 +385,10 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 	`ALTER TABLE managed_databases ADD COLUMN IF NOT EXISTS external_port INT`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_databases_external_port ON managed_databases(external_port) WHERE external_port IS NOT NULL`,
 
+	// Support ticket category (support, feature_request, bug_report).
+	`ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'support'`,
+	`CREATE INDEX IF NOT EXISTS idx_support_tickets_category ON support_tickets(category)`,
+
 	// Nested project folders: a folder can contain sub-folders (self-referencing FK).
 	`ALTER TABLE project_folders ADD COLUMN IF NOT EXISTS parent_id UUID`,
 	`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='project_folders_parent_id_fkey') THEN ALTER TABLE project_folders ADD CONSTRAINT project_folders_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES project_folders(id) ON DELETE CASCADE; END IF; END $$`,

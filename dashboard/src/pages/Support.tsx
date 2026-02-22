@@ -6,7 +6,13 @@ import { Button } from '../components/ui/Button';
 import { Skeleton } from '../components/ui/Skeleton';
 import { ApiError, support } from '../lib/api';
 import { cn, truncate } from '../lib/utils';
-import type { SupportTicket } from '../types';
+import type { SupportTicket, TicketCategory } from '../types';
+
+const categoryLabels: Record<TicketCategory, string> = {
+  support: 'Support',
+  feature_request: 'Feature Request',
+  bug_report: 'Bug Report',
+};
 
 export function SupportPage() {
   const navigate = useNavigate();
@@ -17,6 +23,7 @@ export function SupportPage() {
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [priority, setPriority] = useState('normal');
+  const [category, setCategory] = useState<string>('support');
   const [creating, setCreating] = useState(false);
 
   const load = () => {
@@ -40,10 +47,11 @@ export function SupportPage() {
     setCreating(true);
     setError(null);
     try {
-      const created = await support.createTicket({ subject: s, message: m, priority });
+      const created = await support.createTicket({ subject: s, message: m, priority, category });
       setSubject('');
       setMessage('');
       setPriority('normal');
+      setCategory('support');
       load();
       navigate(`/support/${encodeURIComponent(created.ticket.id)}`);
     } catch (e: unknown) {
@@ -78,7 +86,7 @@ export function SupportPage() {
 
       <Card className="p-6">
         <div className="text-sm font-semibold text-content-primary">Create a ticket</div>
-        <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-3">
           <label className="block md:col-span-2">
             <div className="text-xs text-content-tertiary mb-1.5">Subject</div>
             <input
@@ -87,6 +95,18 @@ export function SupportPage() {
               className="w-full h-10 px-3 rounded-md bg-surface-secondary border border-border-default text-sm"
               placeholder="Deploy failed, billing question, domain issue..."
             />
+          </label>
+          <label className="block">
+            <div className="text-xs text-content-tertiary mb-1.5">Category</div>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full h-10 px-2 rounded-md bg-surface-secondary border border-border-default text-sm"
+            >
+              <option value="support">Support</option>
+              <option value="feature_request">Feature Request</option>
+              <option value="bug_report">Bug Report</option>
+            </select>
           </label>
           <label className="block">
             <div className="text-xs text-content-tertiary mb-1.5">Priority</div>
@@ -136,7 +156,8 @@ export function SupportPage() {
         ) : (
           <div className="overflow-hidden">
             <div className="grid grid-cols-12 px-4 py-2 text-[11px] uppercase tracking-[0.12em] text-content-tertiary border-b border-border-default/60">
-              <div className="col-span-7">Subject</div>
+              <div className="col-span-5">Subject</div>
+              <div className="col-span-2">Category</div>
               <div className="col-span-3">Status</div>
               <div className="col-span-2 text-right">Updated</div>
             </div>
@@ -146,9 +167,18 @@ export function SupportPage() {
                 onClick={() => navigate(`/support/${encodeURIComponent(t.id)}`)}
                 className="w-full text-left grid grid-cols-12 px-4 py-3 border-b border-border-subtle hover:bg-surface-tertiary/40 transition-colors"
               >
-                <div className="col-span-7 min-w-0">
+                <div className="col-span-5 min-w-0">
                   <div className="text-sm font-semibold text-content-primary truncate">{t.subject}</div>
                   <div className="text-xs text-content-tertiary font-mono">{truncate(t.id, 12)}</div>
+                </div>
+                <div className="col-span-2 text-sm">
+                  <span className={cn('text-xs px-2 py-0.5 rounded-full border inline-flex',
+                    t.category === 'feature_request' ? 'border-purple-400/30 bg-purple-500/10 text-purple-300' :
+                    t.category === 'bug_report' ? 'border-red-400/30 bg-red-500/10 text-red-300' :
+                    'border-border-default bg-surface-secondary text-content-secondary'
+                  )}>
+                    {categoryLabels[t.category as TicketCategory] || t.category || 'Support'}
+                  </span>
                 </div>
                 <div className="col-span-3 text-sm">
                   <span className={cn('text-xs px-2 py-0.5 rounded-full border inline-flex', 'border-border-default bg-surface-secondary text-content-secondary')}>

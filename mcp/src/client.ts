@@ -413,7 +413,7 @@ export class RailPushClient {
     return this.request("GET", "/support/tickets");
   }
 
-  async createSupportTicket(data: { subject: string; message: string; priority?: string }) {
+  async createSupportTicket(data: { subject: string; message: string; priority?: string; category?: string }) {
     return this.request("POST", "/support/tickets", data);
   }
 
@@ -427,9 +427,10 @@ export class RailPushClient {
 
   // ── Ops: Support Tickets (admin/ops role required) ─────────────────
 
-  async listOpsTickets(params?: { status?: string; query?: string; limit?: number; offset?: number }) {
+  async listOpsTickets(params?: { status?: string; category?: string; query?: string; limit?: number; offset?: number }) {
     const qs = new URLSearchParams();
     if (params?.status) qs.set("status", params.status);
+    if (params?.category) qs.set("category", params.category);
     if (params?.query) qs.set("query", params.query);
     if (params?.limit) qs.set("limit", String(params.limit));
     if (params?.offset) qs.set("offset", String(params.offset));
@@ -441,7 +442,7 @@ export class RailPushClient {
     return this.request("GET", `/ops/tickets/${id}`);
   }
 
-  async updateOpsTicket(id: string, data: { status?: string; priority?: string; assigned_to?: string }) {
+  async updateOpsTicket(id: string, data: { status?: string; priority?: string; assigned_to?: string; category?: string }) {
     return this.request("PATCH", `/ops/tickets/${id}`, data);
   }
 

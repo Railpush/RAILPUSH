@@ -1064,14 +1064,15 @@ server.tool(
 
 server.tool(
   "create_support_ticket",
-  "Create a new support ticket to get help from the RailPush team.",
+  "Create a new support ticket to get help from the RailPush team. Use category to classify the ticket as support, feature_request, or bug_report.",
   {
     subject: z.string().describe("Ticket subject"),
     message: z.string().describe("Detailed description of the issue or question"),
     priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("Ticket priority (default: normal)"),
+    category: z.enum(["support", "feature_request", "bug_report"]).optional().describe("Ticket category (default: support). Use 'feature_request' for feature ideas, 'bug_report' for bugs."),
   },
-  async ({ subject, message, priority }) => {
-    try { return text(await client.createSupportTicket({ subject, message, priority })); }
+  async ({ subject, message, priority, category }) => {
+    try { return text(await client.createSupportTicket({ subject, message, priority, category })); }
     catch (e) { return err(e); }
   },
 );
@@ -1105,15 +1106,16 @@ server.tool(
 
 server.tool(
   "list_ops_tickets",
-  "List all support tickets across all users (ops/admin). Filter by status or search by subject/email/workspace.",
+  "List all support tickets across all users (ops/admin). Filter by status, category, or search by subject/email/workspace.",
   {
     status: z.enum(["open", "pending", "solved", "closed"]).optional().describe("Filter by ticket status"),
+    category: z.enum(["support", "feature_request", "bug_report"]).optional().describe("Filter by ticket category"),
     query: z.string().optional().describe("Search by subject, email, or workspace name"),
     limit: z.number().optional().describe("Max results (default 50, max 200)"),
     offset: z.number().optional().describe("Pagination offset"),
   },
-  async ({ status, query, limit, offset }) => {
-    try { return text(await client.listOpsTickets({ status, query, limit, offset })); }
+  async ({ status, category, query, limit, offset }) => {
+    try { return text(await client.listOpsTickets({ status, category, query, limit, offset })); }
     catch (e) { return err(e); }
   },
 );
@@ -1130,17 +1132,19 @@ server.tool(
 
 server.tool(
   "update_support_ticket_status",
-  "Update a support ticket's status, priority, or assignment (ops/admin). Use this to close, solve, or triage tickets.",
+  "Update a support ticket's status, priority, category, or assignment (ops/admin). Use this to close, solve, or triage tickets.",
   {
     ticket_id: z.string().describe("Ticket ID"),
     status: z.enum(["open", "pending", "solved", "closed"]).optional().describe("New status"),
     priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("New priority"),
+    category: z.enum(["support", "feature_request", "bug_report"]).optional().describe("New category"),
     assigned_to: z.string().optional().describe("User ID to assign the ticket to"),
   },
-  async ({ ticket_id, status, priority, assigned_to }) => {
+  async ({ ticket_id, status, priority, category, assigned_to }) => {
     const data: Record<string, string> = {};
     if (status) data.status = status;
     if (priority) data.priority = priority;
+    if (category) data.category = category;
     if (assigned_to) data.assigned_to = assigned_to;
     try { return text(await client.updateOpsTicket(ticket_id, data)); }
     catch (e) { return err(e); }
