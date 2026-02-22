@@ -1211,7 +1211,7 @@ curl https://railpush.com/api/v1/services \\
                   <div>
                     <div className="text-sm font-semibold mb-1">AI-native infrastructure</div>
                     <div className="text-sm text-content-secondary">
-                      With 50 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
+                      With 90 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
                     </div>
                   </div>
                 </div>
@@ -1302,7 +1302,7 @@ npm run build`} />
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Available Tools</h3>
               <p className="text-content-secondary text-sm leading-relaxed mb-4">
-                The MCP server exposes 50 tools organized by category. Agents discover these automatically.
+                The MCP server exposes 90 tools organized by category. Agents discover these automatically.
               </p>
 
               <div className="overflow-x-auto mb-8">
@@ -1315,20 +1315,30 @@ npm run build`} />
                   </thead>
                   <tbody className="text-content-secondary">
                     {[
+                      ['Auth', 'whoami'],
                       ['Services', 'list, get, create, update, delete, restart, suspend, resume'],
-                      ['Deploys', 'trigger, list, get, rollback'],
+                      ['Deploys', 'trigger, list, get, rollback, queue position'],
                       ['Env Vars', 'list, set (bulk replace)'],
                       ['Custom Domains', 'list, add, delete'],
                       ['Databases', 'list, create, get, update, delete, backup, list backups, replicas, create replica, promote replica, enable HA'],
-                      ['Key-Value (Redis)', 'list, create, get, delete'],
+                      ['Key-Value (Redis)', 'list, create, get, update, delete'],
                       ['Logs', 'get runtime logs, get deploy logs'],
                       ['AI Fix', 'start fix session, get fix status'],
                       ['One-Off Jobs', 'run, list, get'],
                       ['Autoscaling', 'get policy, set policy'],
                       ['Blueprints', 'list, create, get, sync, delete'],
-                      ['Env Groups', 'list, create, get, delete, list vars, set vars, link service, unlink service, list linked services'],
-                      ['Metrics', 'get resource usage'],
-                      ['Projects', 'list projects'],
+                      ['Env Groups', 'list, create, get, update, delete, list vars, set vars, link service, unlink service, list linked services'],
+                      ['Metrics', 'get resource usage, get usage history'],
+                      ['Projects', 'list, create, get, update, delete'],
+                      ['Environments', 'list, create, get, update, delete'],
+                      ['Project Folders', 'list, create, get, update, delete, move'],
+                      ['Preview Environments', 'list, create, get, delete'],
+                      ['Support Tickets', 'list, create, get, reply, close'],
+                      ['Billing', 'get overview'],
+                      ['Registered Domains', 'list, register, get, delete'],
+                      ['DNS Records', 'list, create, update, delete'],
+                      ['Workspace Members', 'list, invite, update role, remove'],
+                      ['Audit Logs', 'list events'],
                       ['GitHub', 'list repos, list branches'],
                     ].map(([cat, tools]) => (
                       <tr key={cat} className="border-b border-border-subtle">

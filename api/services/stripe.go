@@ -192,6 +192,8 @@ func stripeUserError(err error) error {
 	if errors.Is(err, ErrNoDefaultPaymentMethod) {
 		return ErrNoDefaultPaymentMethod
 	}
+	// Always log the original Stripe error for debugging — the user-facing message is sanitized.
+	log.Printf("Stripe: stripeUserError processing err=%v", err)
 	var se *stripe.Error
 	if errors.As(err, &se) {
 		// Normalize common "missing card" Stripe errors into a consistent sentinel so
@@ -608,7 +610,14 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 	// One-time migration: mirror existing workspace credits into Stripe customer balance so
 	// they can reduce invoices (and allow deployments without a card when credits cover it).
 	if err := s.migrateWorkspaceCreditsToStripeIfNeeded(bc, workspaceID); err != nil {
-		return err
+		// If migration fails but the customer has a payment method, log the error and
+		// continue — the subscription can still be created with the card on file.
+		// Only block if there's no payment method AND credits were the only way to pay.
+		pmID, _ := s.getDefaultPaymentMethod(bc)
+		if strings.TrimSpace(pmID) == "" {
+			return err
+		}
+		log.Printf("Stripe: credit migration failed but customer has payment method, continuing: customer=%s ws=%s err=%v", bc.StripeCustomerID, workspaceID, err)
 	}
 
 	// Idempotency: don't double-bill the same resource if a request is retried.
@@ -650,6 +659,11 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 	// subscriptions when invoice amount_due is 0 (Stripe customer balance covers it).
 	defaultPMID, _ := s.getDefaultPaymentMethod(bc)
 
+	// Check if the customer has sufficient Stripe balance (credits) to allow subscriptions
+	// without requiring an immediate payment method charge.
+	creditBalance, _ := s.CreditBalanceCents(bc.StripeCustomerID)
+	hasCredits := creditBalance > 0
+
 	// If no subscription exists, create one.
 	if bc.StripeSubscriptionID == "" {
 		itemParams := &stripe.SubscriptionItemsParams{
@@ -658,11 +672,20 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 		if !useMetered {
 			itemParams.Quantity = stripe.Int64(1)
 		}
+
+		// When the customer has credits on their Stripe balance, use "allow_incomplete"
+		// so Stripe doesn't reject the subscription when the customer balance covers the
+		// first invoice. Without this, "error_if_incomplete" can fail even though
+		// amount_due would be 0 after applying the customer balance.
+		paymentBehavior := "error_if_incomplete"
+		if hasCredits && strings.TrimSpace(defaultPMID) == "" {
+			paymentBehavior = "allow_incomplete"
+		}
 		subParams := &stripe.SubscriptionParams{
 			Customer:          stripe.String(bc.StripeCustomerID),
 			Items:             []*stripe.SubscriptionItemsParams{itemParams},
 			CollectionMethod:  stripe.String(string(stripe.SubscriptionCollectionMethodChargeAutomatically)),
-			PaymentBehavior:   stripe.String("error_if_incomplete"),
+			PaymentBehavior:   stripe.String(paymentBehavior),
 			OffSession:        stripe.Bool(true),
 		}
 		if strings.TrimSpace(defaultPMID) != "" {
@@ -671,7 +694,7 @@ func (s *StripeService) AddSubscriptionItem(bc *models.BillingCustomer, workspac
 		subParams.AddExpand("items")
 		sub, err := subscription.New(subParams)
 		if err != nil {
-			log.Printf("Stripe: failed to create subscription customer=%s err=%v", bc.StripeCustomerID, err)
+			log.Printf("Stripe: failed to create subscription customer=%s payment_behavior=%s has_credits=%v credit_balance=%d err=%v", bc.StripeCustomerID, paymentBehavior, hasCredits, creditBalance, err)
 			return stripeUserError(err)
 		}
 
