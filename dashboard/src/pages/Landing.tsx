@@ -112,19 +112,6 @@ export function Landing() {
         alignItems: 'center', justifyContent: 'center', height: '100vh', textAlign: 'center', padding: '2rem',
       }}>
         {/* Logo */}
-        <div style={{
-          width: 88, height: 88, borderRadius: 24,
-          background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '2rem',
-          backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
-          animation: 'bermudair-float 6s ease-in-out infinite',
-        }}>
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white"
-            strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" width={44} height={44}>
-            <path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z" />
-          </svg>
-        </div>
-
         {/* Title */}
         <h1 style={{
           fontSize: 'clamp(2rem, 5vw, 3.5rem)', fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.1,
@@ -160,10 +147,6 @@ export function Landing() {
       </div>
 
       <style>{`
-        @keyframes bermudair-float {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-8px); }
-        }
         @keyframes bermudair-pulse {
           0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
           50% { opacity: 0.6; box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
