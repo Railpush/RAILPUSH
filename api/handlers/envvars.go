@@ -163,6 +163,13 @@ func (h *EnvVarHandler) BulkUpdateEnvVars(w http.ResponseWriter, r *http.Request
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Guard: reject empty payload when env vars already exist to prevent accidental wipe.
+	// To intentionally remove all env vars, clients should use DELETE or PATCH with explicit deletes.
+	if len(req) == 0 && len(existing) > 0 {
+		utils.RespondError(w, http.StatusBadRequest, "refusing to delete all env vars via empty PUT — use PATCH with explicit deletes instead")
+		return
+	}
+
 	vars := make([]models.EnvVar, 0, len(req))
 	for _, item := range req {
 		key := strings.TrimSpace(item.Key)

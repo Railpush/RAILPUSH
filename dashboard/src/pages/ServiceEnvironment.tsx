@@ -14,7 +14,8 @@ const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export function ServiceEnvironment() {
   const { serviceId } = useParams<{ serviceId: string }>();
   const [vars, setVars] = useState<EnvVar[]>([]);
-  const [, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
   const [newKey, setNewKey] = useState('');
   const [newValue, setNewValue] = useState('');
@@ -22,9 +23,10 @@ export function ServiceEnvironment() {
 
   useEffect(() => {
     if (!serviceId) return;
+    setLoadError(false);
     envVarsApi.list(serviceId)
-      .then(setVars)
-      .catch(() => setVars([]))
+      .then((data) => { setVars(data); setLoadError(false); })
+      .catch(() => { setVars([]); setLoadError(true); })
       .finally(() => setLoading(false));
   }, [serviceId]);
 
@@ -65,6 +67,10 @@ export function ServiceEnvironment() {
 
   const handleSave = async (action: string) => {
     if (!serviceId) return;
+    if (loadError) {
+      toast.error('Environment variables failed to load. Please refresh the page before saving to avoid data loss.');
+      return;
+    }
     const cleaned = vars.map((v) => ({
       key: (v.key || '').trim(),
       value: v.value ?? '',
@@ -96,17 +102,37 @@ export function ServiceEnvironment() {
       if (action !== 'save') {
         await deploys.trigger(serviceId, {});
       }
+      // Reload vars from server to ensure state is fresh (picks up secret masking, server-side changes)
+      try {
+        const fresh = await envVarsApi.list(serviceId);
+        setVars(fresh);
+        setLoadError(false);
+      } catch { /* non-fatal: vars are already saved */ }
       toast.success(action === 'save' ? 'Environment variables saved' : 'Environment variables saved and deploy triggered');
     } catch {
       toast.error('Failed to save environment variables');
     }
   };
 
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="text-sm text-content-secondary">Loading environment variables...</div>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-semibold text-content-primary">Environment</h1>
       </div>
+
+      {loadError && (
+        <div className="mb-4 p-3 rounded-lg bg-status-error/10 border border-status-error/30 text-sm text-status-error">
+          Failed to load environment variables. Please refresh the page before making changes to avoid data loss.
+        </div>
+      )}
 
       {/* Environment Variables */}
       <div className="mb-8">
