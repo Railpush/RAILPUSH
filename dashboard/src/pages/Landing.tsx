@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 export function Landing() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -111,16 +113,32 @@ export function Landing() {
         position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column',
         alignItems: 'center', justifyContent: 'center', height: '100vh', textAlign: 'center', padding: '2rem',
       }}>
-        {/* Logo */}
-        {/* Title */}
-        <h1 style={{
-          fontSize: 'clamp(2rem, 5vw, 3.5rem)', fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.1,
-          marginBottom: '0.75rem', fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
-          background: 'linear-gradient(135deg, #ffffff 0%, #94a3b8 100%)',
-          WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
-        }}>
-          BermudAir AI Platform
-        </h1>
+        {/* BermudAir Logo - all white */}
+        <svg viewBox="0 0 900 120" xmlns="http://www.w3.org/2000/svg" style={{ width: 'clamp(320px, 50vw, 600px)', marginBottom: '1rem' }}>
+          {/* B */}
+          <path d="M0 10 h40 q25 0 25 25 q0 15 -15 20 q20 5 20 25 q0 30 -30 30 H0 Z M18 48 h20 q12 0 12-13 q0-13-12-13 H18 Z M18 98 h22 q15 0 15-15 q0-15-15-15 H18 Z" fill="white"/>
+          {/* E */}
+          <path d="M90 10 h55 v15 h-37 v22 h32 v15 h-32 v26 h38 v15 H90 Z" fill="white"/>
+          {/* R */}
+          <path d="M165 10 h40 q28 0 28 27 q0 20-16 25 l22 48 h-20 l-20-45 h-16 v45 h-18 Z M183 52 h20 q13 0 13-14 q0-13-13-13 h-20 Z" fill="white"/>
+          {/* M */}
+          <path d="M250 10 h20 l22 50 l22-50 h20 v100 h-17 V35 l-22 50 h-8 l-22-50 v75 h-15 Z" fill="white"/>
+          {/* U */}
+          <path d="M355 10 h18 v65 q0 26 22 26 q22 0 22-26 V10 h18 v67 q0 38-40 38 q-40 0-40-38 Z" fill="white"/>
+          {/* D */}
+          <path d="M455 10 h35 q50 0 50 50 q0 50-50 50 h-35 Z M473 95 h15 q34 0 34-35 q0-35-34-35 h-15 Z" fill="white"/>
+          {/* Stylized A (triangle with swoosh) */}
+          <g transform="translate(555, 0)">
+            {/* Triangle A shape */}
+            <path d="M45 5 L90 110 L78 110 L65 78 L25 78 L12 110 L0 110 Z M45 22 L30 68 L60 68 Z" fill="white"/>
+            {/* Swoosh inside A */}
+            <path d="M22 88 Q45 72 68 88" fill="none" stroke="white" strokeWidth="4.5" strokeLinecap="round"/>
+          </g>
+          {/* I */}
+          <path d="M665 10 h18 v100 h-18 Z" fill="white"/>
+          {/* R */}
+          <path d="M705 10 h40 q28 0 28 27 q0 20-16 25 l22 48 h-20 l-20-45 h-16 v45 h-18 Z M723 52 h20 q13 0 13-14 q0-13-13-13 h-20 Z" fill="white"/>
+        </svg>
 
         {/* Subtitle */}
         <p style={{
@@ -131,27 +149,36 @@ export function Landing() {
           Flight Intelligence
         </p>
 
-        {/* Badge */}
-        <div style={{
-          display: 'inline-flex', alignItems: 'center', gap: 8, padding: '8px 20px', borderRadius: 100,
-          background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.2)',
-          fontSize: '0.8125rem', fontWeight: 500, color: 'rgba(147, 197, 253, 0.9)', letterSpacing: '0.02em',
-          fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
-        }}>
-          <span style={{
-            width: 6, height: 6, borderRadius: '50%', background: '#3b82f6',
-            animation: 'bermudair-pulse 2s ease-in-out infinite',
-          }} />
-          Launching Soon
-        </div>
+        {/* Login Button */}
+        <button
+          onClick={() => navigate('/login')}
+          style={{
+            padding: '12px 48px',
+            borderRadius: 8,
+            background: 'rgba(255, 255, 255, 0.1)',
+            border: '1px solid rgba(255, 255, 255, 0.2)',
+            color: '#ffffff',
+            fontSize: '1rem',
+            fontWeight: 500,
+            fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+            letterSpacing: '0.04em',
+            cursor: 'pointer',
+            transition: 'all 0.2s ease',
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)',
+          }}
+          onMouseEnter={e => {
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.18)';
+            e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.4)';
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
+            e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+          }}
+        >
+          Login
+        </button>
       </div>
-
-      <style>{`
-        @keyframes bermudair-pulse {
-          0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
-          50% { opacity: 0.6; box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
-        }
-      `}</style>
     </div>
   );
 }
