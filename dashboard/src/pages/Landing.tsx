@@ -113,32 +113,26 @@ export function Landing() {
         position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column',
         alignItems: 'center', justifyContent: 'center', height: '100vh', textAlign: 'center', padding: '2rem',
       }}>
-        {/* BermudAir Logo - all white */}
-        <svg viewBox="0 0 900 120" xmlns="http://www.w3.org/2000/svg" style={{ width: 'clamp(320px, 50vw, 600px)', marginBottom: '1rem' }}>
-          {/* B */}
-          <path d="M0 10 h40 q25 0 25 25 q0 15 -15 20 q20 5 20 25 q0 30 -30 30 H0 Z M18 48 h20 q12 0 12-13 q0-13-12-13 H18 Z M18 98 h22 q15 0 15-15 q0-15-15-15 H18 Z" fill="white"/>
-          {/* E */}
-          <path d="M90 10 h55 v15 h-37 v22 h32 v15 h-32 v26 h38 v15 H90 Z" fill="white"/>
-          {/* R */}
-          <path d="M165 10 h40 q28 0 28 27 q0 20-16 25 l22 48 h-20 l-20-45 h-16 v45 h-18 Z M183 52 h20 q13 0 13-14 q0-13-13-13 h-20 Z" fill="white"/>
-          {/* M */}
-          <path d="M250 10 h20 l22 50 l22-50 h20 v100 h-17 V35 l-22 50 h-8 l-22-50 v75 h-15 Z" fill="white"/>
-          {/* U */}
-          <path d="M355 10 h18 v65 q0 26 22 26 q22 0 22-26 V10 h18 v67 q0 38-40 38 q-40 0-40-38 Z" fill="white"/>
-          {/* D */}
-          <path d="M455 10 h35 q50 0 50 50 q0 50-50 50 h-35 Z M473 95 h15 q34 0 34-35 q0-35-34-35 h-15 Z" fill="white"/>
-          {/* Stylized A (triangle with swoosh) */}
-          <g transform="translate(555, 0)">
-            {/* Triangle A shape */}
-            <path d="M45 5 L90 110 L78 110 L65 78 L25 78 L12 110 L0 110 Z M45 22 L30 68 L60 68 Z" fill="white"/>
-            {/* Swoosh inside A */}
-            <path d="M22 88 Q45 72 68 88" fill="none" stroke="white" strokeWidth="4.5" strokeLinecap="round"/>
-          </g>
-          {/* I */}
-          <path d="M665 10 h18 v100 h-18 Z" fill="white"/>
-          {/* R */}
-          <path d="M705 10 h40 q28 0 28 27 q0 20-16 25 l22 48 h-20 l-20-45 h-16 v45 h-18 Z M723 52 h20 q13 0 13-14 q0-13-13-13 h-20 Z" fill="white"/>
-        </svg>
+        {/* BermudAir Logo - text + SVG "A" glyph */}
+        <div style={{
+          display: 'flex', alignItems: 'baseline', marginBottom: '1rem',
+          fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
+          fontSize: 'clamp(2.5rem, 7vw, 5rem)', fontWeight: 300, letterSpacing: '0.15em',
+          color: '#ffffff', textTransform: 'uppercase' as const, lineHeight: 1,
+        }}>
+          <span>BERMUD</span>
+          {/* Stylized A */}
+          <svg viewBox="0 0 70 100" xmlns="http://www.w3.org/2000/svg" style={{
+            height: '0.85em', width: 'auto', display: 'inline-block',
+            verticalAlign: 'baseline', margin: '0 -0.02em',
+          }}>
+            {/* Outer triangle */}
+            <path d="M35 0 L70 100 L59 100 L35 30 L11 100 L0 100 Z" fill="white"/>
+            {/* Swoosh / smile curve inside */}
+            <path d="M16 82 Q35 65 54 82" fill="none" stroke="white" strokeWidth="5" strokeLinecap="round"/>
+          </svg>
+          <span>IR</span>
+        </div>
 
         {/* Subtitle */}
         <p style={{
