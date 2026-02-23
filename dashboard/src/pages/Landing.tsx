@@ -113,26 +113,17 @@ export function Landing() {
         position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column',
         alignItems: 'center', justifyContent: 'center', height: '100vh', textAlign: 'center', padding: '2rem',
       }}>
-        {/* BermudAir Logo - text + SVG "A" glyph */}
-        <div style={{
-          display: 'flex', alignItems: 'baseline', marginBottom: '1rem',
-          fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
-          fontSize: 'clamp(2.5rem, 7vw, 5rem)', fontWeight: 300, letterSpacing: '0.15em',
-          color: '#ffffff', textTransform: 'uppercase' as const, lineHeight: 1,
-        }}>
-          <span>BERMUD</span>
-          {/* Stylized A */}
-          <svg viewBox="0 0 70 100" xmlns="http://www.w3.org/2000/svg" style={{
-            height: '0.85em', width: 'auto', display: 'inline-block',
-            verticalAlign: 'baseline', margin: '0 -0.02em',
-          }}>
-            {/* Outer triangle */}
-            <path d="M35 0 L70 100 L59 100 L35 30 L11 100 L0 100 Z" fill="white"/>
-            {/* Swoosh / smile curve inside */}
-            <path d="M16 82 Q35 65 54 82" fill="none" stroke="white" strokeWidth="5" strokeLinecap="round"/>
-          </svg>
-          <span>IR</span>
-        </div>
+        {/* BermudAir Logo - original image, filtered white */}
+        <img
+          src="/bermudair-logo.png"
+          alt="BermudAir"
+          style={{
+            width: 'clamp(280px, 50vw, 550px)',
+            height: 'auto',
+            marginBottom: '1rem',
+            filter: 'brightness(0) invert(1)',
+          }}
+        />
 
         {/* Subtitle */}
         <p style={{
@@ -140,7 +131,7 @@ export function Landing() {
           letterSpacing: '0.12em', textTransform: 'uppercase' as const, marginBottom: '3rem',
           fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
         }}>
-          Flight Intelligence
+          AI Cluster
         </p>
 
         {/* Login Button */}
