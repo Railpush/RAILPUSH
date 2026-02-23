@@ -167,12 +167,33 @@ export class RailPushClient {
     return this.request("GET", `/services/${serviceId}/custom-domains`);
   }
 
-  async addCustomDomain(serviceId: string, domain: string) {
-    return this.request("POST", `/services/${serviceId}/custom-domains`, { domain });
+  async addCustomDomain(serviceId: string, domain: string, redirectTarget?: string) {
+    const body: Record<string, string> = { domain };
+    if (redirectTarget) body.redirect_target = redirectTarget;
+    return this.request("POST", `/services/${serviceId}/custom-domains`, body);
   }
 
   async deleteCustomDomain(serviceId: string, domain: string) {
     return this.request("DELETE", `/services/${serviceId}/custom-domains/${encodeURIComponent(domain)}`);
+  }
+
+  // ── Rewrite Rules ──────────────────────────────────────────────────
+
+  async listRewriteRules(serviceId: string) {
+    return this.request("GET", `/services/${serviceId}/rewrite-rules`);
+  }
+
+  async addRewriteRule(serviceId: string, sourcePath: string, destServiceId: string, destPath?: string, ruleType?: string) {
+    return this.request("POST", `/services/${serviceId}/rewrite-rules`, {
+      source_path: sourcePath,
+      dest_service_id: destServiceId,
+      dest_path: destPath || sourcePath,
+      rule_type: ruleType || "proxy",
+    });
+  }
+
+  async deleteRewriteRule(serviceId: string, ruleId: string) {
+    return this.request("DELETE", `/services/${serviceId}/rewrite-rules/${ruleId}`);
   }
 
   // ── Databases ────────────────────────────────────────────────────────

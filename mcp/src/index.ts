@@ -418,13 +418,14 @@ server.tool(
 
 server.tool(
   "add_custom_domain",
-  "Add a custom domain to a service. You must point the domain's DNS (CNAME) to the service's public URL for verification and TLS provisioning.",
+  "Add a custom domain to a service. You must point the domain's DNS (CNAME) to the service's public URL for verification and TLS provisioning. Optionally set redirect_target to make the domain 301-redirect to another URL (e.g. redirect apex to www).",
   {
     service_id: z.string().describe("Service ID"),
     domain: z.string().describe("Custom domain (e.g. app.example.com)"),
+    redirect_target: z.string().optional().describe("If set, the domain will 301-redirect to this URL instead of proxying to the service (e.g. https://www.example.com)"),
   },
-  async ({ service_id, domain }) => {
-    try { return text(await client.addCustomDomain(service_id, domain)); }
+  async ({ service_id, domain, redirect_target }) => {
+    try { return text(await client.addCustomDomain(service_id, domain, redirect_target)); }
     catch (e) { return err(e); }
   },
 );
@@ -438,6 +439,49 @@ server.tool(
   },
   async ({ service_id, domain }) => {
     try { return text(await client.deleteCustomDomain(service_id, domain)); }
+    catch (e) { return err(e); }
+  },
+);
+
+// ════════════════════════════════════════════════════════════════════════
+//  REWRITE & PROXY RULES
+// ════════════════════════════════════════════════════════════════════════
+
+server.tool(
+  "list_rewrite_rules",
+  "List rewrite/proxy rules for a service. Rewrite rules let you route specific URL paths (e.g. /api/*) from one service to another service's backend.",
+  { service_id: z.string().describe("Service ID") },
+  async ({ service_id }) => {
+    try { return text(await client.listRewriteRules(service_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "add_rewrite_rule",
+  "Add a rewrite/proxy rule to a service. Routes requests matching source_path on this service to dest_path on the destination service. Supports wildcard paths (e.g. /api/*).",
+  {
+    service_id: z.string().describe("Source service ID (the service whose URL receives the request)"),
+    source_path: z.string().describe("URL path pattern to match on the source service (e.g. /api/*)"),
+    dest_service_id: z.string().describe("Destination service ID to proxy/rewrite to"),
+    dest_path: z.string().optional().describe("Destination path (defaults to same as source_path, e.g. /api/*)"),
+    rule_type: z.enum(["proxy", "redirect"]).optional().describe("Rule type: proxy (reverse proxy, default) or redirect (301)"),
+  },
+  async ({ service_id, source_path, dest_service_id, dest_path, rule_type }) => {
+    try { return text(await client.addRewriteRule(service_id, source_path, dest_service_id, dest_path, rule_type)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "delete_rewrite_rule",
+  "Delete a rewrite/proxy rule from a service.",
+  {
+    service_id: z.string().describe("Service ID"),
+    rule_id: z.string().describe("Rewrite rule ID"),
+  },
+  async ({ service_id, rule_id }) => {
+    try { return text(await client.deleteRewriteRule(service_id, rule_id)); }
     catch (e) { return err(e); }
   },
 );

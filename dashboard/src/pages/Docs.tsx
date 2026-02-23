@@ -889,6 +889,24 @@ services:
                 <div className="flex gap-3"><span className="w-6 h-6 rounded-full bg-brand/10 text-brand text-xs font-bold flex items-center justify-center shrink-0">3</span> TLS certificate is provisioned automatically via Let's Encrypt</div>
               </div>
 
+              <h3 className="text-lg font-semibold mt-8 mb-3">Domain Redirects</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                You can configure a domain to 301-redirect all traffic to another domain. This is commonly used to redirect an apex domain to <code className="text-xs bg-surface-tertiary px-1 rounded">www</code> (or vice versa).
+              </p>
+              <CodeBlock filename="API: Add redirect domain" code={`POST /services/:id/custom-domains
+{
+  "domain": "example.com",
+  "redirect_target": "www.example.com"
+}
+// All requests to example.com will 301-redirect to https://www.example.com
+// TLS is provisioned for both domains automatically.`} />
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">DNS Configuration</h3>
+              <div className="space-y-2 text-sm text-content-secondary mb-6">
+                <div className="flex gap-3"><strong className="w-16 shrink-0">CNAME</strong> Point subdomains (www, app, api) to your service&rsquo;s <code className="text-xs bg-surface-tertiary px-1 rounded">.railpush.com</code> hostname</div>
+                <div className="flex gap-3"><strong className="w-16 shrink-0">A Record</strong> Point apex/root domains to the ingress IP shown in the Networking tab (apex domains cannot use CNAME)</div>
+              </div>
+
               <h3 className="text-lg font-semibold mb-3">Blueprint Domains</h3>
               <CodeBlock filename="railpush.yaml" code={`services:
   - type: web
@@ -1157,6 +1175,28 @@ API_URL=http://my-api.railpush.svc.cluster.local:10000`} />
   - type: web
     name: my-api
     port: 3000  # your app listens on this port`} />
+
+              <h3 className="text-lg font-semibold mt-8 mb-3">Rewrite &amp; Proxy Rules</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                Route specific URL paths from one service to another using server-side proxying. This is useful when a static frontend needs to proxy <code className="text-xs bg-surface-tertiary px-1 rounded">/api/*</code> requests to a backend service without CORS or mixed-content issues.
+              </p>
+              <div className="space-y-2 text-sm text-content-secondary mb-4">
+                <div className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand shrink-0" /> Requests are proxied <strong>server-side</strong> via the ingress controller &mdash; no CORS headers needed</div>
+                <div className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand shrink-0" /> Rules apply to all hosts: the default subdomain <em>and</em> all custom domains</div>
+                <div className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand shrink-0" /> Both source and destination services must be in the same workspace</div>
+              </div>
+              <CodeBlock filename="API: Add rewrite rule" code={`POST /services/:id/rewrite-rules
+{
+  "source_path": "/api/",
+  "dest_service_id": "<backend-service-id>",
+  "dest_path": "/api/",
+  "rule_type": "proxy"
+}
+// All requests to /api/* on this service will be proxied to the
+// destination service at /api/* — path is preserved by default.`} />
+              <p className="text-xs text-content-tertiary mt-3">
+                Manage rewrite rules in the service&rsquo;s <strong>Networking</strong> tab or via the API / MCP tools.
+              </p>
             </section>
 
             {/* ── Cron Jobs ───────────────────────────────── */}
@@ -1404,8 +1444,11 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'PUT', path: '/services/:id/env-vars', desc: 'Bulk replace all env vars' },
                   { method: 'PATCH', path: '/services/:id/env-vars', desc: 'Upsert env vars (additive)' },
                   { method: 'GET', path: '/services/:id/custom-domains', desc: 'List custom domains' },
-                  { method: 'POST', path: '/services/:id/custom-domains', desc: 'Add custom domain' },
+                  { method: 'POST', path: '/services/:id/custom-domains', desc: 'Add custom domain (with optional redirect_target)' },
                   { method: 'DELETE', path: '/services/:id/custom-domains/:domain', desc: 'Remove custom domain' },
+                  { method: 'GET', path: '/services/:id/rewrite-rules', desc: 'List rewrite/proxy rules' },
+                  { method: 'POST', path: '/services/:id/rewrite-rules', desc: 'Add rewrite/proxy rule' },
+                  { method: 'DELETE', path: '/services/:id/rewrite-rules/:ruleId', desc: 'Remove rewrite rule' },
                 ]},
                 { group: 'Logs & Metrics', endpoints: [
                   { method: 'GET', path: '/services/:id/logs', desc: 'Query service logs' },
