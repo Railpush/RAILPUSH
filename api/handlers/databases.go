@@ -107,6 +107,7 @@ func (h *DatabaseHandler) CreateDatabase(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Paid plan: ensure Stripe customer exists and has payment method
+	var billingCustomer *models.BillingCustomer
 	if db.Plan != "free" && h.Stripe.Enabled() {
 		user, err := models.GetUserByID(userID)
 		if err != nil || user == nil {
@@ -118,7 +119,11 @@ func (h *DatabaseHandler) CreateDatabase(w http.ResponseWriter, r *http.Request)
 			utils.RespondError(w, http.StatusInternalServerError, "billing error: "+err.Error())
 			return
 		}
-		_ = bc // Payment method is optional when workspace credits cover the charge.
+		if bc == nil {
+			utils.RespondError(w, http.StatusInternalServerError, "billing error: failed to initialize billing customer")
+			return
+		}
+		billingCustomer = bc
 	}
 
 	// Generate and encrypt the password
@@ -139,19 +144,16 @@ func (h *DatabaseHandler) CreateDatabase(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Add to Stripe subscription for paid plans
-	if db.Plan != "free" && h.Stripe.Enabled() {
-		bc, _ := models.GetBillingCustomerByUserID(userID)
-		if bc != nil {
-			if err := h.Stripe.AddSubscriptionItem(bc, db.WorkspaceID, "database", db.ID, db.Name, db.Plan); err != nil {
-				log.Printf("Warning: failed to add billing for database %s: %v", db.ID, err)
-				models.DeleteManagedDatabase(db.ID)
-				if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
-					utils.RespondError(w, http.StatusPaymentRequired, "payment method required. Please add a default payment method in billing settings.")
-					return
-				}
-				utils.RespondError(w, http.StatusInternalServerError, "billing error: "+err.Error())
+	if db.Plan != "free" && h.Stripe.Enabled() && billingCustomer != nil {
+		if err := h.Stripe.AddSubscriptionItem(billingCustomer, db.WorkspaceID, "database", db.ID, db.Name, db.Plan); err != nil {
+			log.Printf("Warning: failed to add billing for database %s: %v", db.ID, err)
+			models.DeleteManagedDatabase(db.ID)
+			if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
+				utils.RespondError(w, http.StatusPaymentRequired, "payment method required. Please add a default payment method in billing settings.")
 				return
 			}
+			utils.RespondError(w, http.StatusInternalServerError, "billing error: "+err.Error())
+			return
 		}
 	}
 
