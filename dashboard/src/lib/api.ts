@@ -138,6 +138,8 @@ export const envVars = {
   list: (serviceId: string) => request<EnvVar[]>(`/services/${serviceId}/env-vars`),
   update: (serviceId: string, vars: Array<Pick<EnvVar, 'key' | 'value' | 'is_secret'>>) =>
     request<{ status: string }>(`/services/${serviceId}/env-vars`, { method: 'PUT', body: JSON.stringify(vars) }),
+  merge: (serviceId: string, data: { env_vars?: Array<Pick<EnvVar, 'key' | 'value' | 'is_secret'>>; delete?: string[] }) =>
+    request<{ status: string; upserted: number; deleted: number }>(`/services/${serviceId}/env-vars`, { method: 'PATCH', body: JSON.stringify(data) }),
 };
 
 export const disks = {

@@ -3,12 +3,32 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
-import { services as servicesApi } from '../lib/api';
+import { services as servicesApi, envVars as envVarsApi } from '../lib/api';
 import { buildDefaultServiceHostname, hostnameFromUrl } from '../lib/serviceUrl';
 import type { Service } from '../types';
 import { toast } from 'sonner';
 
 type TermLine = { text: string; color?: string; delay?: number };
+type DeployAutomationMode = 'push' | 'workflow_success' | 'off';
+
+function parseTruthyEnv(value?: string): boolean {
+  const normalized = (value || '').trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on', 'y'].includes(normalized);
+}
+
+function parseWorkflowNames(raw: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of (raw || '').split(',')) {
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
 
 function TerminalDeleteModal({ open, onClose, service, onConfirm }: {
   open: boolean;
@@ -215,6 +235,11 @@ export function ServiceSettings() {
   const [service, setService] = useState<Service | null>(null);
   const [, setLoading] = useState(true);
   const [deleteModal, setDeleteModal] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deployAutomationMode, setDeployAutomationMode] = useState<DeployAutomationMode>('push');
+  const [workflowAllowlist, setWorkflowAllowlist] = useState('');
+  const [gateConfigLoaded, setGateConfigLoaded] = useState(false);
+  const [gateLoadError, setGateLoadError] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     branch: 'main',
@@ -228,8 +253,13 @@ export function ServiceSettings() {
 
   useEffect(() => {
     if (!serviceId) return;
-    servicesApi.get(serviceId)
-      .then((s) => {
+    setGateLoadError(false);
+    setGateConfigLoaded(false);
+    Promise.all([
+      servicesApi.get(serviceId),
+      envVarsApi.list(serviceId).catch(() => null),
+    ])
+      .then(([s, envVars]) => {
         setService(s);
         setFormData({
           name: s.name,
@@ -241,6 +271,32 @@ export function ServiceSettings() {
           auto_deploy: s.auto_deploy,
           docker_access: s.docker_access ?? false,
         });
+
+        if (!envVars) {
+          setGateConfigLoaded(false);
+          setGateLoadError(true);
+          setWorkflowAllowlist('');
+          setDeployAutomationMode(s.auto_deploy ? 'push' : 'off');
+          return;
+        }
+
+        const byKey = new Map<string, string>();
+        for (const envVar of envVars) {
+          const key = (envVar.key || '').trim().toUpperCase();
+          if (!key) continue;
+          byKey.set(key, (envVar.value || '').trim());
+        }
+
+        const githubGateEnabled =
+          parseTruthyEnv(byKey.get('RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY')) ||
+          parseTruthyEnv(byKey.get('RAILPUSH_GITHUB_ACTIONS_ENABLED')) ||
+          parseTruthyEnv(byKey.get('RAILPUSH_DEPLOY_ON_GITHUB_ACTIONS'));
+
+        const workflowRaw = (byKey.get('RAILPUSH_GITHUB_ACTIONS_WORKFLOWS') || byKey.get('RAILPUSH_GITHUB_ACTIONS_WORKFLOW') || '').trim();
+        setWorkflowAllowlist(parseWorkflowNames(workflowRaw).join(', '));
+        setDeployAutomationMode(!s.auto_deploy ? 'off' : (githubGateEnabled ? 'workflow_success' : 'push'));
+        setGateConfigLoaded(true);
+        setGateLoadError(false);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -248,11 +304,59 @@ export function ServiceSettings() {
 
   const handleSave = async () => {
     if (!serviceId) return;
+
+    const workflowNames = parseWorkflowNames(workflowAllowlist);
+    const nextAutoDeploy = deployAutomationMode !== 'off';
+
     try {
-      await servicesApi.update(serviceId, formData);
-      toast.success('Settings saved');
+      setSaving(true);
+      await servicesApi.update(serviceId, {
+        ...formData,
+        auto_deploy: nextAutoDeploy,
+      });
+
+      if (gateConfigLoaded) {
+        if (deployAutomationMode === 'workflow_success' && nextAutoDeploy) {
+          const env_vars: Array<{ key: string; value: string; is_secret: boolean }> = [
+            { key: 'RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY', value: 'true', is_secret: false },
+          ];
+          if (workflowNames.length > 0) {
+            env_vars.push({
+              key: 'RAILPUSH_GITHUB_ACTIONS_WORKFLOWS',
+              value: workflowNames.join(', '),
+              is_secret: false,
+            });
+          }
+          const deleteKeys = [
+            'RAILPUSH_GITHUB_ACTIONS_ENABLED',
+            'RAILPUSH_DEPLOY_ON_GITHUB_ACTIONS',
+            'RAILPUSH_GITHUB_ACTIONS_WORKFLOW',
+          ];
+          if (workflowNames.length === 0) {
+            deleteKeys.push('RAILPUSH_GITHUB_ACTIONS_WORKFLOWS');
+          }
+          await envVarsApi.merge(serviceId, { env_vars, delete: deleteKeys });
+        } else {
+          await envVarsApi.merge(serviceId, {
+            env_vars: [],
+            delete: [
+              'RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY',
+              'RAILPUSH_GITHUB_ACTIONS_ENABLED',
+              'RAILPUSH_DEPLOY_ON_GITHUB_ACTIONS',
+              'RAILPUSH_GITHUB_ACTIONS_WORKFLOW',
+              'RAILPUSH_GITHUB_ACTIONS_WORKFLOWS',
+            ],
+          });
+        }
+      }
+
+      setFormData((prev) => ({ ...prev, auto_deploy: nextAutoDeploy }));
+      setWorkflowAllowlist(workflowNames.join(', '));
+      toast.success(gateConfigLoaded ? 'Settings saved' : 'Settings saved (GitHub Actions gate config not loaded)');
     } catch {
       toast.error('Failed to save settings');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -290,7 +394,7 @@ export function ServiceSettings() {
                 onChange={(e) => setFormData({ ...formData, branch: e.target.value })}
               />
             </div>
-            <Button onClick={handleSave}>Save</Button>
+            <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving...' : 'Save'}</Button>
           </div>
         </Card>
       </div>
@@ -336,15 +440,28 @@ export function ServiceSettings() {
               <label className="block text-sm font-medium text-content-primary mb-2">Auto-Deploy</label>
               <div className="space-y-2">
                 {[
-                  { value: true, label: 'On Commit', desc: 'Deploy automatically on every push to the branch' },
-                  { value: false, label: 'Off', desc: 'Only deploy manually or via API' },
+                  {
+                    value: 'push',
+                    label: 'On Commit',
+                    desc: 'Deploy automatically on every push to the branch',
+                  },
+                  {
+                    value: 'workflow_success',
+                    label: 'After GitHub Actions Success',
+                    desc: 'Ignore push webhooks and deploy only after successful workflow_run events',
+                  },
+                  {
+                    value: 'off',
+                    label: 'Off',
+                    desc: 'Only deploy manually or via API',
+                  },
                 ].map((opt) => (
-                  <label key={String(opt.value)} className="flex items-start gap-3 p-3 rounded-md hover:bg-surface-tertiary cursor-pointer transition-colors">
+                  <label key={opt.value} className="flex items-start gap-3 p-3 rounded-md hover:bg-surface-tertiary cursor-pointer transition-colors">
                     <input
                       type="radio"
-                      name="auto_deploy"
-                      checked={formData.auto_deploy === opt.value}
-                      onChange={() => setFormData({ ...formData, auto_deploy: opt.value })}
+                      name="auto_deploy_mode"
+                      checked={deployAutomationMode === opt.value}
+                      onChange={() => setDeployAutomationMode(opt.value as DeployAutomationMode)}
                       className="mt-0.5 accent-brand"
                     />
                     <div>
@@ -354,6 +471,22 @@ export function ServiceSettings() {
                   </label>
                 ))}
               </div>
+              {deployAutomationMode === 'workflow_success' && (
+                <div className="mt-3 rounded-md border border-border-default bg-surface-tertiary/30 p-3">
+                  <Input
+                    label="Allowed Workflow Names (optional)"
+                    value={workflowAllowlist}
+                    onChange={(e) => setWorkflowAllowlist(e.target.value)}
+                    placeholder="CI, Release Build"
+                    hint="Comma-separated workflow names. Leave blank to deploy after any successful workflow_run for this branch."
+                  />
+                </div>
+              )}
+              {gateLoadError && (
+                <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
+                  Could not load current GitHub Actions gate env vars. Save will keep existing gate env vars unchanged until they can be loaded.
+                </div>
+              )}
             </div>
 
             <div>
@@ -387,7 +520,7 @@ export function ServiceSettings() {
               placeholder="/healthz"
             />
 
-            <Button onClick={handleSave}>Save</Button>
+            <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving...' : 'Save'}</Button>
           </div>
         </Card>
       </div>

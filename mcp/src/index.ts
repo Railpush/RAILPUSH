@@ -355,7 +355,7 @@ server.tool(
 
 server.tool(
   "enable_github_actions_deploy_gate",
-  "Enable GitHub Actions-gated auto-deploy for a service. Push webhooks are ignored for this service until a successful workflow_run event is received.",
+  "Enable GitHub Actions-gated auto-deploy for a service. Ensures auto_deploy is enabled and ignores push webhooks for this service until a successful workflow_run event is received.",
   {
     service_id: z.string().describe("Service ID"),
     workflows: z.array(z.string()).optional().describe("Optional workflow names allowlist (e.g. ['CI', 'Release'])"),
@@ -367,8 +367,17 @@ server.tool(
       if (workflowNames.length > 0) {
         envVars.push({ key: "RAILPUSH_GITHUB_ACTIONS_WORKFLOWS", value: workflowNames.join(", "), is_secret: false });
       }
-      const deleteKeys = workflowNames.length === 0 ? ["RAILPUSH_GITHUB_ACTIONS_WORKFLOW", "RAILPUSH_GITHUB_ACTIONS_WORKFLOWS"] : ["RAILPUSH_GITHUB_ACTIONS_WORKFLOW"];
-      return text(await client.mergeEnvVars(service_id, envVars, deleteKeys));
+      const deleteKeys = [
+        "RAILPUSH_GITHUB_ACTIONS_ENABLED",
+        "RAILPUSH_DEPLOY_ON_GITHUB_ACTIONS",
+        "RAILPUSH_GITHUB_ACTIONS_WORKFLOW",
+      ];
+      if (workflowNames.length === 0) {
+        deleteKeys.push("RAILPUSH_GITHUB_ACTIONS_WORKFLOWS");
+      }
+      const service = await client.updateService(service_id, { auto_deploy: true });
+      const env_update = await client.mergeEnvVars(service_id, envVars, deleteKeys);
+      return text({ service, env_update, workflows: workflowNames });
     }
     catch (e) { return err(e); }
   },
