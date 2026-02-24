@@ -61,6 +61,44 @@ function parseHttpPath(msg: string): string | undefined {
   return m?.[1];
 }
 
+function parseLatencyMs(msg: string): number | undefined {
+  const m = msg.match(/\b(\d+(?:\.\d+)?)\s*ms\b/i);
+  if (!m) return undefined;
+  const v = Number(m[1]);
+  return Number.isFinite(v) ? v : undefined;
+}
+
+function parseSizeBytes(msg: string): number | undefined {
+  const m = msg.match(/\b(\d+(?:\.\d+)?)\s*(B|KB|MB|GB)\b/i);
+  if (!m) return undefined;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n)) return undefined;
+  const unit = m[2].toUpperCase();
+  if (unit === 'GB') return n * 1024 * 1024 * 1024;
+  if (unit === 'MB') return n * 1024 * 1024;
+  if (unit === 'KB') return n * 1024;
+  return n;
+}
+
+function percentile(values: number[], p: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor((p / 100) * (sorted.length - 1))));
+  return sorted[idx];
+}
+
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
 function httpStatusCls(code: number) {
   if (code >= 500) return 'bg-red-500/15 text-red-400 border-red-500/25';
   if (code >= 400) return 'bg-amber-500/15 text-amber-400 border-amber-500/25';
@@ -195,6 +233,33 @@ export function ServiceLogs() {
   });
   const filteredDeployLogs = search ? deployLogs.filter((d) => d.log.toLowerCase().includes(search.toLowerCase())) : deployLogs;
 
+  const httpMetrics = (() => {
+    const statusBreakdown = { '2xx': 0, '3xx': 0, '4xx': 0, '5xx': 0 };
+    const latencies: number[] = [];
+    let bytes = 0;
+    let requests = 0;
+    for (const e of filtered) {
+      const http = parseHttpStatus(e.message);
+      if (!http.method || !http.status) continue;
+      requests += 1;
+      if (http.status >= 500) statusBreakdown['5xx'] += 1;
+      else if (http.status >= 400) statusBreakdown['4xx'] += 1;
+      else if (http.status >= 300) statusBreakdown['3xx'] += 1;
+      else if (http.status >= 200) statusBreakdown['2xx'] += 1;
+      const lat = parseLatencyMs(e.message);
+      if (lat !== undefined) latencies.push(lat);
+      const sz = parseSizeBytes(e.message);
+      if (sz !== undefined) bytes += sz;
+    }
+    return {
+      requests,
+      statusBreakdown,
+      p50: percentile(latencies, 50),
+      p95: percentile(latencies, 95),
+      totalBytes: bytes,
+    };
+  })();
+
   const handleCopyAll = async () => {
     let text = '';
     if (logType === 'runtime') {
@@ -274,6 +339,35 @@ export function ServiceLogs() {
           <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-border-default bg-surface-secondary text-sm text-content-secondary">
             <input type="checkbox" checked={useRegex} onChange={(e) => setUseRegex(e.target.checked)} className="accent-brand" /> Regex search
           </label>
+        </div>
+      )}
+
+      {logType === 'runtime' && (
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3">
+          <div className="rounded-lg border border-border-default bg-surface-secondary px-3 py-2">
+            <div className="text-[11px] text-content-tertiary">Requests</div>
+            <div className="text-sm font-semibold text-content-primary tabular-nums">{httpMetrics.requests}</div>
+          </div>
+          <div className="rounded-lg border border-border-default bg-surface-secondary px-3 py-2">
+            <div className="text-[11px] text-content-tertiary">2xx/3xx</div>
+            <div className="text-sm font-semibold text-emerald-400 tabular-nums">{httpMetrics.statusBreakdown['2xx']} / {httpMetrics.statusBreakdown['3xx']}</div>
+          </div>
+          <div className="rounded-lg border border-border-default bg-surface-secondary px-3 py-2">
+            <div className="text-[11px] text-content-tertiary">4xx/5xx</div>
+            <div className="text-sm font-semibold text-amber-400 tabular-nums">{httpMetrics.statusBreakdown['4xx']} / {httpMetrics.statusBreakdown['5xx']}</div>
+          </div>
+          <div className="rounded-lg border border-border-default bg-surface-secondary px-3 py-2">
+            <div className="text-[11px] text-content-tertiary">Latency p50</div>
+            <div className="text-sm font-semibold text-content-primary tabular-nums">{httpMetrics.p50.toFixed(0)} ms</div>
+          </div>
+          <div className="rounded-lg border border-border-default bg-surface-secondary px-3 py-2">
+            <div className="text-[11px] text-content-tertiary">Latency p95</div>
+            <div className="text-sm font-semibold text-content-primary tabular-nums">{httpMetrics.p95.toFixed(0)} ms</div>
+          </div>
+          <div className="rounded-lg border border-border-default bg-surface-secondary px-3 py-2">
+            <div className="text-[11px] text-content-tertiary">Bandwidth</div>
+            <div className="text-sm font-semibold text-content-primary tabular-nums">{formatBytes(httpMetrics.totalBytes)}</div>
+          </div>
         </div>
       )}
 

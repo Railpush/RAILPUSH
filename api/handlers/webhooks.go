@@ -337,6 +337,21 @@ func (h *WebhookHandler) GitHubWebhook(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			previewSvc = candidate
+
+			// Inherit environment variables from the base service for first preview creation.
+			// This gives PR previews parity with production settings while allowing later
+			// preview-specific overrides (we only copy on initial create).
+			if baseVars, err := models.ListEnvVars("service", baseService.ID); err != nil {
+				log.Printf("preview env inheritance: failed to list base env vars for %s: %v", baseService.ID, err)
+			} else if len(baseVars) > 0 {
+				vars := make([]models.EnvVar, 0, len(baseVars))
+				for _, v := range baseVars {
+					vars = append(vars, models.EnvVar{Key: v.Key, EncryptedValue: v.EncryptedValue, IsSecret: v.IsSecret})
+				}
+				if err := models.BulkUpsertEnvVars("service", candidate.ID, vars); err != nil {
+					log.Printf("preview env inheritance: failed to copy env vars base=%s preview=%s: %v", baseService.ID, candidate.ID, err)
+				}
+			}
 		} else {
 			previewSvc.Branch = payload.PullRequest.Head.Ref
 			_ = models.UpdateService(previewSvc)
