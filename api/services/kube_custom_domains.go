@@ -94,24 +94,29 @@ func (k *KubeDeployer) UpsertCustomDomainIngress(svc *models.Service, domain str
 	if ingClass == "" {
 		ingClass = "nginx"
 	}
+	ingressWhitelist := k.serviceIngressWhitelist(svc)
+	annotations := map[string]string{
+		"nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
+		"nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
+		"nginx.ingress.kubernetes.io/proxy-body-size":    "50m",
+
+		// Use cert-manager ingress-shim to create a per-domain Certificate.
+		"cert-manager.io/cluster-issuer":            issuer,
+		"acme.cert-manager.io/http01-ingress-class": ingClass,
+
+		// Debugging/ops metadata.
+		"railpush.com/custom-domain": domain,
+	}
+	if ingressWhitelist != "" {
+		annotations["nginx.ingress.kubernetes.io/whitelist-source-range"] = ingressWhitelist
+	}
 
 	ing := &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ingName,
 			Namespace: ns,
 			Labels:    labels,
-			Annotations: map[string]string{
-				"nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
-				"nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
-				"nginx.ingress.kubernetes.io/proxy-body-size":    "50m",
-
-				// Use cert-manager ingress-shim to create a per-domain Certificate.
-				"cert-manager.io/cluster-issuer":            issuer,
-				"acme.cert-manager.io/http01-ingress-class": ingClass,
-
-				// Debugging/ops metadata.
-				"railpush.com/custom-domain": domain,
-			},
+			Annotations: annotations,
 		},
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: &ingClass,
@@ -199,25 +204,30 @@ func (k *KubeDeployer) UpsertCustomDomainRedirectIngress(svc *models.Service, do
 	if ingClass == "" {
 		ingClass = "nginx"
 	}
+	ingressWhitelist := k.serviceIngressWhitelist(svc)
+	annotations := map[string]string{
+		// 301 permanent redirect to the target domain (preserves path + query).
+		"nginx.ingress.kubernetes.io/permanent-redirect":      "https://" + redirectTarget,
+		"nginx.ingress.kubernetes.io/permanent-redirect-code": "301",
+
+		// cert-manager for TLS on the source domain.
+		"cert-manager.io/cluster-issuer":            issuer,
+		"acme.cert-manager.io/http01-ingress-class": ingClass,
+
+		// Metadata.
+		"railpush.com/custom-domain":   domain,
+		"railpush.com/redirect-target": redirectTarget,
+	}
+	if ingressWhitelist != "" {
+		annotations["nginx.ingress.kubernetes.io/whitelist-source-range"] = ingressWhitelist
+	}
 
 	ing := &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ingName,
 			Namespace: ns,
 			Labels:    labels,
-			Annotations: map[string]string{
-				// 301 permanent redirect to the target domain (preserves path + query).
-				"nginx.ingress.kubernetes.io/permanent-redirect":      "https://" + redirectTarget,
-				"nginx.ingress.kubernetes.io/permanent-redirect-code": "301",
-
-				// cert-manager for TLS on the source domain.
-				"cert-manager.io/cluster-issuer":            issuer,
-				"acme.cert-manager.io/http01-ingress-class": ingClass,
-
-				// Metadata.
-				"railpush.com/custom-domain":   domain,
-				"railpush.com/redirect-target": redirectTarget,
-			},
+			Annotations: annotations,
 		},
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: &ingClass,

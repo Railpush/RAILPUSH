@@ -28,6 +28,70 @@ import (
 
 var kubeEnvKeyRegex = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var kubeNameInvalidChars = regexp.MustCompile(`[^a-z0-9-]+`)
+var kubeCIDRTokenRegex = regexp.MustCompile(`^[0-9a-fA-F:.\/]+$`)
+
+func normalizeIngressWhitelist(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0)
+	for _, p := range strings.Split(raw, ",") {
+		v := strings.TrimSpace(p)
+		if v == "" {
+			continue
+		}
+		if !kubeCIDRTokenRegex.MatchString(v) {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return strings.Join(out, ",")
+}
+
+func ingressWhitelistFromEnv(env map[string]string) string {
+	if len(env) == 0 {
+		return ""
+	}
+	keys := []string{"INGRESS_WHITELIST_SOURCE_RANGE", "RAILPUSH_IP_ALLOWLIST", "ALLOWED_IP_CIDRS"}
+	for _, k := range keys {
+		if v := normalizeIngressWhitelist(env[k]); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func (k *KubeDeployer) serviceIngressWhitelist(svc *models.Service) string {
+	if k == nil || k.Config == nil || svc == nil {
+		return ""
+	}
+	vars, err := models.ListEnvVars("service", svc.ID)
+	if err != nil {
+		return ""
+	}
+	env := map[string]string{}
+	for _, ev := range vars {
+		key := strings.TrimSpace(ev.Key)
+		if key == "" || strings.TrimSpace(ev.EncryptedValue) == "" {
+			continue
+		}
+		v, err := utils.Decrypt(ev.EncryptedValue, k.Config.Crypto.EncryptionKey)
+		if err != nil {
+			continue
+		}
+		env[key] = strings.TrimSpace(v)
+	}
+	return ingressWhitelistFromEnv(env)
+}
 
 type KubeDeployer struct {
 	Config *config.Config
@@ -319,6 +383,7 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 		}
 		cleanEnv[key] = v
 	}
+	ingressWhitelist := ingressWhitelistFromEnv(cleanEnv)
 
 	// This path performs multiple API calls (Secret/Deployment/Service/Ingress/custom domains), so keep a
 	// single reasonably-sized budget rather than a tiny shared 30s timeout that can expire mid-way.
@@ -678,6 +743,9 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 			"nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
 			"nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
 			"nginx.ingress.kubernetes.io/proxy-body-size":    "50m",
+		}
+		if ingressWhitelist != "" {
+			ingressAnnotations["nginx.ingress.kubernetes.io/whitelist-source-range"] = ingressWhitelist
 		}
 		// Static sites: add CDN-friendly headers (enable upstream caching, CORS for fonts/assets).
 		// NOTE: Do NOT use configuration-snippet or server-snippet — they are blocked by the
