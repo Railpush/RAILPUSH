@@ -564,6 +564,7 @@ type RenderService struct {
 	BuildInclude      []string           `yaml:"buildInclude"`
 	BuildExclude      []string           `yaml:"buildExclude"`
 	BaseImage         string             `yaml:"baseImage"`
+	DependsOn         []string           `yaml:"depends_on"`
 }
 
 type RenderDisk struct {
@@ -1786,6 +1787,29 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				OwnerType: "service", OwnerID: p.svc.ID,
 				Key: ev.Key, EncryptedValue: encrypted,
 			})
+		}
+		if len(p.sdef.DependsOn) > 0 {
+			deps := []string{}
+			seen := map[string]struct{}{}
+			for _, d := range p.sdef.DependsOn {
+				d = strings.TrimSpace(d)
+				if d == "" {
+					continue
+				}
+				k := strings.ToLower(d)
+				if _, ok := seen[k]; ok {
+					continue
+				}
+				seen[k] = struct{}{}
+				deps = append(deps, d)
+			}
+			if len(deps) > 0 {
+				v, _ := utils.Encrypt(strings.Join(deps, ","), h.Config.Crypto.EncryptionKey)
+				envVars = append(envVars, models.EnvVar{
+					OwnerType: "service", OwnerID: p.svc.ID,
+					Key: "RAILPUSH_DEPENDS_ON", EncryptedValue: v,
+				})
+			}
 		}
 		if err := models.BulkUpsertEnvVars("service", p.svc.ID, envVars); err != nil {
 			fail("failed to set env vars for service " + p.svc.Name)

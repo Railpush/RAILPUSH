@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +54,119 @@ type Worker struct {
 	Jobs       chan DeployJob
 	OnBuildLog func(deployID string, line string) // callback for WebSocket broadcasting
 	wg         sync.WaitGroup
+}
+
+func (w *Worker) waitForServiceDependencies(svc *models.Service, appendLog func(string)) error {
+	if w == nil || w.Config == nil || svc == nil {
+		return nil
+	}
+	vars, err := models.ListEnvVars("service", svc.ID)
+	if err != nil || len(vars) == 0 {
+		return nil
+	}
+	dependsRaw := ""
+	timeoutSec := 900
+	for _, ev := range vars {
+		k := strings.ToUpper(strings.TrimSpace(ev.Key))
+		if k != "RAILPUSH_DEPENDS_ON" && k != "DEPENDS_ON" && k != "RAILPUSH_DEPENDS_ON_TIMEOUT_SECONDS" {
+			continue
+		}
+		if strings.TrimSpace(ev.EncryptedValue) == "" {
+			continue
+		}
+		val, derr := utils.Decrypt(ev.EncryptedValue, w.Config.Crypto.EncryptionKey)
+		if derr != nil {
+			continue
+		}
+		if k == "RAILPUSH_DEPENDS_ON_TIMEOUT_SECONDS" {
+			if n, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && n > 0 && n <= 7200 {
+				timeoutSec = n
+			}
+			continue
+		}
+		dependsRaw = strings.TrimSpace(val)
+	}
+	if dependsRaw == "" {
+		return nil
+	}
+
+	all, err := models.ListServices(svc.WorkspaceID)
+	if err != nil {
+		return nil
+	}
+	byID := map[string]models.Service{}
+	byLabel := map[string]models.Service{}
+	for _, s := range all {
+		byID[strings.TrimSpace(s.ID)] = s
+		label := strings.ToLower(strings.TrimSpace(utils.ServiceHostLabel(s.Name, s.Subdomain)))
+		if label != "" {
+			byLabel[label] = s
+		}
+		nameKey := strings.ToLower(strings.TrimSpace(s.Name))
+		if nameKey != "" {
+			byLabel[nameKey] = s
+		}
+	}
+
+	deps := []models.Service{}
+	seen := map[string]struct{}{}
+	for _, t := range strings.Split(dependsRaw, ",") {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		dep, ok := byID[t]
+		if !ok {
+			dep, ok = byLabel[strings.ToLower(t)]
+		}
+		if !ok {
+			return fmt.Errorf("dependency %q not found in workspace", t)
+		}
+		if dep.ID == svc.ID {
+			continue
+		}
+		if _, ok := seen[dep.ID]; ok {
+			continue
+		}
+		seen[dep.ID] = struct{}{}
+		deps = append(deps, dep)
+	}
+	if len(deps) == 0 {
+		return nil
+	}
+
+	if appendLog != nil {
+		names := make([]string, 0, len(deps))
+		for _, d := range deps {
+			names = append(names, d.Name)
+		}
+		appendLog("==> Waiting for dependencies: " + strings.Join(names, ", "))
+	}
+
+	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+	for {
+		allReady := true
+		for _, d := range deps {
+			cur, err := models.GetService(d.ID)
+			if err != nil || cur == nil {
+				allReady = false
+				continue
+			}
+			if strings.ToLower(strings.TrimSpace(cur.Status)) != "live" {
+				allReady = false
+			}
+		}
+		if allReady {
+			if appendLog != nil {
+				appendLog("==> Dependency check passed")
+			}
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("dependency wait timed out after %ds", timeoutSec)
+		}
+		time.Sleep(3 * time.Second)
+	}
 }
 
 var internalDiscoveryEnvKeyRe = regexp.MustCompile(`[^A-Za-z0-9_]`)
@@ -654,6 +768,12 @@ func (w *Worker) processJob(job DeployJob) {
 		if w.OnBuildLog != nil {
 			w.OnBuildLog(deploy.ID, line)
 		}
+	}
+
+	if err := w.waitForServiceDependencies(svc, appendLog); err != nil {
+		appendLog(fmt.Sprintf("ERROR: Dependency wait failed: %v", err))
+		w.failDeploy(deploy, svc)
+		return
 	}
 
 	if w.Config.Kubernetes.Enabled {
