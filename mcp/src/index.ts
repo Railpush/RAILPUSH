@@ -456,6 +456,56 @@ server.tool(
   },
 );
 
+server.tool(
+  "set_deploy_automation_mode",
+  "Set a service deploy automation mode: off, push, or GitHub Actions workflow-success gated deploys. Optionally provide workflow allowlist when using workflow_success mode.",
+  {
+    service_id: z.string().describe("Service ID"),
+    mode: z.enum(["off", "push", "workflow_success"]).describe("Deploy automation mode"),
+    workflows: z.array(z.string()).optional().describe("Optional workflow names allowlist for workflow_success mode"),
+  },
+  async ({ service_id, mode, workflows }) => {
+    try {
+      const seen = new Set<string>();
+      const workflowNames = (workflows ?? [])
+        .map((w) => w.trim())
+        .filter(Boolean)
+        .filter((w) => {
+          const key = w.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+      const auto_deploy = mode !== "off";
+      const service = await client.updateService(service_id, { auto_deploy });
+
+      let envVars: Array<{ key: string; value: string; is_secret: boolean }> = [];
+      const deleteKeys = [
+        "RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY",
+        "RAILPUSH_GITHUB_ACTIONS_ENABLED",
+        "RAILPUSH_DEPLOY_ON_GITHUB_ACTIONS",
+        "RAILPUSH_GITHUB_ACTIONS_WORKFLOW",
+      ];
+
+      if (mode === "workflow_success") {
+        envVars = [{ key: "RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY", value: "true", is_secret: false }];
+        if (workflowNames.length > 0) {
+          envVars.push({ key: "RAILPUSH_GITHUB_ACTIONS_WORKFLOWS", value: workflowNames.join(", "), is_secret: false });
+        } else {
+          deleteKeys.push("RAILPUSH_GITHUB_ACTIONS_WORKFLOWS");
+        }
+      } else {
+        deleteKeys.push("RAILPUSH_GITHUB_ACTIONS_WORKFLOWS");
+      }
+
+      const env_update = await client.mergeEnvVars(service_id, envVars, deleteKeys);
+      return text({ service_id, mode, auto_deploy, workflows: workflowNames, service, env_update });
+    }
+    catch (e) { return err(e); }
+  },
+);
+
 // ════════════════════════════════════════════════════════════════════════
 //  ENVIRONMENT VARIABLES
 // ════════════════════════════════════════════════════════════════════════

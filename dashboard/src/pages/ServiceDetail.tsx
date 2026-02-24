@@ -6,9 +6,10 @@ import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Dropdown } from '../components/ui/Dropdown';
 import { ServiceIcon } from '../components/ui/ServiceIcon';
+import { deriveDeployAutomationState, type DeployAutomationMode } from '../lib/deployAutomation';
 import { serviceTypeLabel, timeAgo, formatDuration } from '../lib/utils';
 import { buildDefaultServiceUrl } from '../lib/serviceUrl';
-import { services as servicesApi, deploys as deploysApi, connectBuildStream } from '../lib/api';
+import { services as servicesApi, deploys as deploysApi, envVars as envVarsApi, connectBuildStream } from '../lib/api';
 import type { Service, Deploy } from '../types';
 
 interface QuickMetrics { cpu_percent: string; memory_used: string; memory_percent: string }
@@ -35,6 +36,8 @@ export function ServiceDetail() {
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<QuickMetrics | null>(null);
   const [buildLines, setBuildLines] = useState<string[]>([]);
+  const [deployAutomationMode, setDeployAutomationMode] = useState<DeployAutomationMode>('push');
+  const [deployAutomationWorkflows, setDeployAutomationWorkflows] = useState<string[]>([]);
   const buildWsRef = useRef<WebSocket | null>(null);
   const buildLogEndRef = useRef<HTMLDivElement>(null);
 
@@ -43,9 +46,18 @@ export function ServiceDetail() {
     Promise.all([
       servicesApi.get(serviceId).catch(() => null),
       deploysApi.list(serviceId).catch(() => []),
-    ]).then(([s, d]) => {
+      envVarsApi.list(serviceId).catch(() => null),
+    ]).then(([s, d, env]) => {
       setService(s);
       setDeployList(d);
+      if (s) {
+        const state = deriveDeployAutomationState(Boolean(s.auto_deploy), env || []);
+        setDeployAutomationMode(state.mode);
+        setDeployAutomationWorkflows(state.workflows);
+      } else {
+        setDeployAutomationMode('push');
+        setDeployAutomationWorkflows([]);
+      }
       setLoading(false);
     });
     // Fetch real metrics (best-effort)
@@ -93,6 +105,20 @@ export function ServiceDetail() {
 
   const latestDeploy = deployList[0];
   const serviceUrl = buildDefaultServiceUrl(service);
+  const deployAutomationLabel = deployAutomationMode === 'off'
+    ? 'Manual deploys'
+    : (deployAutomationMode === 'workflow_success' ? 'GitHub Actions gate' : 'Auto deploy on commit');
+  const deployAutomationTone = deployAutomationMode === 'off'
+    ? 'bg-surface-tertiary/20 border-border-default/50 text-content-tertiary'
+    : (deployAutomationMode === 'workflow_success'
+      ? 'bg-status-info/10 border-status-info/30 text-status-info'
+      : 'bg-status-success/10 border-status-success/30 text-status-success');
+  const deployAutomationDotTone = deployAutomationMode === 'off'
+    ? 'bg-content-tertiary'
+    : (deployAutomationMode === 'workflow_success' ? 'bg-status-info' : 'bg-status-success');
+  const deployAutomationTitle = deployAutomationMode === 'workflow_success' && deployAutomationWorkflows.length > 0
+    ? `Allowed workflows: ${deployAutomationWorkflows.join(', ')}`
+    : undefined;
 
   const runAction = async (label: string, action: () => Promise<unknown>) => {
     setActionInProgress(label);
@@ -125,18 +151,25 @@ export function ServiceDetail() {
                 <StatusBadge status={service.status} />
               </div>
 
-              <div className="flex items-center gap-4 mt-2 text-sm text-content-secondary flex-wrap">
-                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-surface-tertiary/30 border border-border-default/50">
-                  <Box className="w-3.5 h-3.5 text-content-tertiary" />
-                  <span>{serviceTypeLabel(service.type)}</span>
-                </div>
-                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-surface-tertiary/30 border border-border-default/50 font-mono text-xs">
-                  <GitBranch className="w-3.5 h-3.5 text-brand" />
-                  {service.branch}
-                </div>
-                {serviceUrl && (
-                  <div className="flex items-center gap-1 ml-2">
-                    <a
+                <div className="flex items-center gap-4 mt-2 text-sm text-content-secondary flex-wrap">
+                  <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-surface-tertiary/30 border border-border-default/50">
+                    <Box className="w-3.5 h-3.5 text-content-tertiary" />
+                    <span>{serviceTypeLabel(service.type)}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-surface-tertiary/30 border border-border-default/50 font-mono text-xs">
+                    <GitBranch className="w-3.5 h-3.5 text-brand" />
+                    {service.branch}
+                  </div>
+                  <div
+                    className={`flex items-center gap-1.5 px-2 py-0.5 rounded border text-xs ${deployAutomationTone}`}
+                    title={deployAutomationTitle}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${deployAutomationDotTone}`} />
+                    {deployAutomationLabel}
+                  </div>
+                  {serviceUrl && (
+                    <div className="flex items-center gap-1 ml-2">
+                      <a
                       href={serviceUrl}
                       target="_blank"
                       rel="noopener noreferrer"
@@ -293,6 +326,15 @@ export function ServiceDetail() {
                 <span className="text-content-secondary">Plan</span>
                 <span className="text-content-primary capitalize">{service.plan || 'Free'}</span>
               </div>
+              <div className="flex justify-between items-center text-sm">
+                <span className="text-content-secondary">Deploy Automation</span>
+                <span className="text-content-primary text-xs">{deployAutomationLabel}</span>
+              </div>
+              {deployAutomationMode === 'workflow_success' && deployAutomationWorkflows.length > 0 && (
+                <div className="text-[11px] text-content-tertiary leading-relaxed">
+                  Workflows: {deployAutomationWorkflows.join(', ')}
+                </div>
+              )}
             </div>
 
             <div className="pt-4 border-t border-border-default space-y-2">

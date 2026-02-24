@@ -4,31 +4,12 @@ import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { services as servicesApi, envVars as envVarsApi } from '../lib/api';
+import { deriveDeployAutomationState, parseWorkflowNames, type DeployAutomationMode } from '../lib/deployAutomation';
 import { buildDefaultServiceHostname, hostnameFromUrl } from '../lib/serviceUrl';
 import type { Service } from '../types';
 import { toast } from 'sonner';
 
 type TermLine = { text: string; color?: string; delay?: number };
-type DeployAutomationMode = 'push' | 'workflow_success' | 'off';
-
-function parseTruthyEnv(value?: string): boolean {
-  const normalized = (value || '').trim().toLowerCase();
-  return ['1', 'true', 'yes', 'on', 'y'].includes(normalized);
-}
-
-function parseWorkflowNames(raw: string): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const item of (raw || '').split(',')) {
-    const trimmed = item.trim();
-    if (!trimmed) continue;
-    const key = trimmed.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(trimmed);
-  }
-  return out;
-}
 
 function TerminalDeleteModal({ open, onClose, service, onConfirm }: {
   open: boolean;
@@ -280,21 +261,9 @@ export function ServiceSettings() {
           return;
         }
 
-        const byKey = new Map<string, string>();
-        for (const envVar of envVars) {
-          const key = (envVar.key || '').trim().toUpperCase();
-          if (!key) continue;
-          byKey.set(key, (envVar.value || '').trim());
-        }
-
-        const githubGateEnabled =
-          parseTruthyEnv(byKey.get('RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY')) ||
-          parseTruthyEnv(byKey.get('RAILPUSH_GITHUB_ACTIONS_ENABLED')) ||
-          parseTruthyEnv(byKey.get('RAILPUSH_DEPLOY_ON_GITHUB_ACTIONS'));
-
-        const workflowRaw = (byKey.get('RAILPUSH_GITHUB_ACTIONS_WORKFLOWS') || byKey.get('RAILPUSH_GITHUB_ACTIONS_WORKFLOW') || '').trim();
-        setWorkflowAllowlist(parseWorkflowNames(workflowRaw).join(', '));
-        setDeployAutomationMode(!s.auto_deploy ? 'off' : (githubGateEnabled ? 'workflow_success' : 'push'));
+        const state = deriveDeployAutomationState(Boolean(s.auto_deploy), envVars);
+        setWorkflowAllowlist(state.workflows.join(', '));
+        setDeployAutomationMode(state.mode);
         setGateConfigLoaded(true);
         setGateLoadError(false);
       })

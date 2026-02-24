@@ -329,6 +329,9 @@ export function Docs() {
                 You can optionally add a comma-separated workflow allowlist in that panel. Leave it blank to allow any successful <code className="text-xs bg-surface-tertiary px-1 rounded">workflow_run</code> on the tracked branch.
               </p>
               <p className="text-sm text-content-secondary mb-4">
+                The active deploy automation mode is also visible on each service detail page so you can quickly confirm whether it is set to commit-based, workflow-gated, or manual-only deploys.
+              </p>
+              <p className="text-sm text-content-secondary mb-4">
                 For API or MCP automation, configure the same service env vars directly:
               </p>
               <CodeBlock language="bash" filename="service env vars" code={`# Enable deploys from GitHub workflow_run success events
@@ -337,6 +340,7 @@ RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY=true
 # Optional: only allow specific workflow names (comma-separated)
 RAILPUSH_GITHUB_ACTIONS_WORKFLOWS=CI, Release Build`} />
               <CodeBlock language="text" filename="MCP tools" code={`get_github_actions_deploy_gate(service_id)
+set_deploy_automation_mode(service_id, mode, workflows?)
 enable_github_actions_deploy_gate(service_id, workflows?)
 disable_github_actions_deploy_gate(service_id)`} />
             </section>
@@ -1622,7 +1626,7 @@ curl https://railpush.com/api/v1/services \\
                   <div>
                     <div className="text-sm font-semibold mb-1">AI-native infrastructure</div>
                     <div className="text-sm text-content-secondary">
-                      With 114 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
+                      With 115 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
                     </div>
                   </div>
                 </div>
@@ -1713,7 +1717,7 @@ npm run build`} />
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Available Tools</h3>
               <p className="text-content-secondary text-sm leading-relaxed mb-4">
-                The MCP server exposes 114 tools organized by category. Agents discover these automatically.
+                The MCP server exposes 115 tools organized by category. Agents discover these automatically.
               </p>
 
               <div className="overflow-x-auto mb-8">
@@ -1730,7 +1734,7 @@ npm run build`} />
                       ['Services', 'list, get, create, update, delete, restart, suspend, resume, search/filter'],
                       ['Bulk Operations', 'bulk deploy, bulk restart, bulk suspend, bulk resume'],
                       ['Deploys', 'trigger, list, get, rollback, queue position'],
-                      ['Env Vars', 'list, set (bulk replace), upsert (additive), get/enable/disable GitHub Actions deploy gate'],
+                      ['Env Vars', 'list, set (bulk replace), upsert (additive), get/set/enable/disable GitHub Actions deploy gate'],
                       ['Custom Domains', 'list, add, delete'],
                       ['Databases', 'list, create, get, update, delete, backup, list backups, replicas, create replica, promote replica, enable HA'],
                       ['Key-Value (Redis)', 'list, create, get, update, delete'],
