@@ -141,6 +141,7 @@ func (h *DatabaseHandler) CreateDatabase(w http.ResponseWriter, r *http.Request)
 		db.Host = internalHost
 		db.Port = 5432
 		_ = models.UpdateManagedDatabaseConnection(db.ID, 5432, internalHost)
+		h.syncDatabaseLinks(db.ID)
 	}
 
 	// Add to Stripe subscription for paid plans
@@ -637,6 +638,7 @@ func (h *DatabaseHandler) PromoteReplica(w http.ResponseWriter, r *http.Request)
 	}
 	_ = models.UpdateManagedDatabaseStatus(primary.ID, "available", replica.ContainerID)
 	_ = models.UpdateManagedDatabaseConnection(primary.ID, replica.Port, replica.Host)
+	h.syncDatabaseLinks(primary.ID)
 	_ = models.PromoteDatabaseReplica(replica.ID)
 	_ = models.UpdateManagedDatabaseHA(primary.ID, true, "manual-failover", &replica.ID)
 
@@ -696,4 +698,204 @@ func (h *DatabaseHandler) EnableHA(w http.ResponseWriter, r *http.Request) {
 		"status":             "ha_enabled",
 		"standby_replica_id": standby.ID,
 	})
+}
+
+func (h *DatabaseHandler) linkedDatabaseURL(db *models.ManagedDatabase, password string, useInternal bool) string {
+	if db == nil {
+		return ""
+	}
+	host := strings.TrimSpace(db.Host)
+	port := db.Port
+	if !useInternal && db.ExternalPort > 0 {
+		extHost := strings.TrimSpace(h.Config.ControlPlane.DBExternalHost)
+		if extHost == "" {
+			extHost = strings.TrimSpace(h.Config.ControlPlane.Domain)
+		}
+		if extHost != "" {
+			host = extHost
+			port = db.ExternalPort
+		}
+	}
+	if host == "" || port <= 0 {
+		return ""
+	}
+	url := "postgresql://" + db.Username + ":" + password + "@" + host + ":" + intToStr(port) + "/" + db.DBName
+	if !useInternal && db.ExternalPort > 0 {
+		url += "?sslmode=require"
+	}
+	return url
+}
+
+func (h *DatabaseHandler) syncDatabaseLinks(dbID string) {
+	db, err := models.GetManagedDatabase(dbID)
+	if err != nil || db == nil || strings.TrimSpace(db.EncryptedPassword) == "" {
+		return
+	}
+	pw, err := utils.Decrypt(db.EncryptedPassword, h.Config.Crypto.EncryptionKey)
+	if err != nil || strings.TrimSpace(pw) == "" {
+		return
+	}
+	links, err := models.ListServiceDatabaseLinksByDatabase(db.ID)
+	if err != nil || len(links) == 0 {
+		return
+	}
+	for _, l := range links {
+		svc, err := models.GetService(l.ServiceID)
+		if err != nil || svc == nil {
+			continue
+		}
+		if svc.WorkspaceID != db.WorkspaceID {
+			continue
+		}
+		url := h.linkedDatabaseURL(db, pw, l.UseInternalURL)
+		if strings.TrimSpace(url) == "" {
+			continue
+		}
+		encrypted, err := utils.Encrypt(url, h.Config.Crypto.EncryptionKey)
+		if err != nil {
+			continue
+		}
+		_ = models.MergeUpsertEnvVars("service", svc.ID, []models.EnvVar{{
+			Key:            l.EnvVarName,
+			EncryptedValue: encrypted,
+			IsSecret:       true,
+		}})
+	}
+}
+
+func (h *DatabaseHandler) LinkDatabaseToService(w http.ResponseWriter, r *http.Request) {
+	serviceID := mux.Vars(r)["id"]
+	userID := middleware.GetUserID(r)
+
+	svc, err := models.GetService(serviceID)
+	if err != nil || svc == nil {
+		utils.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if err := services.EnsureWorkspaceAccess(userID, svc.WorkspaceID, models.RoleDeveloper); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	var req struct {
+		DatabaseID     string `json:"database_id"`
+		EnvVarName     string `json:"env_var_name"`
+		UseInternalURL *bool  `json:"use_internal_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.DatabaseID) == "" {
+		utils.RespondError(w, http.StatusBadRequest, "database_id is required")
+		return
+	}
+	db, err := models.GetManagedDatabase(strings.TrimSpace(req.DatabaseID))
+	if err != nil || db == nil {
+		utils.RespondError(w, http.StatusNotFound, "database not found")
+		return
+	}
+	if db.WorkspaceID != svc.WorkspaceID {
+		utils.RespondError(w, http.StatusBadRequest, "database and service must be in the same workspace")
+		return
+	}
+	envVar := strings.ToUpper(strings.TrimSpace(req.EnvVarName))
+	if envVar == "" {
+		envVar = "DATABASE_URL"
+	}
+	useInternal := true
+	if req.UseInternalURL != nil {
+		useInternal = *req.UseInternalURL
+	}
+
+	if strings.TrimSpace(db.EncryptedPassword) == "" {
+		utils.RespondError(w, http.StatusBadRequest, "database credentials are not ready yet")
+		return
+	}
+	pw, err := utils.Decrypt(db.EncryptedPassword, h.Config.Crypto.EncryptionKey)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to decrypt database credentials")
+		return
+	}
+	url := h.linkedDatabaseURL(db, pw, useInternal)
+	if strings.TrimSpace(url) == "" {
+		utils.RespondError(w, http.StatusBadRequest, "database endpoint is not ready yet")
+		return
+	}
+	encrypted, err := utils.Encrypt(url, h.Config.Crypto.EncryptionKey)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to store database link")
+		return
+	}
+	if err := models.MergeUpsertEnvVars("service", svc.ID, []models.EnvVar{{
+		Key:            envVar,
+		EncryptedValue: encrypted,
+		IsSecret:       true,
+	}}); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to inject env var")
+		return
+	}
+
+	link := &models.ServiceDatabaseLink{ServiceID: svc.ID, DatabaseID: db.ID, EnvVarName: envVar, UseInternalURL: useInternal}
+	if err := models.UpsertServiceDatabaseLink(link); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to create link")
+		return
+	}
+
+	services.Audit(svc.WorkspaceID, userID, "database.linked", "service", svc.ID, map[string]interface{}{
+		"database_id":      db.ID,
+		"env_var_name":     envVar,
+		"use_internal_url": useInternal,
+	})
+	utils.RespondJSON(w, http.StatusCreated, link)
+}
+
+func (h *DatabaseHandler) ListServiceDatabaseLinks(w http.ResponseWriter, r *http.Request) {
+	serviceID := mux.Vars(r)["id"]
+	userID := middleware.GetUserID(r)
+	svc, err := models.GetService(serviceID)
+	if err != nil || svc == nil {
+		utils.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if err := services.EnsureWorkspaceAccess(userID, svc.WorkspaceID, models.RoleViewer); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	links, err := models.ListServiceDatabaseLinks(serviceID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to list links")
+		return
+	}
+	if links == nil {
+		links = []models.ServiceDatabaseLink{}
+	}
+	utils.RespondJSON(w, http.StatusOK, links)
+}
+
+func (h *DatabaseHandler) UnlinkDatabaseFromService(w http.ResponseWriter, r *http.Request) {
+	serviceID := mux.Vars(r)["id"]
+	databaseID := strings.TrimSpace(mux.Vars(r)["databaseId"])
+	envVar := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("env_var_name")))
+	if envVar == "" {
+		envVar = "DATABASE_URL"
+	}
+	userID := middleware.GetUserID(r)
+
+	svc, err := models.GetService(serviceID)
+	if err != nil || svc == nil {
+		utils.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if err := services.EnsureWorkspaceAccess(userID, svc.WorkspaceID, models.RoleDeveloper); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	if err := models.DeleteServiceDatabaseLink(serviceID, databaseID, envVar); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to delete link")
+		return
+	}
+	_ = models.DeleteEnvVarsByKeys("service", serviceID, []string{envVar})
+
+	services.Audit(svc.WorkspaceID, userID, "database.unlinked", "service", svc.ID, map[string]interface{}{
+		"database_id":  databaseID,
+		"env_var_name": envVar,
+	})
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "unlinked"})
 }

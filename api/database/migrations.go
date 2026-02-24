@@ -420,4 +420,17 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 		created_at TIMESTAMPTZ DEFAULT NOW()
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_rewrite_rules_service_id ON rewrite_rules(service_id)`,
+
+	// Service <-> managed database links (auto-injected connection URLs).
+	`CREATE TABLE IF NOT EXISTS service_database_links (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		service_id UUID NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+		database_id UUID NOT NULL REFERENCES managed_databases(id) ON DELETE CASCADE,
+		env_var_name VARCHAR(255) NOT NULL DEFAULT 'DATABASE_URL',
+		use_internal_url BOOLEAN NOT NULL DEFAULT TRUE,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_service_database_links_unique ON service_database_links(service_id, database_id, env_var_name)`,
+	`CREATE INDEX IF NOT EXISTS idx_service_database_links_service ON service_database_links(service_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_service_database_links_database ON service_database_links(database_id)`,
 }

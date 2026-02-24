@@ -124,6 +124,58 @@ func (w *Worker) injectKubeInternalDiscoveryEnv(svc *models.Service, env map[str
 	}
 }
 
+func (w *Worker) syncDatabaseServiceLinks(databaseID string) {
+	if w == nil || w.Config == nil || strings.TrimSpace(databaseID) == "" {
+		return
+	}
+	db, err := models.GetManagedDatabase(databaseID)
+	if err != nil || db == nil || strings.TrimSpace(db.EncryptedPassword) == "" {
+		return
+	}
+	pw, err := utils.Decrypt(db.EncryptedPassword, w.Config.Crypto.EncryptionKey)
+	if err != nil || strings.TrimSpace(pw) == "" {
+		return
+	}
+	links, err := models.ListServiceDatabaseLinksByDatabase(db.ID)
+	if err != nil || len(links) == 0 {
+		return
+	}
+	for _, l := range links {
+		svc, err := models.GetService(l.ServiceID)
+		if err != nil || svc == nil || svc.WorkspaceID != db.WorkspaceID {
+			continue
+		}
+		host := strings.TrimSpace(db.Host)
+		port := db.Port
+		if !l.UseInternalURL && db.ExternalPort > 0 {
+			extHost := strings.TrimSpace(w.Config.ControlPlane.DBExternalHost)
+			if extHost == "" {
+				extHost = strings.TrimSpace(w.Config.ControlPlane.Domain)
+			}
+			if extHost != "" {
+				host = extHost
+				port = db.ExternalPort
+			}
+		}
+		if host == "" || port <= 0 {
+			continue
+		}
+		url := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s", db.Username, pw, host, port, db.DBName)
+		if !l.UseInternalURL && db.ExternalPort > 0 {
+			url += "?sslmode=require"
+		}
+		encrypted, err := utils.Encrypt(url, w.Config.Crypto.EncryptionKey)
+		if err != nil {
+			continue
+		}
+		_ = models.MergeUpsertEnvVars("service", svc.ID, []models.EnvVar{{
+			Key:            l.EnvVarName,
+			EncryptedValue: encrypted,
+			IsSecret:       true,
+		}})
+	}
+}
+
 func (w *Worker) getServiceEnvValue(svc *models.Service, key string) string {
 	if w == nil || w.Config == nil || svc == nil {
 		return ""
@@ -1244,6 +1296,7 @@ func (w *Worker) reconcileManagedDatabases() {
 			continue
 		}
 		_ = models.UpdateManagedDatabaseConnection(full.ID, 5432, name)
+		w.syncDatabaseServiceLinks(full.ID)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		ss, getErr := kd.Client.AppsV1().StatefulSets(kd.namespace()).Get(ctx, name, metav1.GetOptions{})
@@ -1802,6 +1855,7 @@ func (w *Worker) ProvisionDatabase(db *models.ManagedDatabase, password string) 
 			}
 			_ = models.UpdateManagedDatabaseStatus(db.ID, "available", "k8s:"+name)
 			_ = models.UpdateManagedDatabaseConnection(db.ID, 5432, name)
+			w.syncDatabaseServiceLinks(db.ID)
 			log.Printf("Database %s provisioned successfully in k8s (%s)", db.Name, name)
 
 			// Allocate an external TCP port and register it with the nginx ingress TCP proxy.
@@ -1890,6 +1944,7 @@ func (w *Worker) ProvisionDatabase(db *models.ManagedDatabase, password string) 
 
 		models.UpdateManagedDatabaseStatus(db.ID, "available", cid)
 		models.UpdateManagedDatabaseConnection(db.ID, port, "localhost")
+		w.syncDatabaseServiceLinks(db.ID)
 		log.Printf("Database %s provisioned successfully on port %d", db.Name, port)
 
 		// Run init script if specified (one-time, on first provision only).

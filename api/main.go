@@ -333,6 +333,9 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/databases/{id}/replicas", dbH.CreateReplica).Methods("POST")
 	authed.HandleFunc("/databases/{id}/replicas/{replicaId}/promote", dbH.PromoteReplica).Methods("POST")
 	authed.HandleFunc("/databases/{id}/ha/enable", dbH.EnableHA).Methods("POST")
+	authed.HandleFunc("/services/{id}/link-database", dbH.LinkDatabaseToService).Methods("POST")
+	authed.HandleFunc("/services/{id}/link-database/{databaseId}", dbH.UnlinkDatabaseFromService).Methods("DELETE")
+	authed.HandleFunc("/services/{id}/linked-databases", dbH.ListServiceDatabaseLinks).Methods("GET")
 
 	authed.HandleFunc("/keyvalue", kvH.ListKeyValues).Methods("GET")
 	authed.HandleFunc("/keyvalue", kvH.CreateKeyValue).Methods("POST")
