@@ -320,6 +320,16 @@ export function Docs() {
                   </tbody>
                 </table>
               </div>
+
+              <h3 className="text-lg font-semibold mb-3">GitHub Actions-Gated Deploys</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                By default, auto-deploy triggers on GitHub <code className="text-xs bg-surface-tertiary px-1 rounded">push</code> webhooks. To deploy only after a successful GitHub Actions workflow run, set these service environment variables:
+              </p>
+              <CodeBlock language="bash" filename="service env vars" code={`# Enable deploys from GitHub workflow_run success events
+RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY=true
+
+# Optional: only allow specific workflow names (comma-separated)
+RAILPUSH_GITHUB_ACTIONS_WORKFLOWS=CI, Release Build`} />
             </section>
 
             {/* ── Databases ───────────────────────────────── */}

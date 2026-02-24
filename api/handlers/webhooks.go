@@ -205,6 +205,10 @@ func (h *WebhookHandler) GitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		svcs, _ := models.ListAutoDeployServicesByRepoBranch(repoURL, branch)
 		changedPaths := collectPushChangedPaths(payload.Commits)
 		for _, svc := range svcs {
+			if h.githubActionsAutoDeployEnabled(&svc) {
+				log.Printf("Auto-deploy skipped for service %s on push: waiting for GitHub Actions workflow success", svc.Name)
+				continue
+			}
 			if !shouldTriggerForChangedPaths(changedPaths, svc.BuildInclude, svc.BuildExclude) {
 				log.Printf("Auto-deploy skipped for service %s: no matching changed paths", svc.Name)
 				continue
@@ -239,6 +243,106 @@ func (h *WebhookHandler) GitHubWebhook(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Auto-deploy triggered for service %s (branch: %s)", svc.Name, branch)
 		}
 		utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	case "workflow_run":
+		var payload struct {
+			Action      string `json:"action"`
+			Workflow    struct {
+				Name string `json:"name"`
+			} `json:"workflow"`
+			WorkflowRun struct {
+				Conclusion string `json:"conclusion"`
+				HeadBranch string `json:"head_branch"`
+				HeadSHA    string `json:"head_sha"`
+				Name       string `json:"name"`
+				HTMLURL    string `json:"html_url"`
+			} `json:"workflow_run"`
+			Repository struct {
+				CloneURL string `json:"clone_url"`
+			} `json:"repository"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			utils.RespondError(w, http.StatusBadRequest, "invalid workflow_run payload")
+			return
+		}
+
+		action := strings.ToLower(strings.TrimSpace(payload.Action))
+		if action != "completed" {
+			utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
+			return
+		}
+		conclusion := strings.ToLower(strings.TrimSpace(payload.WorkflowRun.Conclusion))
+		if conclusion != "success" {
+			utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
+			return
+		}
+
+		branch := strings.TrimSpace(payload.WorkflowRun.HeadBranch)
+		repoURL := strings.TrimSpace(payload.Repository.CloneURL)
+		if repoURL == "" || branch == "" {
+			utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
+			return
+		}
+
+		workflowName := strings.TrimSpace(payload.WorkflowRun.Name)
+		if workflowName == "" {
+			workflowName = strings.TrimSpace(payload.Workflow.Name)
+		}
+
+		svcs, _ := models.ListAutoDeployServicesByRepoBranch(repoURL, branch)
+		triggered := 0
+		for _, svc := range svcs {
+			opts := h.githubActionsAutoDeployOptions(&svc)
+			if !opts.Enabled {
+				continue
+			}
+			if len(opts.Workflows) > 0 && !stringInFold(workflowName, opts.Workflows) {
+				log.Printf("Auto-deploy skipped for service %s: workflow %q not in allowlist", svc.Name, workflowName)
+				continue
+			}
+
+			msg := "GitHub Actions workflow succeeded"
+			if workflowName != "" {
+				msg = fmt.Sprintf("GitHub Actions workflow %q succeeded", workflowName)
+			}
+			if url := strings.TrimSpace(payload.WorkflowRun.HTMLURL); url != "" {
+				msg = msg + " (" + url + ")"
+			}
+
+			deploy := &models.Deploy{
+				ServiceID:     svc.ID,
+				Trigger:       "github_push",
+				CommitSHA:     strings.TrimSpace(payload.WorkflowRun.HeadSHA),
+				CommitMessage: msg,
+				Branch:        branch,
+			}
+			if err := models.CreateDeploy(deploy); err != nil {
+				log.Printf("Failed to create deploy from workflow_run for service %s: %v", svc.ID, err)
+				continue
+			}
+
+			var ghToken string
+			if ws, err := models.GetWorkspace(svc.WorkspaceID); err == nil && ws != nil {
+				if encToken, err := models.GetUserGitHubToken(ws.OwnerID); err == nil && encToken != "" {
+					if t, err := utils.Decrypt(encToken, h.Config.Crypto.EncryptionKey); err == nil {
+						ghToken = t
+					}
+				}
+			}
+
+			svcCopy := svc
+			h.Worker.Enqueue(services.DeployJob{
+				Deploy:      deploy,
+				Service:     &svcCopy,
+				GitHubToken: ghToken,
+			})
+			triggered++
+			log.Printf("Auto-deploy triggered from workflow_run for service %s (branch: %s)", svc.Name, branch)
+		}
+
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":    "ok",
+			"triggered": triggered,
+		})
 	case "pull_request":
 		var payload struct {
 			Action      string `json:"action"`
@@ -543,4 +647,78 @@ func shouldTriggerForChangedPaths(changed []string, includeRaw, excludeRaw strin
 		return true
 	}
 	return false
+}
+
+type githubActionsDeployOptions struct {
+	Enabled   bool
+	Workflows []string
+}
+
+func parseBoolString(v string) bool {
+	v = strings.ToLower(strings.TrimSpace(v))
+	switch v {
+	case "1", "true", "yes", "on", "y":
+		return true
+	default:
+		return false
+	}
+}
+
+func stringInFold(needle string, haystack []string) bool {
+	needle = strings.TrimSpace(needle)
+	if needle == "" || len(haystack) == 0 {
+		return false
+	}
+	for _, v := range haystack {
+		if strings.EqualFold(strings.TrimSpace(v), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *WebhookHandler) serviceEnvValues(serviceID string) map[string]string {
+	out := map[string]string{}
+	serviceID = strings.TrimSpace(serviceID)
+	if serviceID == "" || h == nil || h.Config == nil {
+		return out
+	}
+	vars, err := models.ListEnvVars("service", serviceID)
+	if err != nil {
+		return out
+	}
+	for _, ev := range vars {
+		key := strings.ToUpper(strings.TrimSpace(ev.Key))
+		if key == "" || strings.TrimSpace(ev.EncryptedValue) == "" {
+			continue
+		}
+		v, err := utils.Decrypt(ev.EncryptedValue, h.Config.Crypto.EncryptionKey)
+		if err != nil {
+			continue
+		}
+		out[key] = strings.TrimSpace(v)
+	}
+	return out
+}
+
+func (h *WebhookHandler) githubActionsAutoDeployOptions(svc *models.Service) githubActionsDeployOptions {
+	if svc == nil {
+		return githubActionsDeployOptions{}
+	}
+	env := h.serviceEnvValues(svc.ID)
+	enabled := parseBoolString(env["RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY"]) ||
+		parseBoolString(env["RAILPUSH_GITHUB_ACTIONS_ENABLED"]) ||
+		parseBoolString(env["RAILPUSH_DEPLOY_ON_GITHUB_ACTIONS"])
+
+	workflowsRaw := strings.TrimSpace(env["RAILPUSH_GITHUB_ACTIONS_WORKFLOW"])
+	if workflowsRaw == "" {
+		workflowsRaw = strings.TrimSpace(env["RAILPUSH_GITHUB_ACTIONS_WORKFLOWS"])
+	}
+	workflows := splitPathPatterns(workflowsRaw)
+
+	return githubActionsDeployOptions{Enabled: enabled, Workflows: workflows}
+}
+
+func (h *WebhookHandler) githubActionsAutoDeployEnabled(svc *models.Service) bool {
+	return h.githubActionsAutoDeployOptions(svc).Enabled
 }
