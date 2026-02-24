@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/railpush/api/config"
 )
@@ -177,13 +178,14 @@ func (g *GitHub) ListWorkflows(token, owner, repo string) ([]GitHubWorkflow, err
 }
 
 func (g *GitHub) CreateWebhook(token, owner, repo, webhookURL, secret string) error {
+	requiredEvents := []string{"push", "workflow_run"}
 	payload := map[string]interface{}{
 		"config": map[string]string{
 			"url":          webhookURL,
 			"content_type": "json",
 			"secret":       secret,
 		},
-		"events": []string{"push"},
+		"events": requiredEvents,
 		"active": true,
 	}
 	body, _ := json.Marshal(payload)
@@ -196,10 +198,133 @@ func (g *GitHub) CreateWebhook(token, owner, repo, webhookURL, secret string) er
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
-	// 422 = webhook already exists, treat as success
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != 422 {
-		return fmt.Errorf("failed to create webhook: HTTP %d", resp.StatusCode)
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusCreated {
+		return nil
 	}
-	return nil
+
+	if resp.StatusCode == http.StatusUnprocessableEntity {
+		if err := g.ensureWebhookHasEvents(token, owner, repo, webhookURL, requiredEvents); err != nil {
+			return fmt.Errorf("webhook exists but could not update required events: %w", err)
+		}
+		return nil
+	}
+
+	bodyResp, _ := io.ReadAll(resp.Body)
+	return fmt.Errorf("failed to create webhook: HTTP %d: %s", resp.StatusCode, string(bodyResp))
+}
+
+func normalizeWebhookURL(url string) string {
+	return strings.TrimRight(strings.TrimSpace(url), "/")
+}
+
+func mergeWebhookEvents(existing, required []string) []string {
+	merged := make([]string, 0, len(existing)+len(required))
+	seen := map[string]bool{}
+	for _, event := range existing {
+		e := strings.TrimSpace(event)
+		if e == "" || seen[e] {
+			continue
+		}
+		seen[e] = true
+		merged = append(merged, e)
+	}
+	for _, event := range required {
+		e := strings.TrimSpace(event)
+		if e == "" || seen[e] {
+			continue
+		}
+		seen[e] = true
+		merged = append(merged, e)
+	}
+	return merged
+}
+
+func containsWebhookEvents(events, required []string) bool {
+	if len(required) == 0 {
+		return true
+	}
+	have := map[string]bool{}
+	for _, event := range events {
+		e := strings.TrimSpace(event)
+		if e == "" {
+			continue
+		}
+		have[e] = true
+	}
+	for _, event := range required {
+		e := strings.TrimSpace(event)
+		if e == "" {
+			continue
+		}
+		if !have[e] {
+			return false
+		}
+	}
+	return true
+}
+
+func (g *GitHub) ensureWebhookHasEvents(token, owner, repo, webhookURL string, requiredEvents []string) error {
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/hooks?per_page=100", owner, repo)
+	req, _ := http.NewRequest("GET", apiURL, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to list webhooks: HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	targetURL := normalizeWebhookURL(webhookURL)
+	var hooks []struct {
+		ID     int64    `json:"id"`
+		Events []string `json:"events"`
+		Config struct {
+			URL string `json:"url"`
+		} `json:"config"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&hooks); err != nil {
+		return err
+	}
+
+	for _, hook := range hooks {
+		if normalizeWebhookURL(hook.Config.URL) != targetURL {
+			continue
+		}
+		if containsWebhookEvents(hook.Events, requiredEvents) {
+			return nil
+		}
+
+		mergedEvents := mergeWebhookEvents(hook.Events, requiredEvents)
+		payload := map[string]interface{}{
+			"events": mergedEvents,
+			"active": true,
+		}
+		body, _ := json.Marshal(payload)
+		patchURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/hooks/%d", owner, repo, hook.ID)
+		patchReq, _ := http.NewRequest("PATCH", patchURL, bytes.NewReader(body))
+		patchReq.Header.Set("Authorization", "Bearer "+token)
+		patchReq.Header.Set("Content-Type", "application/json")
+		patchReq.Header.Set("Accept", "application/vnd.github+json")
+
+		patchResp, err := http.DefaultClient.Do(patchReq)
+		if err != nil {
+			return err
+		}
+		defer patchResp.Body.Close()
+		if patchResp.StatusCode < 200 || patchResp.StatusCode >= 300 {
+			patchBody, _ := io.ReadAll(patchResp.Body)
+			return fmt.Errorf("failed to update webhook events: HTTP %d: %s", patchResp.StatusCode, string(patchBody))
+		}
+		return nil
+	}
+
+	return fmt.Errorf("existing webhook for %s not found", webhookURL)
 }

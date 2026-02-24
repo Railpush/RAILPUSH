@@ -335,6 +335,9 @@ export function Docs() {
                 You can also switch modes directly from the service detail header using the <strong>Automation</strong> quick-action menu, and edit the workflow allowlist from the same page with known workflow-name suggestions loaded from GitHub.
               </p>
               <p className="text-sm text-content-secondary mb-4">
+                When services are created from GitHub repos, RailPush auto-registers webhook events for both <code className="text-xs bg-surface-tertiary px-1 rounded">push</code> and <code className="text-xs bg-surface-tertiary px-1 rounded">workflow_run</code> so workflow-gated deploys can trigger without extra manual webhook setup.
+              </p>
+              <p className="text-sm text-content-secondary mb-4">
                 For API or MCP automation, configure the same service env vars directly:
               </p>
               <CodeBlock language="bash" filename="service env vars" code={`# Enable deploys from GitHub workflow_run success events
