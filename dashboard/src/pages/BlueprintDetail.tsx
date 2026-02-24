@@ -64,6 +64,7 @@ interface AIFixState {
   current_attempt?: number;
   max_attempts?: number;
   last_ai_summary?: string;
+  last_deploy_status?: string;
 }
 
 function SyncLogSection({ log, failed }: { log: string; failed: boolean }) {
@@ -166,6 +167,40 @@ export function BlueprintDetail() {
       }
     }, 3000);
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshAIFixStatus = async () => {
+      const failedServices = resources.filter(
+        (r) => r.resource_type === 'service' && (r.status === 'failed' || r.status === 'deploy_failed'),
+      );
+      if (failedServices.length === 0) return;
+
+      await Promise.all(
+        failedServices.map(async (r) => {
+          try {
+            const status = await aiFixApi.status(r.resource_id);
+            if (cancelled) return;
+
+            setAiFixStatus((prev) => ({ ...prev, [r.resource_id]: status }));
+            setAiFixing((prev) => ({ ...prev, [r.resource_id]: !!status.active }));
+
+            if (status.active) {
+              startAIFixPolling(r.resource_id);
+            }
+          } catch {
+            // Ignore individual status fetch errors.
+          }
+        }),
+      );
+    };
+
+    refreshAIFixStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [resources, startAIFixPolling]);
 
   const handleAIFix = async (resourceId: string) => {
     setAiFixing((prev) => ({ ...prev, [resourceId]: true }));
@@ -370,6 +405,8 @@ export function BlueprintDetail() {
             const isServiceFailed = r.resource_type === 'service' && (r.status === 'failed' || r.status === 'deploy_failed');
             const isFixing = aiFixing[r.resource_id];
             const fixStatus = aiFixStatus[r.resource_id];
+            const shouldShowRetry = !fixStatus?.active && (fixStatus?.status === 'error' || fixStatus?.status === 'exhausted');
+            const aiSummary = (fixStatus?.last_ai_summary || '').trim();
             return (
               <Card
                 key={r.resource_id}
@@ -379,31 +416,36 @@ export function BlueprintDetail() {
               >
                 <div className="flex items-center gap-3">
                   <Icon className="w-4 h-4 text-content-secondary" />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-content-primary">{r.resource_name}</div>
-                    <div className="text-xs text-content-tertiary">
-                      {resourceLabels[r.resource_type] || r.resource_type}
-                      {isFixing && fixStatus?.active && (
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-content-primary">{r.resource_name}</div>
+                      <div className="text-xs text-content-tertiary">
+                        {resourceLabels[r.resource_type] || r.resource_type}
+                        {isFixing && fixStatus?.active && (
                         <span className="ml-2 text-brand-primary">
                           Attempt {fixStatus.current_attempt || 1}/{fixStatus.max_attempts || 3}...
-                        </span>
+                          </span>
+                        )}
+                      </div>
+                      {isServiceFailed && aiSummary && !fixStatus?.active && (
+                        <div className="text-[11px] text-content-secondary mt-1 truncate" title={aiSummary}>
+                          AI summary: {aiSummary}
+                        </div>
                       )}
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {isServiceFailed && !isFixing && (
-                      <button
+                    <div className="flex items-center gap-2">
+                      {isServiceFailed && !isFixing && (
+                        <button
                         onClick={(e) => {
                           e.stopPropagation();
                           handleAIFix(r.resource_id);
                         }}
-                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md bg-brand-primary/10 text-brand-primary hover:bg-brand-primary/20 transition-colors"
-                        title="Fix with AI"
-                      >
-                        <Wand2 className="w-3 h-3" />
-                        Fix with AI
-                      </button>
-                    )}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md bg-brand-primary/10 text-brand-primary hover:bg-brand-primary/20 transition-colors"
+                          title={shouldShowRetry ? 'Retry with AI' : 'Fix with AI'}
+                        >
+                          <Wand2 className="w-3 h-3" />
+                          {shouldShowRetry ? 'Retry AI Fix' : 'Fix with AI'}
+                        </button>
+                      )}
                     {isFixing && (
                       <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-brand-primary">
                         <Loader2 className="w-3 h-3 animate-spin" />
