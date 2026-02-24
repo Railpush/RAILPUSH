@@ -2,7 +2,9 @@ package services
 
 import (
 	"context"
+	"crypto/x509"
 	"crypto/sha256"
+	"encoding/pem"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -300,33 +302,45 @@ func (k *KubeDeployer) DeleteCustomDomainIngress(serviceID string, domain string
 	return nil
 }
 
-func (k *KubeDeployer) IsCustomDomainTLSReady(serviceID string, domain string) (bool, error) {
+func (k *KubeDeployer) GetCustomDomainTLSInfo(serviceID string, domain string) (bool, *time.Time, error) {
 	if k == nil || k.Client == nil {
-		return false, fmt.Errorf("kube deployer not initialized")
+		return false, nil, fmt.Errorf("kube deployer not initialized")
 	}
 	ns := k.namespace()
 	domain = strings.ToLower(strings.TrimSpace(domain))
 	if domain == "" {
-		return false, fmt.Errorf("missing domain")
+		return false, nil, fmt.Errorf("missing domain")
 	}
 	secretName := kubeCustomDomainTLSSecretName(serviceID, domain)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	sec, err := k.Client.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return false, nil
+		return false, nil, nil
 	}
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if sec == nil || sec.Type != corev1.SecretTypeTLS {
 		// cert-manager uses kubernetes.io/tls. If it's not there yet, treat as not ready.
-		return false, nil
+		return false, nil, nil
 	}
 	if len(sec.Data["tls.crt"]) == 0 || len(sec.Data["tls.key"]) == 0 {
-		return false, nil
+		return false, nil, nil
 	}
-	return true, nil
+	var expiresAt *time.Time
+	if block, _ := pem.Decode(sec.Data["tls.crt"]); block != nil {
+		if cert, err := x509.ParseCertificate(block.Bytes); err == nil {
+			t := cert.NotAfter.UTC()
+			expiresAt = &t
+		}
+	}
+	return true, expiresAt, nil
+}
+
+func (k *KubeDeployer) IsCustomDomainTLSReady(serviceID string, domain string) (bool, error) {
+	ready, _, err := k.GetCustomDomainTLSInfo(serviceID, domain)
+	return ready, err
 }
 
 func (k *KubeDeployer) ReconcileCustomDomainIngresses(svc *models.Service) error {

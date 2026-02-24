@@ -310,6 +310,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 
 	authed.HandleFunc("/services/{id}/custom-domains", domH.AddCustomDomain).Methods("POST")
 	authed.HandleFunc("/services/{id}/custom-domains", domH.ListCustomDomains).Methods("GET")
+	authed.HandleFunc("/services/{id}/custom-domains/{domain}/verify", domH.VerifyCustomDomain).Methods("POST")
 	authed.HandleFunc("/services/{id}/custom-domains/{domain}", domH.DeleteCustomDomain).Methods("DELETE")
 
 	authed.HandleFunc("/services/{id}/rewrite-rules", rwH.AddRewriteRule).Methods("POST")

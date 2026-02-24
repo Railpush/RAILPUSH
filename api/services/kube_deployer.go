@@ -116,6 +116,34 @@ func ingressPolicyAnnotationsFromEnv(env map[string]string) map[string]string {
 	for k, v := range ingressRateLimitAnnotationsFromEnv(env) {
 		out[k] = v
 	}
+
+	allowOrigin := strings.TrimSpace(env["RAILPUSH_CORS_ALLOW_ORIGIN"])
+	if allowOrigin == "" {
+		allowOrigin = strings.TrimSpace(env["CORS_ALLOW_ORIGIN"])
+	}
+	if allowOrigin != "" {
+		out["nginx.ingress.kubernetes.io/enable-cors"] = "true"
+		out["nginx.ingress.kubernetes.io/cors-allow-origin"] = allowOrigin
+		if v := strings.TrimSpace(env["RAILPUSH_CORS_ALLOW_METHODS"]); v != "" {
+			out["nginx.ingress.kubernetes.io/cors-allow-methods"] = v
+		} else if v := strings.TrimSpace(env["CORS_ALLOW_METHODS"]); v != "" {
+			out["nginx.ingress.kubernetes.io/cors-allow-methods"] = v
+		}
+		if v := strings.TrimSpace(env["RAILPUSH_CORS_ALLOW_HEADERS"]); v != "" {
+			out["nginx.ingress.kubernetes.io/cors-allow-headers"] = v
+		} else if v := strings.TrimSpace(env["CORS_ALLOW_HEADERS"]); v != "" {
+			out["nginx.ingress.kubernetes.io/cors-allow-headers"] = v
+		}
+		if v := strings.TrimSpace(env["RAILPUSH_CORS_EXPOSE_HEADERS"]); v != "" {
+			out["nginx.ingress.kubernetes.io/cors-expose-headers"] = v
+		}
+		if v := strings.TrimSpace(env["RAILPUSH_CORS_ALLOW_CREDENTIALS"]); v != "" {
+			out["nginx.ingress.kubernetes.io/cors-allow-credentials"] = v
+		}
+		if v := strings.TrimSpace(env["RAILPUSH_CORS_MAX_AGE"]); v != "" {
+			out["nginx.ingress.kubernetes.io/cors-max-age"] = v
+		}
+	}
 	return out
 }
 
@@ -161,6 +189,42 @@ func (k *KubeDeployer) serviceIngressPolicyAnnotations(svc *models.Service) map[
 			continue
 		}
 		env[key] = strings.TrimSpace(v)
+	}
+	if strings.EqualFold(strings.TrimSpace(env["RAILPUSH_CORS_AUTO_WORKSPACE"]), "true") {
+		origins := []string{}
+		seen := map[string]struct{}{}
+		if all, err := models.ListServices(svc.WorkspaceID); err == nil {
+			deployDomain := strings.ToLower(strings.TrimSpace(k.Config.Deploy.Domain))
+			for _, peer := range all {
+				host := utils.ServiceDefaultHost(peer.Type, peer.Name, peer.Subdomain, deployDomain)
+				if host != "" {
+					o := "https://" + host
+					if _, ok := seen[o]; !ok {
+						seen[o] = struct{}{}
+						origins = append(origins, o)
+					}
+				}
+				if cds, err := models.ListCustomDomains(peer.ID); err == nil {
+					for _, cd := range cds {
+						h := strings.TrimSpace(strings.ToLower(cd.Domain))
+						if h == "" {
+							continue
+						}
+						o := "https://" + h
+						if _, ok := seen[o]; !ok {
+							seen[o] = struct{}{}
+							origins = append(origins, o)
+						}
+					}
+				}
+			}
+		}
+		if len(origins) > 0 {
+			env["RAILPUSH_CORS_ALLOW_ORIGIN"] = strings.Join(origins, ",")
+			if strings.TrimSpace(env["RAILPUSH_CORS_ALLOW_METHODS"]) == "" {
+				env["RAILPUSH_CORS_ALLOW_METHODS"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+			}
+		}
 	}
 	return ingressPolicyAnnotationsFromEnv(env)
 }
