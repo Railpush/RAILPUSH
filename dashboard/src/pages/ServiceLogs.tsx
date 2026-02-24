@@ -56,6 +56,11 @@ function parseHttpStatus(msg: string): { method?: string; status?: number } {
   };
 }
 
+function parseHttpPath(msg: string): string | undefined {
+  const m = msg.match(/\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+([^\s?]+)/);
+  return m?.[1];
+}
+
 function httpStatusCls(code: number) {
   if (code >= 500) return 'bg-red-500/15 text-red-400 border-red-500/25';
   if (code >= 400) return 'bg-amber-500/15 text-amber-400 border-amber-500/25';
@@ -116,6 +121,11 @@ export function ServiceLogs() {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [deployLogs, setDeployLogs] = useState<DeployLog[]>([]);
   const [search, setSearch] = useState('');
+  const [useRegex, setUseRegex] = useState(false);
+  const [levelFilter, setLevelFilter] = useState<'all' | 'error' | 'warn' | 'info' | 'debug'>('all');
+  const [methodFilter, setMethodFilter] = useState<'all' | 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | '2xx' | '3xx' | '4xx' | '5xx'>('all');
+  const [pathFilter, setPathFilter] = useState('');
   const [isLive, setIsLive] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -159,7 +169,30 @@ export function ServiceLogs() {
     if (isLive && containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight;
   }, [entries, deployLogs, isLive]);
 
-  const filtered = search ? entries.filter((e) => e.message.toLowerCase().includes(search.toLowerCase())) : entries;
+  const filtered = entries.filter((e) => {
+    const http = parseHttpStatus(e.message);
+    const path = parseHttpPath(e.message) || '';
+
+    if (levelFilter !== 'all' && e.level !== levelFilter) return false;
+    if (methodFilter !== 'all' && http.method !== methodFilter) return false;
+    if (statusFilter !== 'all') {
+      if (!http.status) return false;
+      if (statusFilter === '2xx' && (http.status < 200 || http.status >= 300)) return false;
+      if (statusFilter === '3xx' && (http.status < 300 || http.status >= 400)) return false;
+      if (statusFilter === '4xx' && (http.status < 400 || http.status >= 500)) return false;
+      if (statusFilter === '5xx' && http.status < 500) return false;
+    }
+    if (pathFilter.trim() && !path.toLowerCase().includes(pathFilter.trim().toLowerCase())) return false;
+
+    if (!search.trim()) return true;
+    if (!useRegex) return e.message.toLowerCase().includes(search.toLowerCase());
+    try {
+      const re = new RegExp(search, 'i');
+      return re.test(e.message);
+    } catch {
+      return false;
+    }
+  });
   const filteredDeployLogs = search ? deployLogs.filter((d) => d.log.toLowerCase().includes(search.toLowerCase())) : deployLogs;
 
   const handleCopyAll = async () => {
@@ -210,6 +243,39 @@ export function ServiceLogs() {
           </button>
         )}
       </div>
+
+      {logType === 'runtime' && (
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-2 mb-3">
+          <select value={levelFilter} onChange={(e) => setLevelFilter(e.target.value as typeof levelFilter)} className="bg-surface-secondary border border-border-default rounded-lg px-3 py-2 text-sm text-content-primary">
+            <option value="all">All levels</option>
+            <option value="error">Error</option>
+            <option value="warn">Warn</option>
+            <option value="info">Info</option>
+            <option value="debug">Debug</option>
+          </select>
+          <select value={methodFilter} onChange={(e) => setMethodFilter(e.target.value as typeof methodFilter)} className="bg-surface-secondary border border-border-default rounded-lg px-3 py-2 text-sm text-content-primary">
+            <option value="all">All methods</option>
+            <option value="GET">GET</option>
+            <option value="POST">POST</option>
+            <option value="PUT">PUT</option>
+            <option value="PATCH">PATCH</option>
+            <option value="DELETE">DELETE</option>
+            <option value="HEAD">HEAD</option>
+            <option value="OPTIONS">OPTIONS</option>
+          </select>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)} className="bg-surface-secondary border border-border-default rounded-lg px-3 py-2 text-sm text-content-primary">
+            <option value="all">All status</option>
+            <option value="2xx">2xx</option>
+            <option value="3xx">3xx</option>
+            <option value="4xx">4xx</option>
+            <option value="5xx">5xx</option>
+          </select>
+          <input value={pathFilter} onChange={(e) => setPathFilter(e.target.value)} placeholder="Path contains (e.g. /api/users)" className="bg-surface-secondary border border-border-default rounded-lg px-3 py-2 text-sm text-content-primary placeholder:text-content-tertiary" />
+          <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-border-default bg-surface-secondary text-sm text-content-secondary">
+            <input type="checkbox" checked={useRegex} onChange={(e) => setUseRegex(e.target.checked)} className="accent-brand" /> Regex search
+          </label>
+        </div>
+      )}
 
       {/* Log viewer */}
       <div ref={containerRef} className={`rounded-xl border border-border-default overflow-auto font-mono text-xs bg-surface-secondary ${fullscreen ? 'h-[calc(100vh-140px)]' : 'h-[600px]'}`}>
