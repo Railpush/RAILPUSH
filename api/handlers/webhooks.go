@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/railpush/api/config"
@@ -182,6 +183,11 @@ func (h *WebhookHandler) GitHubWebhook(w http.ResponseWriter, r *http.Request) {
 				ID      string `json:"id"`
 				Message string `json:"message"`
 			} `json:"head_commit"`
+			Commits []struct {
+				Added    []string `json:"added"`
+				Removed  []string `json:"removed"`
+				Modified []string `json:"modified"`
+			} `json:"commits"`
 			Repository struct {
 				CloneURL string `json:"clone_url"`
 			} `json:"repository"`
@@ -197,7 +203,12 @@ func (h *WebhookHandler) GitHubWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		svcs, _ := models.ListAutoDeployServicesByRepoBranch(repoURL, branch)
+		changedPaths := collectPushChangedPaths(payload.Commits)
 		for _, svc := range svcs {
+			if !shouldTriggerForChangedPaths(changedPaths, svc.BuildInclude, svc.BuildExclude) {
+				log.Printf("Auto-deploy skipped for service %s: no matching changed paths", svc.Name)
+				continue
+			}
 			deploy := &models.Deploy{
 				ServiceID:     svc.ID,
 				Trigger:       "github_push",
@@ -414,4 +425,122 @@ func verifyGitHubSignature(payload []byte, signature, secret string) bool {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(payload)
 	return hmac.Equal(sig, mac.Sum(nil))
+}
+
+func collectPushChangedPaths(payloadCommits []struct {
+	Added    []string `json:"added"`
+	Removed  []string `json:"removed"`
+	Modified []string `json:"modified"`
+}) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	add := func(p string) {
+		p = strings.TrimSpace(strings.ReplaceAll(p, "\\", "/"))
+		p = strings.TrimPrefix(p, "./")
+		p = strings.TrimPrefix(p, "/")
+		if p == "" {
+			return
+		}
+		if _, ok := seen[p]; ok {
+			return
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	for _, c := range payloadCommits {
+		for _, p := range c.Added {
+			add(p)
+		}
+		for _, p := range c.Modified {
+			add(p)
+		}
+		for _, p := range c.Removed {
+			add(p)
+		}
+	}
+	return out
+}
+
+func splitPathPatterns(raw string) []string {
+	parts := strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == ',' || r == '\r' || r == '\t' })
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, p := range parts {
+		v := strings.TrimSpace(strings.ReplaceAll(p, "\\", "/"))
+		v = strings.TrimPrefix(v, "./")
+		v = strings.TrimPrefix(v, "/")
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
+}
+
+func globToRegexp(pattern string) string {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return "^$"
+	}
+	pattern = strings.ReplaceAll(pattern, "\\", "/")
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(pattern); i++ {
+		ch := pattern[i]
+		if ch == '*' {
+			if i+1 < len(pattern) && pattern[i+1] == '*' {
+				b.WriteString(".*")
+				i++
+			} else {
+				b.WriteString("[^/]*")
+			}
+			continue
+		}
+		if ch == '?' {
+			b.WriteString("[^/]")
+			continue
+		}
+		if strings.ContainsRune(`.+()[]{}^$|`, rune(ch)) {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(ch)
+	}
+	b.WriteString("$")
+	return b.String()
+}
+
+func pathMatchesAny(path string, patterns []string) bool {
+	for _, p := range patterns {
+		re, err := regexp.Compile(globToRegexp(p))
+		if err != nil {
+			continue
+		}
+		if re.MatchString(path) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldTriggerForChangedPaths(changed []string, includeRaw, excludeRaw string) bool {
+	if len(changed) == 0 {
+		return true
+	}
+	include := splitPathPatterns(includeRaw)
+	exclude := splitPathPatterns(excludeRaw)
+
+	for _, p := range changed {
+		if len(include) > 0 && !pathMatchesAny(p, include) {
+			continue
+		}
+		if len(exclude) > 0 && pathMatchesAny(p, exclude) {
+			continue
+		}
+		return true
+	}
+	return false
 }

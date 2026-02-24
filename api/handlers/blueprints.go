@@ -567,6 +567,35 @@ type RenderService struct {
 	DependsOn         []string           `yaml:"depends_on"`
 }
 
+func normalizeBlueprintPathList(items []string) []string {
+	out := []string{}
+	seen := map[string]struct{}{}
+	for _, it := range items {
+		v := strings.TrimSpace(it)
+		v = strings.TrimPrefix(v, "./")
+		v = strings.TrimPrefix(v, "/")
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
+}
+
+func blueprintBuildFilters(sdef RenderService) (include []string, exclude []string) {
+	include = append(include, sdef.BuildInclude...)
+	exclude = append(exclude, sdef.BuildExclude...)
+	if sdef.BuildFilter != nil {
+		include = append(include, sdef.BuildFilter.Paths...)
+		exclude = append(exclude, sdef.BuildFilter.IgnoredPaths...)
+	}
+	return normalizeBlueprintPathList(include), normalizeBlueprintPathList(exclude)
+}
+
 type RenderDisk struct {
 	Name      string `yaml:"name"`
 	MountPath string `yaml:"mountPath"`
@@ -1457,6 +1486,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			if sdef.AutoDeploy != nil {
 				autoDeploy = *sdef.AutoDeploy
 			}
+			buildInclude, buildExclude := blueprintBuildFilters(sdef)
 			svc = &models.Service{
 				WorkspaceID: bp.WorkspaceID, Name: serviceName, Type: desiredType,
 				Runtime: sdef.Runtime, RepoURL: sdef.Repo, Branch: sdef.Branch,
@@ -1466,8 +1496,8 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				DockerfilePath: sdef.DockerfilePath, DockerContext: dockerCtx,
 				StaticPublishPath: sdef.StaticPublishPath, Schedule: sdef.Schedule,
 				ImageURL: imageURL, BaseImage: sdef.BaseImage,
-				BuildInclude: strings.Join(sdef.BuildInclude, "\n"),
-				BuildExclude: strings.Join(sdef.BuildExclude, "\n"),
+				BuildInclude: strings.Join(buildInclude, "\n"),
+				BuildExclude: strings.Join(buildExclude, "\n"),
 			}
 			if sdef.DockerCommand != "" {
 				svc.StartCommand = sdef.DockerCommand
@@ -1519,6 +1549,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			// Track for rollback before any external side-effects (e.g. billing) or writes.
 			st.updatedServices = append(st.updatedServices, before)
 
+			buildInclude, buildExclude := blueprintBuildFilters(sdef)
 			svc.Branch = sdef.Branch
 			if svc.Branch == "" {
 				svc.Branch = bp.Branch
@@ -1544,8 +1575,8 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 			svc.StaticPublishPath = sdef.StaticPublishPath
 			svc.Schedule = sdef.Schedule
 			svc.BaseImage = sdef.BaseImage
-			svc.BuildInclude = strings.Join(sdef.BuildInclude, "\n")
-			svc.BuildExclude = strings.Join(sdef.BuildExclude, "\n")
+			svc.BuildInclude = strings.Join(buildInclude, "\n")
+			svc.BuildExclude = strings.Join(buildExclude, "\n")
 
 			desiredPlan, repairedPlan := normalizeBlueprintPlan(sdef.Plan)
 			if repairedPlan {
