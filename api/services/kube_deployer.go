@@ -147,6 +147,103 @@ func ingressPolicyAnnotationsFromEnv(env map[string]string) map[string]string {
 	return out
 }
 
+type probeTuning struct {
+	readinessPeriodSeconds   int32
+	readinessTimeoutSeconds  int32
+	readinessFailureThreshold int32
+
+	startupPeriodSeconds    int32
+	startupTimeoutSeconds   int32
+	startupFailureThreshold int32
+
+	livenessPeriodSeconds       int32
+	livenessTimeoutSeconds      int32
+	livenessFailureThreshold    int32
+	livenessInitialDelaySeconds int32
+}
+
+func parseProbeInt(env map[string]string, keys []string, def, min, max int32) int32 {
+	for _, k := range keys {
+		raw := strings.TrimSpace(env[k])
+		if raw == "" {
+			continue
+		}
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			continue
+		}
+		v := int32(n)
+		if v < min {
+			v = min
+		}
+		if v > max {
+			v = max
+		}
+		return v
+	}
+	return def
+}
+
+func probeTuningFromEnv(env map[string]string) probeTuning {
+	return probeTuning{
+		readinessPeriodSeconds:   parseProbeInt(env, []string{"RAILPUSH_HEALTH_INTERVAL_SECONDS", "HEALTH_INTERVAL_SECONDS"}, 5, 1, 300),
+		readinessTimeoutSeconds:  parseProbeInt(env, []string{"RAILPUSH_HEALTH_TIMEOUT_SECONDS", "HEALTH_TIMEOUT_SECONDS"}, 3, 1, 60),
+		readinessFailureThreshold: parseProbeInt(env, []string{"RAILPUSH_HEALTH_FAILURE_THRESHOLD", "HEALTH_FAILURE_THRESHOLD"}, 6, 1, 100),
+
+		startupPeriodSeconds:    parseProbeInt(env, []string{"RAILPUSH_STARTUP_INTERVAL_SECONDS", "STARTUP_INTERVAL_SECONDS"}, 5, 1, 300),
+		startupTimeoutSeconds:   parseProbeInt(env, []string{"RAILPUSH_STARTUP_TIMEOUT_SECONDS", "STARTUP_TIMEOUT_SECONDS", "RAILPUSH_HEALTH_TIMEOUT_SECONDS", "HEALTH_TIMEOUT_SECONDS"}, 3, 1, 60),
+		startupFailureThreshold: parseProbeInt(env, []string{"RAILPUSH_STARTUP_FAILURE_THRESHOLD", "STARTUP_FAILURE_THRESHOLD"}, 60, 1, 600),
+
+		livenessPeriodSeconds:       parseProbeInt(env, []string{"RAILPUSH_HEALTH_INTERVAL_SECONDS", "HEALTH_INTERVAL_SECONDS"}, 10, 1, 300),
+		livenessTimeoutSeconds:      parseProbeInt(env, []string{"RAILPUSH_HEALTH_TIMEOUT_SECONDS", "HEALTH_TIMEOUT_SECONDS"}, 3, 1, 60),
+		livenessFailureThreshold:    parseProbeInt(env, []string{"RAILPUSH_HEALTH_FAILURE_THRESHOLD", "HEALTH_FAILURE_THRESHOLD"}, 3, 1, 100),
+		livenessInitialDelaySeconds: parseProbeInt(env, []string{"RAILPUSH_HEALTH_INITIAL_DELAY_SECONDS", "HEALTH_INITIAL_DELAY_SECONDS"}, 10, 0, 1800),
+	}
+}
+
+func latestProbeFailureMessage(events []corev1.Event, podNames map[string]struct{}) string {
+	if len(events) == 0 || len(podNames) == 0 {
+		return ""
+	}
+	var chosen *corev1.Event
+	eventTime := func(e corev1.Event) time.Time {
+		if !e.EventTime.IsZero() {
+			return e.EventTime.Time
+		}
+		if !e.LastTimestamp.IsZero() {
+			return e.LastTimestamp.Time
+		}
+		if !e.FirstTimestamp.IsZero() {
+			return e.FirstTimestamp.Time
+		}
+		return e.CreationTimestamp.Time
+	}
+	for i := range events {
+		e := events[i]
+		if strings.TrimSpace(e.Reason) != "Unhealthy" {
+			continue
+		}
+		if strings.TrimSpace(e.InvolvedObject.Kind) != "Pod" {
+			continue
+		}
+		if _, ok := podNames[strings.TrimSpace(e.InvolvedObject.Name)]; !ok {
+			continue
+		}
+		if chosen == nil || eventTime(e).After(eventTime(*chosen)) {
+			cp := e
+			chosen = &cp
+		}
+	}
+	if chosen == nil {
+		return ""
+	}
+	msg := strings.TrimSpace(chosen.Message)
+	if len(msg) > 400 {
+		msg = msg[:400] + "…"
+	}
+	return msg
+}
+
 func (k *KubeDeployer) serviceIngressWhitelist(svc *models.Service) string {
 	if k == nil || k.Config == nil || svc == nil {
 		return ""
@@ -520,6 +617,7 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 		cleanEnv[key] = v
 	}
 	ingressPolicyAnnotations := ingressPolicyAnnotationsFromEnv(cleanEnv)
+	probes := probeTuningFromEnv(cleanEnv)
 
 	// This path performs multiple API calls (Secret/Deployment/Service/Ingress/custom domains), so keep a
 	// single reasonably-sized budget rather than a tiny shared 30s timeout that can expire mid-way.
@@ -765,9 +863,9 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 
 		dep.Spec.Template.Spec.Containers[0].ReadinessProbe = &corev1.Probe{
 			ProbeHandler:     probeHandler,
-			PeriodSeconds:    5,
-			TimeoutSeconds:   3,
-			FailureThreshold: 6,
+			PeriodSeconds:    probes.readinessPeriodSeconds,
+			TimeoutSeconds:   probes.readinessTimeoutSeconds,
+			FailureThreshold: probes.readinessFailureThreshold,
 		}
 
 		// Many apps run migrations/seed data on boot. Without a startupProbe, the default
@@ -775,17 +873,17 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 		// This keeps the platform "it just works" for real-world apps.
 		dep.Spec.Template.Spec.Containers[0].StartupProbe = &corev1.Probe{
 			ProbeHandler:     probeHandler,
-			PeriodSeconds:    5,
-			TimeoutSeconds:   3,
-			FailureThreshold: 60, // 5 minutes max startup time
+			PeriodSeconds:    probes.startupPeriodSeconds,
+			TimeoutSeconds:   probes.startupTimeoutSeconds,
+			FailureThreshold: probes.startupFailureThreshold,
 		}
 
 		dep.Spec.Template.Spec.Containers[0].LivenessProbe = &corev1.Probe{
 			ProbeHandler:        probeHandler,
-			PeriodSeconds:       10,
-			TimeoutSeconds:      3,
-			FailureThreshold:    3,
-			InitialDelaySeconds: 10,
+			PeriodSeconds:       probes.livenessPeriodSeconds,
+			TimeoutSeconds:      probes.livenessTimeoutSeconds,
+			FailureThreshold:    probes.livenessFailureThreshold,
+			InitialDelaySeconds: probes.livenessInitialDelaySeconds,
 		}
 	}
 
@@ -1223,6 +1321,23 @@ func (k *KubeDeployer) WaitForServiceReady(deploymentName string, svc *models.Se
 		}
 
 		if time.Now().After(deadline) {
+			probeDetail := ""
+			if svc != nil && strings.TrimSpace(svc.ID) != "" {
+				pctx, pcancel := context.WithTimeout(context.Background(), 8*time.Second)
+				pods, _ := k.Client.CoreV1().Pods(ns).List(pctx, metav1.ListOptions{LabelSelector: "railpush.com/service-id=" + strings.TrimSpace(svc.ID)})
+				pcancel()
+				podNames := map[string]struct{}{}
+				for _, p := range pods.Items {
+					podNames[p.Name] = struct{}{}
+				}
+				ectx, ecancel := context.WithTimeout(context.Background(), 8*time.Second)
+				evs, _ := k.Client.CoreV1().Events(ns).List(ectx, metav1.ListOptions{})
+				ecancel()
+				probeDetail = latestProbeFailureMessage(evs.Items, podNames)
+			}
+			if probeDetail != "" {
+				return fmt.Errorf("timeout waiting for deployment %s to be ready (ready=%d desired=%d): latest probe failure: %s", name, dep.Status.ReadyReplicas, replicas, probeDetail)
+			}
 			return fmt.Errorf("timeout waiting for deployment %s to be ready (ready=%d desired=%d)", name, dep.Status.ReadyReplicas, replicas)
 		}
 		time.Sleep(2 * time.Second)
