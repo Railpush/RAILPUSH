@@ -1516,6 +1516,10 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'POST', path: '/project-folders', desc: 'Create a project folder' },
                   { method: 'PATCH', path: '/project-folders/:id', desc: 'Update or move a folder' },
                   { method: 'DELETE', path: '/project-folders/:id', desc: 'Delete a folder' },
+                  { method: 'GET', path: '/preview-environments', desc: 'List preview environments' },
+                  { method: 'POST', path: '/preview-environments', desc: 'Create or upsert a preview environment manually' },
+                  { method: 'PATCH', path: '/preview-environments/:id', desc: 'Update preview metadata/service overrides and optionally redeploy' },
+                  { method: 'DELETE', path: '/preview-environments/:id', desc: 'Close preview and delete preview service resources' },
                 ]},
                 { group: 'Registered Domains & DNS', endpoints: [
                   { method: 'GET', path: '/domains', desc: 'List registered domains' },
@@ -1581,7 +1585,7 @@ curl https://railpush.com/api/v1/services \\
                   <div>
                     <div className="text-sm font-semibold mb-1">AI-native infrastructure</div>
                     <div className="text-sm text-content-secondary">
-                      With 105 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
+                      With 108 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
                     </div>
                   </div>
                 </div>
@@ -1672,7 +1676,7 @@ npm run build`} />
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Available Tools</h3>
               <p className="text-content-secondary text-sm leading-relaxed mb-4">
-                The MCP server exposes 105 tools organized by category. Agents discover these automatically.
+                The MCP server exposes 108 tools organized by category. Agents discover these automatically.
               </p>
 
               <div className="overflow-x-auto mb-8">
@@ -1704,7 +1708,7 @@ npm run build`} />
                       ['Environments', 'list, create, update, delete'],
 
                       ['Project Folders', 'list, create, update, delete'],
-                      ['Preview Environments', 'list'],
+                      ['Preview Environments', 'list, create, update, delete'],
                       ['Support Tickets', 'list, create (with category: support/feature_request/bug_report), get, reply'],
                       ['Ops Tickets', 'list all (filter by status/category), get (with internal notes), update status/category, reply as ops'],
                       ['Billing', 'get overview'],

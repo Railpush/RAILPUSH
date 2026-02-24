@@ -566,6 +566,18 @@ export class RailPushClient {
     return this.request("GET", "/preview-environments");
   }
 
+  async createPreviewEnvironment(data: Record<string, unknown>) {
+    return this.request("POST", "/preview-environments", data);
+  }
+
+  async updatePreviewEnvironment(id: string, data: Record<string, unknown>) {
+    return this.request("PATCH", `/preview-environments/${id}`, data);
+  }
+
+  async deletePreviewEnvironment(id: string) {
+    return this.request("DELETE", `/preview-environments/${id}`);
+  }
+
   // ── GitHub ───────────────────────────────────────────────────────────
 
   async listGitHubRepos() {

@@ -199,6 +199,45 @@ export const envGroups = {
 export const previewEnvironments = {
   list: (workspaceId?: string) =>
     request<PreviewEnvironment[]>(workspaceId ? `/preview-environments?workspace_id=${encodeURIComponent(workspaceId)}` : '/preview-environments'),
+  create: (data: {
+    workspace_id?: string;
+    base_service_id: string;
+    pr_number: number;
+    pr_title?: string;
+    pr_branch: string;
+    base_branch?: string;
+    commit_sha?: string;
+    service_name?: string;
+    build_command?: string;
+    start_command?: string;
+    pre_deploy_command?: string;
+    health_check_path?: string;
+    dockerfile_path?: string;
+    docker_context?: string;
+    static_publish_path?: string;
+    port?: number;
+    image_url?: string;
+    trigger_deploy?: boolean;
+    env_vars?: Array<{ key: string; value: string; is_secret?: boolean }>;
+  }) => request<PreviewEnvironment>('/preview-environments', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: string, data: {
+    pr_title?: string;
+    pr_branch?: string;
+    base_branch?: string;
+    commit_sha?: string;
+    build_command?: string;
+    start_command?: string;
+    pre_deploy_command?: string;
+    health_check_path?: string;
+    dockerfile_path?: string;
+    docker_context?: string;
+    static_publish_path?: string;
+    port?: number;
+    image_url?: string;
+    trigger_deploy?: boolean;
+    env_vars?: Array<{ key: string; value: string; is_secret?: boolean }>;
+  }) => request<PreviewEnvironment>(`/preview-environments/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  remove: (id: string) => request<{ status: string }>(`/preview-environments/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };
 
 export const oneOffJobs = {

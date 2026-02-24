@@ -1541,6 +1541,81 @@ server.tool(
   },
 );
 
+server.tool(
+  "create_preview_environment",
+  "Manually create or upsert a preview environment from a base service, with optional config/env var overrides and optional deploy trigger.",
+  {
+    workspace_id: z.string().optional().describe("Workspace ID (uses default if omitted)"),
+    base_service_id: z.string().describe("Base service ID used as preview template"),
+    pr_number: z.number().int().positive().describe("Pull request number"),
+    pr_title: z.string().optional().describe("Pull request title"),
+    pr_branch: z.string().describe("Pull request branch name"),
+    base_branch: z.string().optional().describe("Base branch name"),
+    commit_sha: z.string().optional().describe("Commit SHA for preview deploy metadata"),
+    service_name: z.string().optional().describe("Optional explicit preview service name"),
+    build_command: z.string().optional().describe("Override build command"),
+    start_command: z.string().optional().describe("Override start command"),
+    pre_deploy_command: z.string().optional().describe("Override pre-deploy command"),
+    health_check_path: z.string().optional().describe("Override health check path"),
+    dockerfile_path: z.string().optional().describe("Override Dockerfile path"),
+    docker_context: z.string().optional().describe("Override Docker build context"),
+    static_publish_path: z.string().optional().describe("Override static publish path"),
+    port: z.number().int().positive().optional().describe("Override container port"),
+    image_url: z.string().optional().describe("Override image URL"),
+    trigger_deploy: z.boolean().optional().describe("Trigger deploy immediately (default: true)"),
+    env_vars: z.array(z.object({
+      key: z.string(),
+      value: z.string(),
+      is_secret: z.boolean().optional(),
+    })).optional().describe("Optional env var overrides to upsert on preview service"),
+  },
+  async (args) => {
+    try { return text(await client.createPreviewEnvironment(args)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "update_preview_environment",
+  "Update preview environment metadata and preview service overrides. Optionally trigger a redeploy.",
+  {
+    preview_environment_id: z.string().describe("Preview environment ID"),
+    pr_title: z.string().optional().describe("Pull request title"),
+    pr_branch: z.string().optional().describe("Pull request branch"),
+    base_branch: z.string().optional().describe("Base branch"),
+    commit_sha: z.string().optional().describe("Commit SHA"),
+    build_command: z.string().optional().describe("Override build command"),
+    start_command: z.string().optional().describe("Override start command"),
+    pre_deploy_command: z.string().optional().describe("Override pre-deploy command"),
+    health_check_path: z.string().optional().describe("Override health check path"),
+    dockerfile_path: z.string().optional().describe("Override Dockerfile path"),
+    docker_context: z.string().optional().describe("Override Docker context"),
+    static_publish_path: z.string().optional().describe("Override static publish path"),
+    port: z.number().int().positive().optional().describe("Override container port"),
+    image_url: z.string().optional().describe("Override image URL"),
+    trigger_deploy: z.boolean().optional().describe("Trigger deploy immediately"),
+    env_vars: z.array(z.object({
+      key: z.string(),
+      value: z.string(),
+      is_secret: z.boolean().optional(),
+    })).optional().describe("Optional env var overrides to upsert on preview service"),
+  },
+  async ({ preview_environment_id, ...updates }) => {
+    try { return text(await client.updatePreviewEnvironment(preview_environment_id, updates)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "delete_preview_environment",
+  "Close a preview environment and remove its preview service resources.",
+  { preview_environment_id: z.string().describe("Preview environment ID") },
+  async ({ preview_environment_id }) => {
+    try { return text(await client.deletePreviewEnvironment(preview_environment_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
 // ════════════════════════════════════════════════════════════════════════
 //  START SERVER
 // ════════════════════════════════════════════════════════════════════════

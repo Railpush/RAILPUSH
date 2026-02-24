@@ -64,6 +64,29 @@ func GetPreviewEnvironmentByRepoPR(workspaceID, repository string, prNumber int)
 	return pe, nil
 }
 
+func GetPreviewEnvironment(id string) (*PreviewEnvironment, error) {
+	pe := &PreviewEnvironment{}
+	var serviceID sql.NullString
+	err := database.DB.QueryRow(
+		`SELECT id, workspace_id, service_id::text, repository, pr_number, COALESCE(pr_title,''), COALESCE(pr_branch,''), COALESCE(base_branch,''), COALESCE(commit_sha,''), COALESCE(status,''), created_at, updated_at, closed_at
+		   FROM preview_environments
+		  WHERE id=$1`,
+		id,
+	).Scan(
+		&pe.ID, &pe.WorkspaceID, &serviceID, &pe.Repository, &pe.PRNumber, &pe.PRTitle, &pe.PRBranch, &pe.BaseBranch, &pe.CommitSHA, &pe.Status, &pe.CreatedAt, &pe.UpdatedAt, &pe.ClosedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if serviceID.Valid && serviceID.String != "" {
+		pe.ServiceID = &serviceID.String
+	}
+	return pe, nil
+}
+
 func ListPreviewEnvironments(workspaceID string) ([]PreviewEnvironment, error) {
 	rows, err := database.DB.Query(
 		`SELECT id, workspace_id, service_id::text, repository, pr_number, COALESCE(pr_title,''), COALESCE(pr_branch,''), COALESCE(base_branch,''), COALESCE(commit_sha,''), COALESCE(status,''), created_at, updated_at, closed_at
@@ -123,6 +146,16 @@ func MarkPreviewEnvironmentClosed(workspaceID, repository string, prNumber int) 
 		    SET status='closed', closed_at=NOW(), updated_at=NOW()
 		  WHERE workspace_id=$1 AND repository=$2 AND pr_number=$3`,
 		workspaceID, repository, prNumber,
+	)
+	return err
+}
+
+func MarkPreviewEnvironmentClosedByID(id string) error {
+	_, err := database.DB.Exec(
+		`UPDATE preview_environments
+		    SET status='closed', closed_at=NOW(), updated_at=NOW()
+		  WHERE id=$1`,
+		id,
 	)
 	return err
 }

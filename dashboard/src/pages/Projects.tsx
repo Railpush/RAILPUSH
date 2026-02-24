@@ -8,10 +8,10 @@ import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
 import { ServiceIcon } from '../components/ui/ServiceIcon';
 import { StatusBadge } from '../components/ui/StatusBadge';
-import { blueprints as blueprintsApi, projectFolders as projectFoldersApi, projects as projectsApi, services as servicesApi } from '../lib/api';
+import { blueprints as blueprintsApi, previewEnvironments as previewEnvironmentsApi, projectFolders as projectFoldersApi, projects as projectsApi, services as servicesApi } from '../lib/api';
 import { cn, serviceTypeLabel, timeAgo } from '../lib/utils';
 import { toast } from 'sonner';
-import type { Blueprint, Project, ProjectFolder, Service, ServiceStatus } from '../types';
+import type { Blueprint, PreviewEnvironment, Project, ProjectFolder, Service, ServiceStatus } from '../types';
 
 type HealthTone = 'healthy' | 'partial' | 'down' | 'empty';
 type CardKind = 'project' | 'blueprint';
@@ -159,6 +159,8 @@ export function Projects() {
   const [cards, setCards] = useState<ProjectCard[]>([]);
   const [folders, setFolders] = useState<ProjectFolder[]>([]);
   const [ungroupedServices, setUngroupedServices] = useState<Service[]>([]);
+  const [allServices, setAllServices] = useState<Service[]>([]);
+  const [previewEnvironments, setPreviewEnvironments] = useState<PreviewEnvironment[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // Folder navigation state
@@ -197,11 +199,12 @@ export function Projects() {
     setLoadError(null);
 
     try {
-      const [projectList, serviceList, blueprintList, folderList] = await Promise.all([
+      const [projectList, serviceList, blueprintList, folderList, previewList] = await Promise.all([
         projectsApi.list().catch(() => [] as Project[]),
         servicesApi.list().catch(() => [] as Service[]),
         blueprintsApi.list().catch(() => [] as Blueprint[]),
         projectFoldersApi.list().catch(() => [] as ProjectFolder[]),
+        previewEnvironmentsApi.list().catch(() => [] as PreviewEnvironment[]),
       ]);
 
       const blueprintDetails = await Promise.all(
@@ -218,11 +221,15 @@ export function Projects() {
       setCards(data.cards);
       setFolders(folderList);
       setUngroupedServices(data.ungroupedServices);
+      setAllServices(serviceList);
+      setPreviewEnvironments(previewList);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : 'Failed to load projects');
       setCards([]);
       setFolders([]);
       setUngroupedServices([]);
+      setAllServices([]);
+      setPreviewEnvironments([]);
     } finally {
       setLoading(false);
     }
@@ -684,6 +691,40 @@ export function Projects() {
     );
   }, [serviceSearch, tabbedServices]);
 
+  const serviceByID = useMemo(() => {
+    const map = new Map<string, Service>();
+    for (const svc of allServices) {
+      map.set(svc.id, svc);
+    }
+    return map;
+  }, [allServices]);
+
+  const openPreviewEnvironments = useMemo(
+    () => previewEnvironments.filter((pe) => pe.status !== 'closed'),
+    [previewEnvironments],
+  );
+
+  const previewCounts = useMemo(() => {
+    const counts = { live: 0, deploying: 0, failed: 0, closed: 0 };
+    for (const pe of previewEnvironments) {
+      if (pe.status === 'live') counts.live += 1;
+      else if (pe.status === 'failed') counts.failed += 1;
+      else if (pe.status === 'closed') counts.closed += 1;
+      else counts.deploying += 1;
+    }
+    return counts;
+  }, [previewEnvironments]);
+
+  const removePreviewEnvironment = async (preview: PreviewEnvironment) => {
+    try {
+      await previewEnvironmentsApi.remove(preview.id);
+      toast.success(`Closed preview PR #${preview.pr_number}`);
+      await loadData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to close preview environment');
+    }
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -711,6 +752,48 @@ export function Projects() {
         </Card>
       ) : (
         <>
+          <div className="mb-10">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-2xl font-semibold text-content-primary">Preview Environments</h2>
+              <span className="text-xs text-content-tertiary">Auto-generated from pull requests</span>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+              <Card className="px-3 py-2"><div className="text-[11px] text-content-tertiary">Live</div><div className="text-sm font-semibold text-emerald-400">{previewCounts.live}</div></Card>
+              <Card className="px-3 py-2"><div className="text-[11px] text-content-tertiary">Deploying</div><div className="text-sm font-semibold text-blue-400">{previewCounts.deploying}</div></Card>
+              <Card className="px-3 py-2"><div className="text-[11px] text-content-tertiary">Failed</div><div className="text-sm font-semibold text-amber-400">{previewCounts.failed}</div></Card>
+              <Card className="px-3 py-2"><div className="text-[11px] text-content-tertiary">Closed</div><div className="text-sm font-semibold text-content-secondary">{previewCounts.closed}</div></Card>
+            </div>
+
+            <div className="border border-border-default rounded-none overflow-x-auto overflow-y-visible">
+              <div className="grid grid-cols-[90px_1.3fr_1.1fr_0.9fr_0.8fr_110px] px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-content-tertiary border-b border-border-default">
+                <div>PR</div><div>Branch</div><div>Service</div><div>Status</div><div>Updated</div><div />
+              </div>
+              {openPreviewEnvironments.length === 0 ? (
+                <div className="px-4 py-6 text-sm text-content-secondary">No active preview environments.</div>
+              ) : (
+                openPreviewEnvironments.slice(0, 8).map((pe) => {
+                  const service = pe.service_id ? serviceByID.get(pe.service_id) : undefined;
+                  return (
+                    <div key={pe.id} className="grid grid-cols-[90px_1.3fr_1.1fr_0.9fr_0.8fr_110px] items-center px-4 py-3 border-b border-border-subtle last:border-b-0 hover:bg-surface-tertiary/40">
+                      <div className="text-sm text-content-primary font-medium">#{pe.pr_number}</div>
+                      <div className="text-sm text-content-secondary truncate" title={pe.pr_branch}>{pe.pr_branch || '-'}</div>
+                      <div className="text-sm text-content-secondary truncate" title={service?.name || pe.repository}>{service?.name || pe.repository}</div>
+                      <div><StatusBadge status={pe.status === 'closed' ? 'deactivated' : pe.status === 'deploying' ? 'deploying' : pe.status === 'failed' ? 'failed' : 'live'} size="sm" /></div>
+                      <div className="text-sm text-content-secondary">{timeAgo(pe.updated_at)}</div>
+                      <div className="justify-self-end inline-flex items-center gap-2">
+                        {service?.id && (
+                          <Button variant="secondary" size="sm" onClick={() => navigate(`/services/${service.id}`)}>Open</Button>
+                        )}
+                        <Button variant="danger" size="sm" onClick={() => removePreviewEnvironment(pe)}>Close</Button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
           <div className="mb-12">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2 min-w-0">
