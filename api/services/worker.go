@@ -6,6 +6,9 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/pem"
 	"bytes"
 	"encoding/json"
@@ -119,6 +122,164 @@ func (w *Worker) injectKubeInternalDiscoveryEnv(svc *models.Service, env map[str
 		env[portKey] = fmt.Sprintf("%d", peerPort)
 		env[urlKey] = fmt.Sprintf("http://%s:%d", peerHost, peerPort)
 	}
+}
+
+func (w *Worker) getServiceEnvValue(svc *models.Service, key string) string {
+	if w == nil || w.Config == nil || svc == nil {
+		return ""
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+	vars, err := models.ListEnvVars("service", svc.ID)
+	if err != nil {
+		return ""
+	}
+	for _, ev := range vars {
+		if !strings.EqualFold(strings.TrimSpace(ev.Key), key) {
+			continue
+		}
+		if strings.TrimSpace(ev.EncryptedValue) == "" {
+			return ""
+		}
+		v, err := utils.Decrypt(ev.EncryptedValue, w.Config.Crypto.EncryptionKey)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+
+func deployErrorMessage(logText string) string {
+	logText = strings.TrimSpace(logText)
+	if logText == "" {
+		return ""
+	}
+	lines := strings.Split(logText, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		ln := strings.TrimSpace(lines[i])
+		if ln == "" {
+			continue
+		}
+		lower := strings.ToLower(ln)
+		if strings.Contains(lower, "error") || strings.Contains(lower, "failed") || strings.Contains(lower, "panic") || strings.Contains(lower, "fatal") {
+			if len(ln) > 500 {
+				return ln[:500]
+			}
+			return ln
+		}
+	}
+	if len(lines) > 0 {
+		ln := strings.TrimSpace(lines[len(lines)-1])
+		if len(ln) > 500 {
+			return ln[:500]
+		}
+		return ln
+	}
+	return ""
+}
+
+func (w *Worker) notifyDeployWebhook(svc *models.Service, deploy *models.Deploy, phase string, ok bool) {
+	if w == nil || w.Config == nil || svc == nil || deploy == nil {
+		return
+	}
+
+	url := w.getServiceEnvValue(svc, "DEPLOY_WEBHOOK_URL")
+	if url == "" {
+		url = w.getServiceEnvValue(svc, "RAILPUSH_DEPLOY_WEBHOOK_URL")
+	}
+	if url == "" {
+		return
+	}
+
+	eventsRaw := w.getServiceEnvValue(svc, "DEPLOY_WEBHOOK_EVENTS")
+	allowed := map[string]bool{}
+	if strings.TrimSpace(eventsRaw) != "" {
+		for _, p := range strings.Split(eventsRaw, ",") {
+			e := strings.ToLower(strings.TrimSpace(p))
+			if e != "" {
+				allowed[e] = true
+			}
+		}
+	}
+	event := strings.ToLower(strings.TrimSpace(phase))
+	if len(allowed) > 0 && !allowed[event] {
+		return
+	}
+
+	status := "started"
+	success := false
+	if event == "success" {
+		status = "success"
+		success = true
+	} else if event == "failed" {
+		status = "failed"
+		success = false
+	} else if event == "rollback" {
+		status = "rollback"
+		success = ok
+	}
+
+	durationMs := int64(0)
+	if deploy.StartedAt != nil {
+		end := time.Now().UTC()
+		if deploy.FinishedAt != nil {
+			end = *deploy.FinishedAt
+		}
+		if end.After(*deploy.StartedAt) {
+			durationMs = end.Sub(*deploy.StartedAt).Milliseconds()
+		}
+	}
+
+	payload := map[string]interface{}{
+		"event":          "deploy." + event,
+		"service_id":     svc.ID,
+		"service_name":   svc.Name,
+		"deploy_id":      deploy.ID,
+		"trigger":        deploy.Trigger,
+		"status":         status,
+		"success":        success,
+		"commit_sha":     deploy.CommitSHA,
+		"branch":         deploy.Branch,
+		"duration_ms":    durationMs,
+		"error_message":  deployErrorMessage(deploy.BuildLog),
+		"timestamp":      time.Now().UTC().Format(time.RFC3339),
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "railpush-deploy-webhook/1.0")
+		secret := w.getServiceEnvValue(svc, "DEPLOY_WEBHOOK_SECRET")
+		if secret == "" {
+			secret = w.getServiceEnvValue(svc, "RAILPUSH_DEPLOY_WEBHOOK_SECRET")
+		}
+		if secret != "" {
+			mac := hmac.New(sha256.New, []byte(secret))
+			mac.Write(body)
+			req.Header.Set("X-RailPush-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Printf("deploy webhook: request failed service=%s deploy=%s event=%s err=%v", svc.ID, deploy.ID, event, err)
+			return
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			log.Printf("deploy webhook: non-2xx response service=%s deploy=%s event=%s status=%d", svc.ID, deploy.ID, event, resp.StatusCode)
+		}
+	}()
 }
 
 func NewWorker(cfg *config.Config) *Worker {
@@ -504,6 +665,7 @@ func (w *Worker) processJob(job DeployJob) {
 	models.UpdateDeployStarted(deploy.ID, imageTag)
 	models.UpdateDeployStatus(deploy.ID, "deploying")
 	models.UpdateServiceStatus(svc.ID, "deploying", svc.ContainerID, svc.HostPort)
+	w.notifyDeployWebhook(svc, deploy, "started", true)
 	appendLog("==> Deploying...")
 
 	// 7. Stop old container
@@ -681,6 +843,7 @@ func (w *Worker) processJobKubernetes(job DeployJob, appendLog func(string)) {
 
 	// 2. Update deploy with image tag (and started_at)
 	_ = models.UpdateDeployStarted(deploy.ID, imageTag)
+	w.notifyDeployWebhook(svc, deploy, "started", true)
 
 	// 3. Resolve env vars (decrypt secrets) and always include PORT.
 	//    Merge linked env group vars first (lower priority), then service vars (higher priority).
@@ -1207,6 +1370,19 @@ func (w *Worker) notifyDeployResult(svc *models.Service, deploy *models.Deploy, 
 	if ok && deploy.Trigger == "preview" {
 		go w.postGitHubPRComment(svc, deploy)
 	}
+
+	if fresh, err := models.GetDeploy(deploy.ID); err == nil && fresh != nil {
+		deploy = fresh
+	}
+	phase := "failed"
+	if ok {
+		if strings.EqualFold(strings.TrimSpace(deploy.Trigger), "rollback") {
+			phase = "rollback"
+		} else {
+			phase = "success"
+		}
+	}
+	w.notifyDeployWebhook(svc, deploy, phase, ok)
 
 	if !w.Config.Email.Enabled() {
 		return
