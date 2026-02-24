@@ -334,6 +334,13 @@ export interface GitHubBranch {
   protected: boolean;
 }
 
+export interface GitHubWorkflow {
+  id: number;
+  name: string;
+  path: string;
+  state: string;
+}
+
 export interface DatabaseReplica {
   id: string;
   primary_database_id: string;

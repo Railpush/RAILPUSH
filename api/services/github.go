@@ -84,6 +84,13 @@ type GitHubBranch struct {
 	Protected bool   `json:"protected"`
 }
 
+type GitHubWorkflow struct {
+	ID    int64  `json:"id"`
+	Name  string `json:"name"`
+	Path  string `json:"path"`
+	State string `json:"state"`
+}
+
 func (g *GitHub) ListRepos(token string) ([]GitHubRepo, error) {
 	var allRepos []GitHubRepo
 	page := 1
@@ -133,6 +140,40 @@ func (g *GitHub) ListBranches(token, owner, repo string) ([]GitHubBranch, error)
 		return nil, err
 	}
 	return branches, nil
+}
+
+func (g *GitHub) ListWorkflows(token, owner, repo string) ([]GitHubWorkflow, error) {
+	var allWorkflows []GitHubWorkflow
+	page := 1
+	for {
+		apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/workflows?per_page=100&page=%d", owner, repo, page)
+		req, _ := http.NewRequest("GET", apiURL, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("GitHub API error %d: %s", resp.StatusCode, string(body))
+		}
+
+		var result struct {
+			Workflows []GitHubWorkflow `json:"workflows"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil, err
+		}
+
+		allWorkflows = append(allWorkflows, result.Workflows...)
+		if len(result.Workflows) < 100 {
+			break
+		}
+		page++
+	}
+	return allWorkflows, nil
 }
 
 func (g *GitHub) CreateWebhook(token, owner, repo, webhookURL, secret string) error {

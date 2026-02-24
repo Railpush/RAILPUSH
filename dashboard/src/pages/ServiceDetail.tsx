@@ -10,7 +10,7 @@ import { ServiceIcon } from '../components/ui/ServiceIcon';
 import { deriveDeployAutomationState, parseWorkflowNames, type DeployAutomationMode } from '../lib/deployAutomation';
 import { serviceTypeLabel, timeAgo, formatDuration } from '../lib/utils';
 import { buildDefaultServiceUrl } from '../lib/serviceUrl';
-import { services as servicesApi, deploys as deploysApi, envVars as envVarsApi, connectBuildStream } from '../lib/api';
+import { services as servicesApi, deploys as deploysApi, envVars as envVarsApi, github as githubApi, connectBuildStream } from '../lib/api';
 import type { Service, Deploy } from '../types';
 import { toast } from 'sonner';
 
@@ -29,6 +29,26 @@ function CopyUrlButton({ url }: { url: string }) {
   );
 }
 
+function parseGitHubOwnerRepo(repoURL?: string): { owner: string; repo: string } | null {
+  const raw = (repoURL || '').trim();
+  if (!raw) return null;
+
+  if (raw.startsWith('git@github.com:')) {
+    const cleaned = raw.replace('git@github.com:', '').replace(/\.git$/i, '');
+    const parts = cleaned.split('/').filter(Boolean);
+    if (parts.length >= 2) return { owner: parts[0], repo: parts[1] };
+    return null;
+  }
+
+  const marker = 'github.com/';
+  const idx = raw.indexOf(marker);
+  if (idx === -1) return null;
+  const cleaned = raw.slice(idx + marker.length).replace(/\.git$/i, '');
+  const parts = cleaned.split('/').filter(Boolean);
+  if (parts.length >= 2) return { owner: parts[0], repo: parts[1] };
+  return null;
+}
+
 export function ServiceDetail() {
   const { serviceId } = useParams<{ serviceId: string }>();
   const navigate = useNavigate();
@@ -43,8 +63,44 @@ export function ServiceDetail() {
   const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
   const [workflowDraft, setWorkflowDraft] = useState('');
   const [workflowSaving, setWorkflowSaving] = useState(false);
+  const [knownGitHubWorkflows, setKnownGitHubWorkflows] = useState<string[]>([]);
+  const [loadingGitHubWorkflows, setLoadingGitHubWorkflows] = useState(false);
+  const [githubWorkflowLoadError, setGitHubWorkflowLoadError] = useState<string | null>(null);
   const buildWsRef = useRef<WebSocket | null>(null);
   const buildLogEndRef = useRef<HTMLDivElement>(null);
+
+  const loadGitHubWorkflows = async (repoURL?: string) => {
+    const parsed = parseGitHubOwnerRepo(repoURL);
+    if (!parsed) {
+      setKnownGitHubWorkflows([]);
+      setGitHubWorkflowLoadError(null);
+      setLoadingGitHubWorkflows(false);
+      return;
+    }
+
+    setLoadingGitHubWorkflows(true);
+    setGitHubWorkflowLoadError(null);
+    try {
+      const workflows = await githubApi.listWorkflows(parsed.owner, parsed.repo);
+      const seen = new Set<string>();
+      const names = workflows
+        .map((w) => (w.name || '').trim())
+        .filter(Boolean)
+        .filter((name) => {
+          const key = name.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .sort((a, b) => a.localeCompare(b));
+      setKnownGitHubWorkflows(names);
+      setGitHubWorkflowLoadError(null);
+    } catch {
+      setKnownGitHubWorkflows([]);
+      setGitHubWorkflowLoadError('Unable to load workflow names from GitHub');
+    }
+    setLoadingGitHubWorkflows(false);
+  };
 
   const refresh = () => {
     if (!serviceId) return;
@@ -59,9 +115,13 @@ export function ServiceDetail() {
         const state = deriveDeployAutomationState(Boolean(s.auto_deploy), env || []);
         setDeployAutomationMode(state.mode);
         setDeployAutomationWorkflows(state.workflows);
+        void loadGitHubWorkflows(s.repo_url);
       } else {
         setDeployAutomationMode('push');
         setDeployAutomationWorkflows([]);
+        setKnownGitHubWorkflows([]);
+        setGitHubWorkflowLoadError(null);
+        setLoadingGitHubWorkflows(false);
       }
       setLoading(false);
     });
@@ -124,6 +184,11 @@ export function ServiceDetail() {
   const deployAutomationTitle = deployAutomationMode === 'workflow_success' && deployAutomationWorkflows.length > 0
     ? `Allowed workflows: ${deployAutomationWorkflows.join(', ')}`
     : undefined;
+  const draftWorkflowNames = parseWorkflowNames(workflowDraft);
+  const knownWorkflowSet = new Set(knownGitHubWorkflows.map((w) => w.toLowerCase()));
+  const unknownDraftWorkflows = knownGitHubWorkflows.length > 0
+    ? draftWorkflowNames.filter((name) => !knownWorkflowSet.has(name.toLowerCase()))
+    : [];
 
   const runAction = async (label: string, action: () => Promise<unknown>) => {
     setActionInProgress(label);
@@ -190,6 +255,9 @@ export function ServiceDetail() {
     }
     setWorkflowDraft(deployAutomationWorkflows.join(', '));
     setWorkflowModalOpen(true);
+    if (knownGitHubWorkflows.length === 0 && !loadingGitHubWorkflows && !githubWorkflowLoadError) {
+      void loadGitHubWorkflows(service?.repo_url);
+    }
   };
 
   const saveWorkflowAllowlist = async () => {
@@ -215,6 +283,11 @@ export function ServiceDetail() {
       toast.error('Failed to update workflow allowlist');
     }
     setWorkflowSaving(false);
+  };
+
+  const addWorkflowSuggestion = (name: string) => {
+    const merged = parseWorkflowNames([workflowDraft, name].filter(Boolean).join(', '));
+    setWorkflowDraft(merged.join(', '));
   };
 
   const deployActions = [
@@ -511,6 +584,33 @@ export function ServiceDetail() {
                 hint="These names must match the GitHub Actions workflow names exactly."
                 autoFocus
               />
+              {loadingGitHubWorkflows && (
+                <p className="text-xs text-content-tertiary mt-3">Loading workflow names from GitHub…</p>
+              )}
+              {!loadingGitHubWorkflows && githubWorkflowLoadError && (
+                <p className="text-xs text-amber-400 mt-3">{githubWorkflowLoadError}</p>
+              )}
+              {!loadingGitHubWorkflows && knownGitHubWorkflows.length > 0 && (
+                <div className="mt-3 space-y-2">
+                  <p className="text-xs text-content-tertiary">Known workflows (click to add):</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {knownGitHubWorkflows.map((name) => (
+                      <button
+                        key={name}
+                        onClick={() => addWorkflowSuggestion(name)}
+                        className="px-2 py-1 rounded-md text-[11px] border border-border-default bg-surface-tertiary/30 text-content-secondary hover:text-content-primary hover:border-border-hover transition-colors"
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {!loadingGitHubWorkflows && unknownDraftWorkflows.length > 0 && (
+                <p className="text-xs text-amber-400 mt-3">
+                  Warning: Unknown workflow names: {unknownDraftWorkflows.join(', ')}
+                </p>
+              )}
               <div className="mt-5 flex justify-end gap-2">
                 <Button variant="secondary" onClick={() => setWorkflowModalOpen(false)} disabled={workflowSaving}>
                   Cancel

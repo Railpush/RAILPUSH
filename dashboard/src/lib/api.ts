@@ -1,6 +1,6 @@
 import type {
   Service, Deploy, EnvVar, ManagedDatabase, ManagedKeyValue, Blueprint, BlueprintResource, EnvGroup, CustomDomain, RewriteRule, User, Backup, LogEntry, BillingOverview,
-  GitHubRepo, GitHubBranch, RegisteredDomain, DnsRecord, DomainSearchResult, Project, ProjectFolder, Environment, PreviewEnvironment, OneOffJob, AutoscalingPolicy,
+  GitHubRepo, GitHubBranch, GitHubWorkflow, RegisteredDomain, DnsRecord, DomainSearchResult, Project, ProjectFolder, Environment, PreviewEnvironment, OneOffJob, AutoscalingPolicy,
   DatabaseReplica, WorkspaceMember, AuditLogEntry, SamlSSOConfig, Incident, IncidentDetail, OpsOverview, OpsUserItem, OpsWorkspaceItem, OpsServiceItem, OpsDeployItem,
   OpsEmailOutboxItem, OpsBillingCustomerItem, OpsBillingCustomerDetail, OpsTicketItem, OpsTicketDetail, OpsWorkspaceCreditItem, OpsWorkspaceCreditDetail,
   OpsKubeSummary, OpsClusterSummary, OpsPerformanceSummary, OpsDatastoreItem, OpsAuditLogEntry, SupportTicket, SupportTicketMessage, BlueprintAISettings, AIFixSession,
@@ -286,6 +286,8 @@ export const github = {
   listRepos: () => request<GitHubRepo[]>('/github/repos'),
   listBranches: (owner: string, repo: string) =>
     request<GitHubBranch[]>(`/github/repos/${owner}/${repo}/branches`),
+  listWorkflows: (owner: string, repo: string) =>
+    request<GitHubWorkflow[]>(`/github/repos/${owner}/${repo}/workflows`),
 };
 
 // Custom Domains

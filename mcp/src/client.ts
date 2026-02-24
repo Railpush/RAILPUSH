@@ -587,4 +587,8 @@ export class RailPushClient {
   async listGitHubBranches(owner: string, repo: string) {
     return this.request("GET", `/github/repos/${owner}/${repo}/branches`);
   }
+
+  async listGitHubWorkflows(owner: string, repo: string) {
+    return this.request("GET", `/github/repos/${owner}/${repo}/workflows`);
+  }
 }

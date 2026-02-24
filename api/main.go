@@ -275,6 +275,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	ghH := handlers.NewGitHubHandler(cfg, services.NewGitHub(cfg))
 	authed.HandleFunc("/github/repos", ghH.ListRepos).Methods("GET")
 	authed.HandleFunc("/github/repos/{owner}/{repo}/branches", ghH.ListBranches).Methods("GET")
+	authed.HandleFunc("/github/repos/{owner}/{repo}/workflows", ghH.ListWorkflows).Methods("GET")
 
 	supportH := handlers.NewSupportHandler(cfg)
 	authed.HandleFunc("/support/tickets", supportH.ListTickets).Methods("GET")

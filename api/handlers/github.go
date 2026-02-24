@@ -58,6 +58,28 @@ func (h *GitHubHandler) ListBranches(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, branches)
 }
 
+func (h *GitHubHandler) ListWorkflows(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	vars := mux.Vars(r)
+	owner := vars["owner"]
+	repo := vars["repo"]
+	if owner == "" || repo == "" {
+		utils.RespondError(w, http.StatusBadRequest, "owner and repo are required")
+		return
+	}
+	token, err := h.getDecryptedToken(userID)
+	if err != nil || token == "" {
+		utils.RespondError(w, http.StatusBadRequest, "no GitHub account connected")
+		return
+	}
+	workflows, err := h.GitHub.ListWorkflows(token, owner, repo)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadGateway, "failed to list workflows: "+err.Error())
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, workflows)
+}
+
 func (h *GitHubHandler) getDecryptedToken(userID string) (string, error) {
 	encrypted, err := models.GetUserGitHubToken(userID)
 	if err != nil || encrypted == "" {

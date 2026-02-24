@@ -1434,6 +1434,19 @@ server.tool(
   },
 );
 
+server.tool(
+  "list_github_workflows",
+  "List GitHub Actions workflows for a repository. Use workflow names from this list when setting deploy gate allowlists.",
+  {
+    owner: z.string().describe("Repository owner (user or org)"),
+    repo: z.string().describe("Repository name"),
+  },
+  async ({ owner, repo }) => {
+    try { return text(await client.listGitHubWorkflows(owner, repo)); }
+    catch (e) { return err(e); }
+  },
+);
+
 // ════════════════════════════════════════════════════════════════════════
 //  SUPPORT TICKETS
 // ════════════════════════════════════════════════════════════════════════

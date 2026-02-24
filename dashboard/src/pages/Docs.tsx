@@ -332,7 +332,7 @@ export function Docs() {
                 The active deploy automation mode is also visible on each service detail page so you can quickly confirm whether it is set to commit-based, workflow-gated, or manual-only deploys.
               </p>
               <p className="text-sm text-content-secondary mb-4">
-                You can also switch modes directly from the service detail header using the <strong>Automation</strong> quick-action menu, and edit the workflow allowlist from the same page.
+                You can also switch modes directly from the service detail header using the <strong>Automation</strong> quick-action menu, and edit the workflow allowlist from the same page with known workflow-name suggestions loaded from GitHub.
               </p>
               <p className="text-sm text-content-secondary mb-4">
                 For API or MCP automation, configure the same service env vars directly:
@@ -345,6 +345,7 @@ RAILPUSH_GITHUB_ACTIONS_WORKFLOWS=CI, Release Build`} />
               <CodeBlock language="text" filename="MCP tools" code={`get_github_actions_deploy_gate(service_id)
 set_deploy_automation_mode(service_id, mode, workflows?)
 set_github_actions_deploy_workflows(service_id, workflows)
+list_github_workflows(owner, repo)
 enable_github_actions_deploy_gate(service_id, workflows?)
 disable_github_actions_deploy_gate(service_id)`} />
               <p className="text-xs text-content-tertiary mb-1">
@@ -352,6 +353,9 @@ disable_github_actions_deploy_gate(service_id)`} />
               </p>
               <p className="text-xs text-content-tertiary mb-1">
                 Use <code className="text-[11px] bg-surface-tertiary px-1 rounded">set_github_actions_deploy_workflows</code> to update allowlist names without changing deploy mode.
+              </p>
+              <p className="text-xs text-content-tertiary mb-1">
+                Use <code className="text-[11px] bg-surface-tertiary px-1 rounded">list_github_workflows</code> to fetch exact workflow names before setting an allowlist.
               </p>
             </section>
 
@@ -1636,7 +1640,7 @@ curl https://railpush.com/api/v1/services \\
                   <div>
                     <div className="text-sm font-semibold mb-1">AI-native infrastructure</div>
                     <div className="text-sm text-content-secondary">
-                      With 116 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
+                      With 117 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
                     </div>
                   </div>
                 </div>
@@ -1727,7 +1731,7 @@ npm run build`} />
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Available Tools</h3>
               <p className="text-content-secondary text-sm leading-relaxed mb-4">
-                The MCP server exposes 116 tools organized by category. Agents discover these automatically.
+                The MCP server exposes 117 tools organized by category. Agents discover these automatically.
               </p>
 
               <div className="overflow-x-auto mb-8">
@@ -1767,7 +1771,7 @@ npm run build`} />
                       ['DNS Records', 'list, create, update, delete'],
                       ['Workspace Members', 'list, invite, update role, remove'],
                       ['Audit Logs', 'list events'],
-                      ['GitHub', 'list repos, list branches'],
+                      ['GitHub', 'list repos, list branches, list workflows'],
                     ].map(([cat, tools]) => (
                       <tr key={cat} className="border-b border-border-subtle">
                         <td className="py-2 pr-4 font-semibold text-content-primary text-xs">{cat}</td>
