@@ -332,6 +332,9 @@ export function Docs() {
                 The active deploy automation mode is also visible on each service detail page so you can quickly confirm whether it is set to commit-based, workflow-gated, or manual-only deploys.
               </p>
               <p className="text-sm text-content-secondary mb-4">
+                You can also switch modes directly from the service detail header using the <strong>Automation</strong> quick-action menu, then use service settings when you need to edit the workflow allowlist itself.
+              </p>
+              <p className="text-sm text-content-secondary mb-4">
                 For API or MCP automation, configure the same service env vars directly:
               </p>
               <CodeBlock language="bash" filename="service env vars" code={`# Enable deploys from GitHub workflow_run success events
@@ -343,6 +346,9 @@ RAILPUSH_GITHUB_ACTIONS_WORKFLOWS=CI, Release Build`} />
 set_deploy_automation_mode(service_id, mode, workflows?)
 enable_github_actions_deploy_gate(service_id, workflows?)
 disable_github_actions_deploy_gate(service_id)`} />
+              <p className="text-xs text-content-tertiary mb-1">
+                For <code className="text-[11px] bg-surface-tertiary px-1 rounded">set_deploy_automation_mode(..., mode="workflow_success")</code>, omitting <code className="text-[11px] bg-surface-tertiary px-1 rounded">workflows</code> preserves the existing allowlist, while passing an empty list clears it.
+              </p>
             </section>
 
             {/* ── Databases ───────────────────────────────── */}

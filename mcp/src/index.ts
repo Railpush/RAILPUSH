@@ -458,16 +458,17 @@ server.tool(
 
 server.tool(
   "set_deploy_automation_mode",
-  "Set a service deploy automation mode: off, push, or GitHub Actions workflow-success gated deploys. Optionally provide workflow allowlist when using workflow_success mode.",
+  "Set a service deploy automation mode: off, push, or GitHub Actions workflow-success gated deploys. Optionally provide workflow allowlist for workflow_success mode; if omitted, existing workflow allowlist is preserved.",
   {
     service_id: z.string().describe("Service ID"),
     mode: z.enum(["off", "push", "workflow_success"]).describe("Deploy automation mode"),
-    workflows: z.array(z.string()).optional().describe("Optional workflow names allowlist for workflow_success mode"),
+    workflows: z.array(z.string()).optional().describe("Optional workflow names allowlist for workflow_success mode. Omit to keep existing allowlist, pass [] to clear it."),
   },
   async ({ service_id, mode, workflows }) => {
     try {
+      const workflowsProvided = workflows !== undefined;
       const seen = new Set<string>();
-      const workflowNames = (workflows ?? [])
+      let workflowNames = (workflows ?? [])
         .map((w) => w.trim())
         .filter(Boolean)
         .filter((w) => {
@@ -489,6 +490,30 @@ server.tool(
       ];
 
       if (mode === "workflow_success") {
+        if (!workflowsProvided) {
+          const currentEnvVars = await client.listEnvVars(service_id) as Array<Record<string, unknown>>;
+          const byKey = new Map<string, string>();
+          for (const row of currentEnvVars) {
+            const key = typeof row.key === "string" ? row.key.trim().toUpperCase() : "";
+            if (!key) continue;
+            const value = typeof row.value === "string" ? row.value.trim() : "";
+            byKey.set(key, value);
+          }
+
+          const existingRaw = (byKey.get("RAILPUSH_GITHUB_ACTIONS_WORKFLOWS") || byKey.get("RAILPUSH_GITHUB_ACTIONS_WORKFLOW") || "").trim();
+          const existingSeen = new Set<string>();
+          workflowNames = existingRaw
+            .split(",")
+            .map((w) => w.trim())
+            .filter(Boolean)
+            .filter((w) => {
+              const key = w.toLowerCase();
+              if (existingSeen.has(key)) return false;
+              existingSeen.add(key);
+              return true;
+            });
+        }
+
         envVars = [{ key: "RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY", value: "true", is_secret: false }];
         if (workflowNames.length > 0) {
           envVars.push({ key: "RAILPUSH_GITHUB_ACTIONS_WORKFLOWS", value: workflowNames.join(", "), is_secret: false });

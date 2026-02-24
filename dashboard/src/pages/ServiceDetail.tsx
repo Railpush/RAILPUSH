@@ -11,6 +11,7 @@ import { serviceTypeLabel, timeAgo, formatDuration } from '../lib/utils';
 import { buildDefaultServiceUrl } from '../lib/serviceUrl';
 import { services as servicesApi, deploys as deploysApi, envVars as envVarsApi, connectBuildStream } from '../lib/api';
 import type { Service, Deploy } from '../types';
+import { toast } from 'sonner';
 
 interface QuickMetrics { cpu_percent: string; memory_used: string; memory_percent: string }
 
@@ -129,11 +130,78 @@ export function ServiceDetail() {
     setActionInProgress(null);
   };
 
+  const setDeployAutomationModeQuick = async (nextMode: DeployAutomationMode) => {
+    if (!serviceId || nextMode === deployAutomationMode) return;
+
+    const workflowNames = nextMode === 'workflow_success' ? deployAutomationWorkflows : [];
+    const autoDeploy = nextMode !== 'off';
+
+    setActionInProgress('Updating automation…');
+    try {
+      await servicesApi.update(serviceId, { auto_deploy: autoDeploy });
+
+      const envVars = nextMode === 'workflow_success'
+        ? [
+            { key: 'RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY', value: 'true', is_secret: false },
+            ...(workflowNames.length > 0
+              ? [{ key: 'RAILPUSH_GITHUB_ACTIONS_WORKFLOWS', value: workflowNames.join(', '), is_secret: false }]
+              : []),
+          ]
+        : [];
+
+      const deleteKeys = [
+        'RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY',
+        'RAILPUSH_GITHUB_ACTIONS_ENABLED',
+        'RAILPUSH_DEPLOY_ON_GITHUB_ACTIONS',
+        'RAILPUSH_GITHUB_ACTIONS_WORKFLOW',
+      ];
+      if (!(nextMode === 'workflow_success' && workflowNames.length > 0)) {
+        deleteKeys.push('RAILPUSH_GITHUB_ACTIONS_WORKFLOWS');
+      }
+
+      await envVarsApi.merge(serviceId, { env_vars: envVars, delete: deleteKeys });
+
+      setDeployAutomationMode(nextMode);
+      if (nextMode !== 'workflow_success') {
+        setDeployAutomationWorkflows([]);
+      }
+
+      toast.success(
+        nextMode === 'off'
+          ? 'Deploy automation set to manual only'
+          : (nextMode === 'push' ? 'Deploy automation set to on commit' : 'Deploy automation set to GitHub Actions gate')
+      );
+      setTimeout(refresh, 600);
+    } catch {
+      toast.error('Failed to update deploy automation mode');
+    }
+
+    setActionInProgress(null);
+  };
+
   const deployActions = [
     { label: 'Deploy latest commit', onClick: () => runAction('Deploying…', () => deploysApi.trigger(service.id)) },
     { label: 'Clear build cache & deploy', onClick: () => runAction('Deploying…', () => deploysApi.trigger(service.id, { clearCache: true })) },
     { divider: true, label: '', onClick: () => { } },
     { label: 'Restart service', icon: <RotateCw className="w-4 h-4" />, onClick: () => runAction('Restarting…', () => servicesApi.restart(service.id)) },
+  ];
+
+  const deployAutomationActions = [
+    {
+      label: 'On Commit',
+      icon: deployAutomationMode === 'push' ? <Check className="w-4 h-4" /> : undefined,
+      onClick: () => { setDeployAutomationModeQuick('push'); },
+    },
+    {
+      label: 'After GitHub Actions Success',
+      icon: deployAutomationMode === 'workflow_success' ? <Check className="w-4 h-4" /> : undefined,
+      onClick: () => { setDeployAutomationModeQuick('workflow_success'); },
+    },
+    {
+      label: 'Off (Manual)',
+      icon: deployAutomationMode === 'off' ? <Check className="w-4 h-4" /> : undefined,
+      onClick: () => { setDeployAutomationModeQuick('off'); },
+    },
   ];
 
   return (
@@ -192,16 +260,28 @@ export function ServiceDetail() {
                 {actionInProgress}
               </Button>
             ) : (
-              <Dropdown
-                trigger={
-                  <Button variant="primary" className="shadow-lg shadow-brand/20">
-                    Deploy
-                    <ChevronDown className="w-4 h-4 ml-1" />
-                  </Button>
-                }
-                items={deployActions}
-                align="right"
-              />
+              <>
+                <Dropdown
+                  trigger={
+                    <Button variant="secondary" className="shadow-lg">
+                      Automation
+                      <ChevronDown className="w-4 h-4 ml-1" />
+                    </Button>
+                  }
+                  items={deployAutomationActions}
+                  align="right"
+                />
+                <Dropdown
+                  trigger={
+                    <Button variant="primary" className="shadow-lg shadow-brand/20">
+                      Deploy
+                      <ChevronDown className="w-4 h-4 ml-1" />
+                    </Button>
+                  }
+                  items={deployActions}
+                  align="right"
+                />
+              </>
             )}
           </div>
         </div>
