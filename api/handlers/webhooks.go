@@ -388,19 +388,29 @@ func (h *WebhookHandler) GitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		if action == "closed" {
 			if existing != nil && existing.ServiceID != nil {
 				if previewSvc, _ := models.GetService(*existing.ServiceID); previewSvc != nil {
-					if previewSvc.ContainerID != "" {
-						_ = h.Worker.Deployer.RemoveContainer(previewSvc.ContainerID)
-					}
-					if insts, err := models.ListServiceInstances(previewSvc.ID); err == nil {
-						for _, inst := range insts {
-							_ = h.Worker.Deployer.RemoveContainer(inst.ContainerID)
+					if h.Config != nil && h.Config.Kubernetes.Enabled {
+						if h.Worker != nil {
+							if kd, err := h.Worker.GetKubeDeployer(); err == nil && kd != nil {
+								_ = kd.DeleteServiceResources(previewSvc)
+							}
+						}
+					} else if h.Worker != nil {
+						if previewSvc.ContainerID != "" {
+							_ = h.Worker.Deployer.RemoveContainer(previewSvc.ContainerID)
+						}
+						if insts, err := models.ListServiceInstances(previewSvc.ID); err == nil {
+							for _, inst := range insts {
+								if strings.TrimSpace(inst.ContainerID) != "" {
+									_ = h.Worker.Deployer.RemoveContainer(inst.ContainerID)
+								}
+							}
+						}
+						if h.Config != nil && h.Worker.Router != nil && h.Config.Deploy.Domain != "" && h.Config.Deploy.Domain != "localhost" && !h.Config.Deploy.DisableRouter {
+							domain := utils.ServiceHostLabel(previewSvc.Name, previewSvc.Subdomain) + "." + h.Config.Deploy.Domain
+							_ = h.Worker.Router.RemoveRoute(domain)
 						}
 					}
 					_ = models.DeleteServiceInstancesByService(previewSvc.ID)
-					if h.Config.Deploy.Domain != "" && h.Config.Deploy.Domain != "localhost" {
-						domain := utils.ServiceHostLabel(previewSvc.Name, previewSvc.Subdomain) + "." + h.Config.Deploy.Domain
-						_ = h.Worker.Router.RemoveRoute(domain)
-					}
 					_ = models.DeleteService(previewSvc.ID)
 				}
 				_ = models.MarkPreviewEnvironmentClosed(baseService.WorkspaceID, repoURL, payload.Number)
