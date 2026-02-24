@@ -14,6 +14,82 @@ import (
 	"github.com/railpush/api/models"
 )
 
+func dependencyWaitInitContainer(secretName string, optional *bool, containerName string) corev1.Container {
+	if strings.TrimSpace(containerName) == "" {
+		containerName = "wait-deps"
+	}
+	// BusyBox includes sh + nc; this keeps the wait logic image-agnostic.
+	script := `set -eu
+extract_host_port() {
+  key="$1"
+  default_port="$2"
+  val="${!key:-}"
+  if [ -z "$val" ]; then
+    return 0
+  fi
+  hp=$(echo "$val" | sed -E 's|^[a-zA-Z0-9+.-]+://([^@/]*@)?([^/:?]+)(:([0-9]+))?.*$|\2:\4|')
+  host=${hp%%:*}
+  port=${hp#*:}
+  if [ -z "$host" ] || [ "$host" = "$hp" ]; then
+    return 0
+  fi
+  if [ -z "$port" ]; then
+    port="$default_port"
+  fi
+  echo "$host:$port"
+}
+
+targets=""
+for t in \
+  "$(extract_host_port DATABASE_URL 5432)" \
+  "$(extract_host_port POSTGRES_URL 5432)" \
+  "$(extract_host_port REDIS_URL 6379)" \
+  "$(extract_host_port CACHE_URL 6379)"; do
+  [ -z "$t" ] && continue
+  case ",$targets," in
+    *",$t,"*) ;;
+    *) targets="${targets:+$targets,}$t" ;;
+  esac
+done
+
+[ -z "$targets" ] && exit 0
+echo "waiting for dependencies: $targets"
+for target in $(echo "$targets" | tr ',' ' '); do
+  host=${target%%:*}
+  port=${target##*:}
+  ok=0
+  i=0
+  while [ $i -lt 90 ]; do
+    if nc -z -w 1 "$host" "$port" >/dev/null 2>&1; then
+      ok=1
+      break
+    fi
+    i=$((i+1))
+    sleep 1
+  done
+  if [ $ok -ne 1 ]; then
+    echo "dependency not reachable: $host:$port"
+    exit 1
+  fi
+done
+`
+	return corev1.Container{
+		Name:            containerName,
+		Image:           "busybox:1.36",
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Command:         []string{"sh", "-lc", script},
+		EnvFrom: []corev1.EnvFromSource{
+			{
+				SecretRef: &corev1.SecretEnvSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+					Optional:             optional,
+				},
+			},
+		},
+		Resources: corev1.ResourceRequirements{},
+	}
+}
+
 func findContainerImage(containers []corev1.Container, preferredName string) string {
 	preferredName = strings.TrimSpace(preferredName)
 	if preferredName != "" {
@@ -111,6 +187,9 @@ func (k *KubeDeployer) RunOneOffJob(oneOffJobID string, svc *models.Service, com
 				Spec: corev1.PodSpec{
 					PriorityClassName: "railpush-critical",
 					RestartPolicy:     corev1.RestartPolicyNever,
+					InitContainers: []corev1.Container{
+						dependencyWaitInitContainer(envSecretName, &optional, "wait-deps"),
+					},
 					Containers: []corev1.Container{
 						{
 							Name:            "oneoff",
@@ -280,6 +359,9 @@ func (k *KubeDeployer) RunPreDeployJob(deployID string, svc *models.Service, ima
 				Spec: corev1.PodSpec{
 					PriorityClassName: "railpush-critical",
 					RestartPolicy:     corev1.RestartPolicyNever,
+					InitContainers: []corev1.Container{
+						dependencyWaitInitContainer(envSecretName, &optional, "wait-deps"),
+					},
 					Containers: []corev1.Container{
 						{
 							Name:            "predeploy",
