@@ -172,6 +172,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	svcH := handlers.NewServiceHandler(cfg, worker, stripeService)
 	depH := handlers.NewDeployHandler(cfg, worker)
 	envH := handlers.NewEnvVarHandler(cfg)
+	diskH := handlers.NewDiskHandler()
 	dbH := handlers.NewDatabaseHandler(cfg, worker, stripeService)
 	kvH := handlers.NewKeyValueHandler(cfg, worker, stripeService)
 	bpH := handlers.NewBlueprintHandler(cfg, worker)
@@ -307,6 +308,9 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/services/{id}/env-vars", envH.ListEnvVars).Methods("GET")
 	authed.HandleFunc("/services/{id}/env-vars", envH.BulkUpdateEnvVars).Methods("PUT")
 	authed.HandleFunc("/services/{id}/env-vars", envH.MergeEnvVars).Methods("PATCH")
+	authed.HandleFunc("/services/{id}/disks", diskH.ListServiceDisks).Methods("GET")
+	authed.HandleFunc("/services/{id}/disks", diskH.UpsertServiceDisk).Methods("PUT")
+	authed.HandleFunc("/services/{id}/disks", diskH.DeleteServiceDisk).Methods("DELETE")
 
 	authed.HandleFunc("/services/{id}/custom-domains", domH.AddCustomDomain).Methods("POST")
 	authed.HandleFunc("/services/{id}/custom-domains", domH.ListCustomDomains).Methods("GET")

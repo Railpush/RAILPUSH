@@ -35,3 +35,8 @@ func DeleteDisk(id string) error {
 	_, err := database.DB.Exec("DELETE FROM disks WHERE id=$1", id)
 	return err
 }
+
+func DeleteDiskByService(serviceID string) error {
+	_, err := database.DB.Exec("DELETE FROM disks WHERE service_id=$1", serviceID)
+	return err
+}

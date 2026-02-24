@@ -4,6 +4,7 @@ import type {
   DatabaseReplica, WorkspaceMember, AuditLogEntry, SamlSSOConfig, Incident, IncidentDetail, OpsOverview, OpsUserItem, OpsWorkspaceItem, OpsServiceItem, OpsDeployItem,
   OpsEmailOutboxItem, OpsBillingCustomerItem, OpsBillingCustomerDetail, OpsTicketItem, OpsTicketDetail, OpsWorkspaceCreditItem, OpsWorkspaceCreditDetail,
   OpsKubeSummary, OpsClusterSummary, OpsPerformanceSummary, OpsDatastoreItem, OpsAuditLogEntry, SupportTicket, SupportTicketMessage, BlueprintAISettings, AIFixSession,
+  Disk,
 } from '../types';
 
 const BASE = '/api/v1';
@@ -137,6 +138,13 @@ export const envVars = {
   list: (serviceId: string) => request<EnvVar[]>(`/services/${serviceId}/env-vars`),
   update: (serviceId: string, vars: Array<Pick<EnvVar, 'key' | 'value' | 'is_secret'>>) =>
     request<{ status: string }>(`/services/${serviceId}/env-vars`, { method: 'PUT', body: JSON.stringify(vars) }),
+};
+
+export const disks = {
+  list: (serviceId: string) => request<Disk[]>(`/services/${serviceId}/disks`),
+  upsert: (serviceId: string, data: { name: string; mount_path: string; size_gb: number }) =>
+    request<{ disk: Disk; redeploy_required: boolean }>(`/services/${serviceId}/disks`, { method: 'PUT', body: JSON.stringify(data) }),
+  remove: (serviceId: string) => request<{ status: string; redeploy_required: boolean }>(`/services/${serviceId}/disks`, { method: 'DELETE' }),
 };
 
 // Databases
