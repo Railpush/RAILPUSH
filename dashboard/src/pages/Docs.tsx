@@ -1151,6 +1151,24 @@ http://my-api.railpush.svc.cluster.local:10000
 # In your service's env vars:
 API_URL=http://my-api.railpush.svc.cluster.local:10000`} />
 
+              <p className="text-sm text-content-secondary mb-4">
+                RailPush also injects internal discovery environment variables automatically for Kubernetes services:
+              </p>
+              <CodeBlock language="bash" filename="auto-injected env vars" code={`# Current service
+RAILPUSH_INTERNAL_HOST=<internal-service-host>
+RAILPUSH_INTERNAL_PORT=<port>
+RAILPUSH_INTERNAL_URL=http://<internal-service-host>:<port>
+RAILPUSH_INTERNAL_SERVICE_ID=<service-id>
+
+# Peer services by name/subdomain label
+RAILPUSH_SERVICE_<SERVICE_LABEL>_URL=http://<peer-host>:<peer-port>
+RAILPUSH_SERVICE_<SERVICE_LABEL>_ID=<peer-service-id>
+RAILPUSH_SERVICE_<SERVICE_LABEL>_PROJECT_ID=<project-id>
+RAILPUSH_SERVICE_<SERVICE_LABEL>_ENVIRONMENT_ID=<environment-id>
+
+# Peer services by ID token (stable, collision-safe)
+RAILPUSH_SERVICE_ID_<SERVICE_ID_TOKEN>_URL=http://<peer-host>:<peer-port>`} />
+
               <div className="rounded-xl border border-brand/20 bg-brand/5 p-5 mt-4 mb-6">
                 <div className="flex items-start gap-3">
                   <Shield className="w-5 h-5 text-brand shrink-0 mt-0.5" />

@@ -205,6 +205,13 @@ func (w *Worker) injectKubeInternalDiscoveryEnv(svc *models.Service, env map[str
 	env["RAILPUSH_INTERNAL_HOST"] = selfHost
 	env["RAILPUSH_INTERNAL_PORT"] = fmt.Sprintf("%d", selfPort)
 	env["RAILPUSH_INTERNAL_URL"] = fmt.Sprintf("http://%s:%d", selfHost, selfPort)
+	env["RAILPUSH_INTERNAL_SERVICE_ID"] = strings.TrimSpace(svc.ID)
+	if svc.ProjectID != nil && strings.TrimSpace(*svc.ProjectID) != "" {
+		env["RAILPUSH_INTERNAL_PROJECT_ID"] = strings.TrimSpace(*svc.ProjectID)
+	}
+	if svc.EnvironmentID != nil && strings.TrimSpace(*svc.EnvironmentID) != "" {
+		env["RAILPUSH_INTERNAL_ENVIRONMENT_ID"] = strings.TrimSpace(*svc.EnvironmentID)
+	}
 
 	services, err := models.ListServices(svc.WorkspaceID)
 	if err != nil {
@@ -226,15 +233,36 @@ func (w *Worker) injectKubeInternalDiscoveryEnv(svc *models.Service, env map[str
 		hostKey := "RAILPUSH_SERVICE_" + label + "_HOST"
 		portKey := "RAILPUSH_SERVICE_" + label + "_PORT"
 		urlKey := "RAILPUSH_SERVICE_" + label + "_URL"
+		idKey := "RAILPUSH_SERVICE_" + label + "_ID"
+		projectIDKey := "RAILPUSH_SERVICE_" + label + "_PROJECT_ID"
+		envIDKey := "RAILPUSH_SERVICE_" + label + "_ENVIRONMENT_ID"
+
+		suffix := ""
 		if _, exists := env[hostKey]; exists {
-			suffix := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(peer.ID), "-", "_"))
+			suffix = strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(peer.ID), "-", "_"))
 			hostKey = hostKey + "_" + suffix
 			portKey = portKey + "_" + suffix
 			urlKey = urlKey + "_" + suffix
+			idKey = idKey + "_" + suffix
+			projectIDKey = projectIDKey + "_" + suffix
+			envIDKey = envIDKey + "_" + suffix
 		}
 		env[hostKey] = peerHost
 		env[portKey] = fmt.Sprintf("%d", peerPort)
 		env[urlKey] = fmt.Sprintf("http://%s:%d", peerHost, peerPort)
+		env[idKey] = strings.TrimSpace(peer.ID)
+
+		if peer.ProjectID != nil && strings.TrimSpace(*peer.ProjectID) != "" {
+			env[projectIDKey] = strings.TrimSpace(*peer.ProjectID)
+		}
+		if peer.EnvironmentID != nil && strings.TrimSpace(*peer.EnvironmentID) != "" {
+			env[envIDKey] = strings.TrimSpace(*peer.EnvironmentID)
+		}
+
+		idLabel := internalDiscoveryKey(peer.ID)
+		env["RAILPUSH_SERVICE_ID_"+idLabel+"_HOST"] = peerHost
+		env["RAILPUSH_SERVICE_ID_"+idLabel+"_PORT"] = fmt.Sprintf("%d", peerPort)
+		env["RAILPUSH_SERVICE_ID_"+idLabel+"_URL"] = fmt.Sprintf("http://%s:%d", peerHost, peerPort)
 	}
 }
 
