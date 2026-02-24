@@ -180,10 +180,12 @@ CRITICAL RULES:
 	}
 
 	content := extractOpenRouterContent(parsed.Choices[0].Message.Content)
-	content = stripMarkdownFences(content)
-	content = strings.TrimSpace(content)
+	content = normalizeDockerfileContent(content)
 	if content == "" {
 		return "", "", fmt.Errorf("openrouter returned empty content")
+	}
+	if !looksLikeDockerfile(content) {
+		return "", "", fmt.Errorf("openrouter returned content without a Dockerfile")
 	}
 
 	// Build a short summary from the first line of the Dockerfile change
@@ -261,6 +263,36 @@ func stripMarkdownFences(in string) string {
 		return strings.TrimSpace(rest)
 	}
 	return strings.TrimSpace(rest[:end])
+}
+
+func normalizeDockerfileContent(in string) string {
+	s := stripMarkdownFences(in)
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	start := -1
+	for i, ln := range lines {
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(ln)), "FROM ") {
+			start = i
+			break
+		}
+	}
+	if start > 0 {
+		lines = lines[start:]
+	}
+	out := strings.TrimSpace(strings.Join(lines, "\n"))
+	return out
+}
+
+func looksLikeDockerfile(in string) bool {
+	for _, ln := range strings.Split(in, "\n") {
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(ln)), "FROM ") {
+			return true
+		}
+	}
+	return false
 }
 
 func lastNLines(s string, n int) string {
