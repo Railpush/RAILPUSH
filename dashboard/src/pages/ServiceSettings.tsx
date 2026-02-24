@@ -3,13 +3,33 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
-import { services as servicesApi, envVars as envVarsApi } from '../lib/api';
+import { services as servicesApi, envVars as envVarsApi, github as githubApi } from '../lib/api';
 import { deriveDeployAutomationState, parseWorkflowNames, type DeployAutomationMode } from '../lib/deployAutomation';
 import { buildDefaultServiceHostname, hostnameFromUrl } from '../lib/serviceUrl';
 import type { Service } from '../types';
 import { toast } from 'sonner';
 
 type TermLine = { text: string; color?: string; delay?: number };
+
+function parseGitHubOwnerRepo(repoURL?: string): { owner: string; repo: string } | null {
+  const raw = (repoURL || '').trim();
+  if (!raw) return null;
+
+  if (raw.startsWith('git@github.com:')) {
+    const cleaned = raw.replace('git@github.com:', '').replace(/\.git$/i, '');
+    const parts = cleaned.split('/').filter(Boolean);
+    if (parts.length >= 2) return { owner: parts[0], repo: parts[1] };
+    return null;
+  }
+
+  const marker = 'github.com/';
+  const idx = raw.indexOf(marker);
+  if (idx === -1) return null;
+  const cleaned = raw.slice(idx + marker.length).replace(/\.git$/i, '');
+  const parts = cleaned.split('/').filter(Boolean);
+  if (parts.length >= 2) return { owner: parts[0], repo: parts[1] };
+  return null;
+}
 
 function TerminalDeleteModal({ open, onClose, service, onConfirm }: {
   open: boolean;
@@ -219,6 +239,9 @@ export function ServiceSettings() {
   const [saving, setSaving] = useState(false);
   const [deployAutomationMode, setDeployAutomationMode] = useState<DeployAutomationMode>('push');
   const [workflowAllowlist, setWorkflowAllowlist] = useState('');
+  const [knownGitHubWorkflows, setKnownGitHubWorkflows] = useState<string[]>([]);
+  const [loadingGitHubWorkflows, setLoadingGitHubWorkflows] = useState(false);
+  const [githubWorkflowLoadError, setGitHubWorkflowLoadError] = useState<string | null>(null);
   const [gateConfigLoaded, setGateConfigLoaded] = useState(false);
   const [gateLoadError, setGateLoadError] = useState(false);
   const [formData, setFormData] = useState({
@@ -232,6 +255,39 @@ export function ServiceSettings() {
     docker_access: false,
   });
 
+  const loadGitHubWorkflows = async (repoURL?: string) => {
+    const parsed = parseGitHubOwnerRepo(repoURL);
+    if (!parsed) {
+      setKnownGitHubWorkflows([]);
+      setGitHubWorkflowLoadError(null);
+      setLoadingGitHubWorkflows(false);
+      return;
+    }
+
+    setLoadingGitHubWorkflows(true);
+    setGitHubWorkflowLoadError(null);
+    try {
+      const workflows = await githubApi.listWorkflows(parsed.owner, parsed.repo);
+      const seen = new Set<string>();
+      const names = workflows
+        .map((w) => (w.name || '').trim())
+        .filter(Boolean)
+        .filter((name) => {
+          const key = name.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .sort((a, b) => a.localeCompare(b));
+      setKnownGitHubWorkflows(names);
+      setGitHubWorkflowLoadError(null);
+    } catch {
+      setKnownGitHubWorkflows([]);
+      setGitHubWorkflowLoadError('Unable to load workflow names from GitHub');
+    }
+    setLoadingGitHubWorkflows(false);
+  };
+
   useEffect(() => {
     if (!serviceId) return;
     setGateLoadError(false);
@@ -242,6 +298,7 @@ export function ServiceSettings() {
     ])
       .then(([s, envVars]) => {
         setService(s);
+        void loadGitHubWorkflows(s.repo_url);
         setFormData({
           name: s.name,
           branch: s.branch,
@@ -333,6 +390,17 @@ export function ServiceSettings() {
     if (!serviceId) return;
     await servicesApi.delete(serviceId);
   }, [serviceId]);
+
+  const workflowDraftNames = parseWorkflowNames(workflowAllowlist);
+  const knownWorkflowSet = new Set(knownGitHubWorkflows.map((name) => name.toLowerCase()));
+  const unknownWorkflowNames = knownGitHubWorkflows.length > 0
+    ? workflowDraftNames.filter((name) => !knownWorkflowSet.has(name.toLowerCase()))
+    : [];
+
+  const addWorkflowSuggestion = (name: string) => {
+    const merged = parseWorkflowNames([workflowAllowlist, name].filter(Boolean).join(', '));
+    setWorkflowAllowlist(merged.join(', '));
+  };
 
   return (
     <div>
@@ -449,6 +517,33 @@ export function ServiceSettings() {
                     placeholder="CI, Release Build"
                     hint="Comma-separated workflow names. Leave blank to deploy after any successful workflow_run for this branch."
                   />
+                  {loadingGitHubWorkflows && (
+                    <p className="text-xs text-content-tertiary mt-3">Loading workflow names from GitHub…</p>
+                  )}
+                  {!loadingGitHubWorkflows && githubWorkflowLoadError && (
+                    <p className="text-xs text-amber-400 mt-3">{githubWorkflowLoadError}</p>
+                  )}
+                  {!loadingGitHubWorkflows && knownGitHubWorkflows.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      <p className="text-xs text-content-tertiary">Known workflows (click to add):</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {knownGitHubWorkflows.map((name) => (
+                          <button
+                            key={name}
+                            onClick={() => addWorkflowSuggestion(name)}
+                            className="px-2 py-1 rounded-md text-[11px] border border-border-default bg-surface-secondary/40 text-content-secondary hover:text-content-primary hover:border-border-hover transition-colors"
+                          >
+                            {name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {!loadingGitHubWorkflows && unknownWorkflowNames.length > 0 && (
+                    <p className="text-xs text-amber-400 mt-3">
+                      Warning: Unknown workflow names: {unknownWorkflowNames.join(', ')}
+                    </p>
+                  )}
                 </div>
               )}
               {gateLoadError && (

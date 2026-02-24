@@ -332,7 +332,7 @@ export function Docs() {
                 The active deploy automation mode is also visible on each service detail page so you can quickly confirm whether it is set to commit-based, workflow-gated, or manual-only deploys.
               </p>
               <p className="text-sm text-content-secondary mb-4">
-                You can also switch modes directly from the service detail header using the <strong>Automation</strong> quick-action menu, and edit the workflow allowlist from the same page with known workflow-name suggestions loaded from GitHub.
+                You can also switch modes directly from the service detail header using the <strong>Automation</strong> quick-action menu, and edit the workflow allowlist in both Service Detail and Service Settings with known workflow-name suggestions loaded from GitHub.
               </p>
               <p className="text-sm text-content-secondary mb-4">
                 When services are created from GitHub repos, RailPush auto-registers webhook events for both <code className="text-xs bg-surface-tertiary px-1 rounded">push</code> and <code className="text-xs bg-surface-tertiary px-1 rounded">workflow_run</code> so workflow-gated deploys can trigger without extra manual webhook setup.
