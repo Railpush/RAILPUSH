@@ -332,7 +332,7 @@ export function Docs() {
                 The active deploy automation mode is also visible on each service detail page so you can quickly confirm whether it is set to commit-based, workflow-gated, or manual-only deploys.
               </p>
               <p className="text-sm text-content-secondary mb-4">
-                You can also switch modes directly from the service detail header using the <strong>Automation</strong> quick-action menu, then use service settings when you need to edit the workflow allowlist itself.
+                You can also switch modes directly from the service detail header using the <strong>Automation</strong> quick-action menu, and edit the workflow allowlist from the same page.
               </p>
               <p className="text-sm text-content-secondary mb-4">
                 For API or MCP automation, configure the same service env vars directly:
@@ -344,10 +344,14 @@ RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY=true
 RAILPUSH_GITHUB_ACTIONS_WORKFLOWS=CI, Release Build`} />
               <CodeBlock language="text" filename="MCP tools" code={`get_github_actions_deploy_gate(service_id)
 set_deploy_automation_mode(service_id, mode, workflows?)
+set_github_actions_deploy_workflows(service_id, workflows)
 enable_github_actions_deploy_gate(service_id, workflows?)
 disable_github_actions_deploy_gate(service_id)`} />
               <p className="text-xs text-content-tertiary mb-1">
                 For <code className="text-[11px] bg-surface-tertiary px-1 rounded">set_deploy_automation_mode(..., mode="workflow_success")</code>, omitting <code className="text-[11px] bg-surface-tertiary px-1 rounded">workflows</code> preserves the existing allowlist, while passing an empty list clears it.
+              </p>
+              <p className="text-xs text-content-tertiary mb-1">
+                Use <code className="text-[11px] bg-surface-tertiary px-1 rounded">set_github_actions_deploy_workflows</code> to update allowlist names without changing deploy mode.
               </p>
             </section>
 
@@ -1632,7 +1636,7 @@ curl https://railpush.com/api/v1/services \\
                   <div>
                     <div className="text-sm font-semibold mb-1">AI-native infrastructure</div>
                     <div className="text-sm text-content-secondary">
-                      With 115 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
+                      With 116 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
                     </div>
                   </div>
                 </div>
@@ -1723,7 +1727,7 @@ npm run build`} />
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Available Tools</h3>
               <p className="text-content-secondary text-sm leading-relaxed mb-4">
-                The MCP server exposes 115 tools organized by category. Agents discover these automatically.
+                The MCP server exposes 116 tools organized by category. Agents discover these automatically.
               </p>
 
               <div className="overflow-x-auto mb-8">
@@ -1740,7 +1744,7 @@ npm run build`} />
                       ['Services', 'list, get, create, update, delete, restart, suspend, resume, search/filter'],
                       ['Bulk Operations', 'bulk deploy, bulk restart, bulk suspend, bulk resume'],
                       ['Deploys', 'trigger, list, get, rollback, queue position'],
-                      ['Env Vars', 'list, set (bulk replace), upsert (additive), get/set/enable/disable GitHub Actions deploy gate'],
+                      ['Env Vars', 'list, set (bulk replace), upsert (additive), get/set/enable/disable GitHub Actions deploy gate, set workflow allowlist'],
                       ['Custom Domains', 'list, add, delete'],
                       ['Databases', 'list, create, get, update, delete, backup, list backups, replicas, create replica, promote replica, enable HA'],
                       ['Key-Value (Redis)', 'list, create, get, update, delete'],

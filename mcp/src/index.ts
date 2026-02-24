@@ -531,6 +531,42 @@ server.tool(
   },
 );
 
+server.tool(
+  "set_github_actions_deploy_workflows",
+  "Set or clear the workflow allowlist used by GitHub Actions-gated deploys for a service. This updates allowlist env vars only and does not change deploy mode.",
+  {
+    service_id: z.string().describe("Service ID"),
+    workflows: z.array(z.string()).describe("Workflow names allowlist. Pass an empty array to clear the allowlist."),
+  },
+  async ({ service_id, workflows }) => {
+    try {
+      const seen = new Set<string>();
+      const workflowNames = workflows
+        .map((w) => w.trim())
+        .filter(Boolean)
+        .filter((w) => {
+          const key = w.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+      const envVars = workflowNames.length > 0
+        ? [{ key: "RAILPUSH_GITHUB_ACTIONS_WORKFLOWS", value: workflowNames.join(", "), is_secret: false }]
+        : [];
+
+      const deleteKeys = ["RAILPUSH_GITHUB_ACTIONS_WORKFLOW"];
+      if (workflowNames.length === 0) {
+        deleteKeys.push("RAILPUSH_GITHUB_ACTIONS_WORKFLOWS");
+      }
+
+      const env_update = await client.mergeEnvVars(service_id, envVars, deleteKeys);
+      return text({ service_id, workflows: workflowNames, env_update });
+    }
+    catch (e) { return err(e); }
+  },
+);
+
 // ════════════════════════════════════════════════════════════════════════
 //  ENVIRONMENT VARIABLES
 // ════════════════════════════════════════════════════════════════════════

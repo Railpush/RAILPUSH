@@ -4,9 +4,10 @@ import { ExternalLink, RotateCw, GitBranch, ChevronDown, ShieldCheck, Clock, Act
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
+import { Input } from '../components/ui/Input';
 import { Dropdown } from '../components/ui/Dropdown';
 import { ServiceIcon } from '../components/ui/ServiceIcon';
-import { deriveDeployAutomationState, type DeployAutomationMode } from '../lib/deployAutomation';
+import { deriveDeployAutomationState, parseWorkflowNames, type DeployAutomationMode } from '../lib/deployAutomation';
 import { serviceTypeLabel, timeAgo, formatDuration } from '../lib/utils';
 import { buildDefaultServiceUrl } from '../lib/serviceUrl';
 import { services as servicesApi, deploys as deploysApi, envVars as envVarsApi, connectBuildStream } from '../lib/api';
@@ -39,6 +40,9 @@ export function ServiceDetail() {
   const [buildLines, setBuildLines] = useState<string[]>([]);
   const [deployAutomationMode, setDeployAutomationMode] = useState<DeployAutomationMode>('push');
   const [deployAutomationWorkflows, setDeployAutomationWorkflows] = useState<string[]>([]);
+  const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
+  const [workflowDraft, setWorkflowDraft] = useState('');
+  const [workflowSaving, setWorkflowSaving] = useState(false);
   const buildWsRef = useRef<WebSocket | null>(null);
   const buildLogEndRef = useRef<HTMLDivElement>(null);
 
@@ -179,6 +183,40 @@ export function ServiceDetail() {
     setActionInProgress(null);
   };
 
+  const openWorkflowAllowlistModal = () => {
+    if (deployAutomationMode !== 'workflow_success') {
+      toast.info('Switch to "After GitHub Actions Success" to configure workflow allowlist');
+      return;
+    }
+    setWorkflowDraft(deployAutomationWorkflows.join(', '));
+    setWorkflowModalOpen(true);
+  };
+
+  const saveWorkflowAllowlist = async () => {
+    if (!serviceId) return;
+    const workflowNames = parseWorkflowNames(workflowDraft);
+    setWorkflowSaving(true);
+    try {
+      const envVars = workflowNames.length > 0
+        ? [{ key: 'RAILPUSH_GITHUB_ACTIONS_WORKFLOWS', value: workflowNames.join(', '), is_secret: false }]
+        : [];
+      const deleteKeys = ['RAILPUSH_GITHUB_ACTIONS_WORKFLOW'];
+      if (workflowNames.length === 0) {
+        deleteKeys.push('RAILPUSH_GITHUB_ACTIONS_WORKFLOWS');
+      }
+
+      await envVarsApi.merge(serviceId, { env_vars: envVars, delete: deleteKeys });
+      setDeployAutomationWorkflows(workflowNames);
+      setWorkflowDraft(workflowNames.join(', '));
+      setWorkflowModalOpen(false);
+      toast.success(workflowNames.length > 0 ? 'Workflow allowlist updated' : 'Workflow allowlist cleared');
+      setTimeout(refresh, 500);
+    } catch {
+      toast.error('Failed to update workflow allowlist');
+    }
+    setWorkflowSaving(false);
+  };
+
   const deployActions = [
     { label: 'Deploy latest commit', onClick: () => runAction('Deploying…', () => deploysApi.trigger(service.id)) },
     { label: 'Clear build cache & deploy', onClick: () => runAction('Deploying…', () => deploysApi.trigger(service.id, { clearCache: true })) },
@@ -201,6 +239,11 @@ export function ServiceDetail() {
       label: 'Off (Manual)',
       icon: deployAutomationMode === 'off' ? <Check className="w-4 h-4" /> : undefined,
       onClick: () => { setDeployAutomationModeQuick('off'); },
+    },
+    { divider: true, label: '', onClick: () => { } },
+    {
+      label: 'Edit Workflow Allowlist',
+      onClick: () => { openWorkflowAllowlistModal(); },
     },
   ];
 
@@ -410,9 +453,19 @@ export function ServiceDetail() {
                 <span className="text-content-secondary">Deploy Automation</span>
                 <span className="text-content-primary text-xs">{deployAutomationLabel}</span>
               </div>
-              {deployAutomationMode === 'workflow_success' && deployAutomationWorkflows.length > 0 && (
-                <div className="text-[11px] text-content-tertiary leading-relaxed">
-                  Workflows: {deployAutomationWorkflows.join(', ')}
+              {deployAutomationMode === 'workflow_success' && (
+                <div className="rounded-md border border-border-default/60 bg-surface-tertiary/20 px-3 py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[11px] text-content-tertiary leading-relaxed">
+                      Workflows: {deployAutomationWorkflows.length > 0 ? deployAutomationWorkflows.join(', ') : 'Any successful workflow'}
+                    </div>
+                    <button
+                      onClick={openWorkflowAllowlistModal}
+                      className="text-[11px] font-medium text-brand hover:text-brand-hover transition-colors whitespace-nowrap"
+                    >
+                      Edit
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -440,6 +493,36 @@ export function ServiceDetail() {
           )}
         </div>
       </div>
+
+      {workflowModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => { if (!workflowSaving) setWorkflowModalOpen(false); }}>
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+          <div className="relative w-full max-w-xl" onClick={(e) => e.stopPropagation()}>
+            <Card className="glass-panel p-5 border-border-hover">
+              <h3 className="text-base font-semibold text-content-primary">Edit Workflow Allowlist</h3>
+              <p className="text-sm text-content-secondary mt-1 mb-4">
+                Set comma-separated GitHub workflow names. Leave blank to allow any successful workflow run.
+              </p>
+              <Input
+                label="Workflow Names"
+                value={workflowDraft}
+                onChange={(e) => setWorkflowDraft(e.target.value)}
+                placeholder="CI, Release Build"
+                hint="These names must match the GitHub Actions workflow names exactly."
+                autoFocus
+              />
+              <div className="mt-5 flex justify-end gap-2">
+                <Button variant="secondary" onClick={() => setWorkflowModalOpen(false)} disabled={workflowSaving}>
+                  Cancel
+                </Button>
+                <Button onClick={saveWorkflowAllowlist} loading={workflowSaving}>
+                  Save Allowlist
+                </Button>
+              </div>
+            </Card>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
