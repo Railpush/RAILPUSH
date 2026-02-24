@@ -16,6 +16,7 @@ import type { Blueprint, PreviewEnvironment, Project, ProjectFolder, Service, Se
 type HealthTone = 'healthy' | 'partial' | 'down' | 'empty';
 type CardKind = 'project' | 'blueprint';
 type ServiceTab = 'active' | 'suspended' | 'all';
+type ProjectHealthFilter = 'all' | 'healthy' | 'needs_attention' | 'empty';
 
 interface ProjectCard {
   key: string;
@@ -190,6 +191,7 @@ export function Projects() {
   const [savingMove, setSavingMove] = useState(false);
 
   const [serviceTab, setServiceTab] = useState<ServiceTab>('active');
+  const [projectHealthFilter, setProjectHealthFilter] = useState<ProjectHealthFilter>('all');
   const [serviceSearch, setServiceSearch] = useState('');
   const [deletingService, setDeletingService] = useState<Service | null>(null);
   const [deletingServicePending, setDeletingServicePending] = useState(false);
@@ -481,11 +483,29 @@ export function Projects() {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [folders, currentFolderId]);
 
+  const cardsAtCurrentLevel = useMemo(
+    () => cards.filter((card) => (card.folderId || null) === currentFolderId),
+    [cards, currentFolderId],
+  );
+
+  const projectHealthCounts = useMemo(() => {
+    const counts: Record<HealthTone, number> = { healthy: 0, partial: 0, down: 0, empty: 0 };
+    for (const card of cardsAtCurrentLevel) {
+      const health = summarizeHealth(card.services);
+      counts[health.tone] += 1;
+    }
+    return counts;
+  }, [cardsAtCurrentLevel]);
+
   const visibleCards = useMemo(() => {
-    return cards.filter(card => {
-      return (card.folderId || null) === currentFolderId;
+    if (projectHealthFilter === 'all') return cardsAtCurrentLevel;
+    return cardsAtCurrentLevel.filter((card) => {
+      const health = summarizeHealth(card.services);
+      if (projectHealthFilter === 'healthy') return health.tone === 'healthy';
+      if (projectHealthFilter === 'needs_attention') return health.tone === 'partial' || health.tone === 'down';
+      return health.tone === 'empty';
     });
-  }, [cards, currentFolderId]);
+  }, [cardsAtCurrentLevel, projectHealthFilter]);
 
   const folderOptions = useMemo(() => {
     // Build hierarchical labels (e.g. "Parent / Child / Grandchild") with cycle protection.
@@ -580,6 +600,7 @@ export function Projects() {
 
   const renderProjectCard = (card: ProjectCard) => {
     const health = summarizeHealth(card.services);
+    const liveCount = card.services.filter((svc) => effectiveStatus(svc) === 'live').length;
     const clickable = card.kind === 'project' || card.kind === 'blueprint';
     const canManageProject = card.kind === 'project' && !!card.projectId && !!card.editable;
     const canManageBlueprint = card.kind === 'blueprint' && !!card.blueprintId;
@@ -643,6 +664,10 @@ export function Projects() {
           </div>
 
           <div className="text-lg font-semibold text-content-primary leading-tight truncate mt-2">{card.name}</div>
+          <div className="text-xs text-content-tertiary mt-1.5">
+            {card.services.length} {card.services.length === 1 ? 'service' : 'services'}
+            {card.services.length > 0 && <span> &middot; {liveCount} live</span>}
+          </div>
 
           <span
             className="inline-flex items-center gap-2 mt-6"
@@ -658,7 +683,8 @@ export function Projects() {
                 health.tone === 'empty' && 'bg-gray-400',
               )}
             />
-                     </span>
+            <span className="text-xs text-content-secondary truncate">{health.label}</span>
+          </span>
         </div>
       </Card>
     );
@@ -715,6 +741,35 @@ export function Projects() {
     return counts;
   }, [previewEnvironments]);
 
+  const workspaceOverview = useMemo(() => {
+    const serviceCounts = { live: 0, deploying: 0, failed: 0, suspended: 0, other: 0 };
+    for (const svc of allServices) {
+      const status = effectiveStatus(svc);
+      const rawStatus = String(svc.status || '');
+      if (status === 'live') serviceCounts.live += 1;
+      else if (status === 'suspended' || status === 'deactivated') serviceCounts.suspended += 1;
+      else if (status === 'failed' || rawStatus === 'deploy_failed') serviceCounts.failed += 1;
+      else if (status === 'deploying' || status === 'building' || status === 'created' || rawStatus === 'queued') serviceCounts.deploying += 1;
+      else serviceCounts.other += 1;
+    }
+
+    const cardHealth = { healthy: 0, partial: 0, down: 0, empty: 0 };
+    for (const card of cards) {
+      const health = summarizeHealth(card.services);
+      cardHealth[health.tone] += 1;
+    }
+
+    const projectCards = cards.filter((card) => card.kind === 'project').length;
+    const blueprintCards = cards.filter((card) => card.kind === 'blueprint').length;
+
+    return {
+      serviceCounts,
+      cardHealth,
+      projectCards,
+      blueprintCards,
+    };
+  }, [allServices, cards]);
+
   const removePreviewEnvironment = async (preview: PreviewEnvironment) => {
     try {
       await previewEnvironmentsApi.remove(preview.id);
@@ -752,6 +807,34 @@ export function Projects() {
         </Card>
       ) : (
         <>
+          <div className="grid grid-cols-2 xl:grid-cols-5 gap-2 mb-10">
+            <Card className="px-3 py-2">
+              <div className="text-[11px] text-content-tertiary">Projects</div>
+              <div className="text-sm font-semibold text-content-primary">{workspaceOverview.projectCards}</div>
+              <div className="text-[11px] text-content-tertiary mt-0.5">{workspaceOverview.blueprintCards} blueprints</div>
+            </Card>
+            <Card className="px-3 py-2">
+              <div className="text-[11px] text-content-tertiary">Services</div>
+              <div className="text-sm font-semibold text-content-primary">{allServices.length}</div>
+              <div className="text-[11px] text-content-tertiary mt-0.5">{workspaceOverview.serviceCounts.live} live</div>
+            </Card>
+            <Card className="px-3 py-2">
+              <div className="text-[11px] text-content-tertiary">Deploying</div>
+              <div className="text-sm font-semibold text-blue-400">{workspaceOverview.serviceCounts.deploying}</div>
+              <div className="text-[11px] text-content-tertiary mt-0.5">{workspaceOverview.serviceCounts.failed} failed</div>
+            </Card>
+            <Card className="px-3 py-2">
+              <div className="text-[11px] text-content-tertiary">Suspended</div>
+              <div className="text-sm font-semibold text-content-secondary">{workspaceOverview.serviceCounts.suspended}</div>
+              <div className="text-[11px] text-content-tertiary mt-0.5">{ungroupedServices.length} ungrouped</div>
+            </Card>
+            <Card className="px-3 py-2 col-span-2 xl:col-span-1">
+              <div className="text-[11px] text-content-tertiary">Project Health</div>
+              <div className="text-sm font-semibold text-content-primary">{workspaceOverview.cardHealth.healthy} healthy</div>
+              <div className="text-[11px] text-content-tertiary mt-0.5">{workspaceOverview.cardHealth.partial + workspaceOverview.cardHealth.down} need attention</div>
+            </Card>
+          </div>
+
           <div className="mb-10">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-2xl font-semibold text-content-primary">Preview Environments</h2>
@@ -834,6 +917,29 @@ export function Projects() {
                 <Plus className="w-3.5 h-3.5" />
                 New Folder
               </Button>
+            </div>
+
+            <div className="inline-flex items-center border border-border-default mb-5">
+              {[
+                { id: 'all' as ProjectHealthFilter, label: `All (${cardsAtCurrentLevel.length})` },
+                { id: 'healthy' as ProjectHealthFilter, label: `Healthy (${projectHealthCounts.healthy})` },
+                { id: 'needs_attention' as ProjectHealthFilter, label: `Needs Attention (${projectHealthCounts.partial + projectHealthCounts.down})` },
+                { id: 'empty' as ProjectHealthFilter, label: `Empty (${projectHealthCounts.empty})` },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setProjectHealthFilter(tab.id)}
+                  className={cn(
+                    'px-3 py-1.5 text-sm border-r border-border-default last:border-r-0 transition-colors',
+                    projectHealthFilter === tab.id
+                      ? 'bg-brand text-white'
+                      : 'text-content-secondary hover:text-content-primary hover:bg-surface-tertiary',
+                  )}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
 
             <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4 mb-8">
