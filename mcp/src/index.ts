@@ -1447,6 +1447,46 @@ server.tool(
   },
 );
 
+server.tool(
+  "list_service_github_workflows",
+  "List GitHub Actions workflows for a service's configured repository.",
+  {
+    service_id: z.string().describe("Service ID"),
+  },
+  async ({ service_id }) => {
+    try {
+      const service = await client.getService(service_id) as Record<string, unknown>;
+      const repoURL = typeof service.repo_url === "string" ? service.repo_url.trim() : "";
+
+      const parseOwnerRepo = (url: string): { owner: string; repo: string } | null => {
+        if (!url) return null;
+        if (url.startsWith("git@github.com:")) {
+          const cleaned = url.replace("git@github.com:", "").replace(/\.git$/i, "");
+          const parts = cleaned.split("/").filter(Boolean);
+          if (parts.length >= 2) return { owner: parts[0], repo: parts[1] };
+          return null;
+        }
+        const marker = "github.com/";
+        const idx = url.indexOf(marker);
+        if (idx === -1) return null;
+        const cleaned = url.slice(idx + marker.length).replace(/\.git$/i, "");
+        const parts = cleaned.split("/").filter(Boolean);
+        if (parts.length >= 2) return { owner: parts[0], repo: parts[1] };
+        return null;
+      };
+
+      const parsed = parseOwnerRepo(repoURL);
+      if (!parsed) {
+        return text({ service_id, repo_url: repoURL, workflows: [], message: "Service repository is not a GitHub URL" });
+      }
+
+      const workflows = await client.listGitHubWorkflows(parsed.owner, parsed.repo);
+      return text({ service_id, repo_url: repoURL, owner: parsed.owner, repo: parsed.repo, workflows });
+    }
+    catch (e) { return err(e); }
+  },
+);
+
 // ════════════════════════════════════════════════════════════════════════
 //  SUPPORT TICKETS
 // ════════════════════════════════════════════════════════════════════════
