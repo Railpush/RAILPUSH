@@ -282,6 +282,79 @@ func (w *Worker) notifyDeployWebhook(svc *models.Service, deploy *models.Deploy,
 	}()
 }
 
+func (w *Worker) workspaceGitHubToken(workspaceID string) string {
+	if w == nil || w.Config == nil || strings.TrimSpace(workspaceID) == "" {
+		return ""
+	}
+	ws, err := models.GetWorkspace(workspaceID)
+	if err != nil || ws == nil {
+		return ""
+	}
+	encToken, err := models.GetUserGitHubToken(ws.OwnerID)
+	if err != nil || strings.TrimSpace(encToken) == "" {
+		return ""
+	}
+	ghToken, err := utils.Decrypt(encToken, w.Config.Crypto.EncryptionKey)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(ghToken)
+}
+
+func (w *Worker) postGitHubCommitStatus(svc *models.Service, deploy *models.Deploy, state, description string) {
+	if w == nil || w.Config == nil || svc == nil || deploy == nil {
+		return
+	}
+	sha := strings.TrimSpace(deploy.CommitSHA)
+	if sha == "" {
+		return
+	}
+	ownerRepo := extractGitHubOwnerRepo(svc.RepoURL)
+	if ownerRepo == "" {
+		return
+	}
+	ghToken := w.workspaceGitHubToken(svc.WorkspaceID)
+	if ghToken == "" {
+		return
+	}
+	state = strings.ToLower(strings.TrimSpace(state))
+	switch state {
+	case "pending", "success", "failure", "error":
+	default:
+		return
+	}
+	targetURL := utils.ServicePublicURL(svc.Type, svc.Name, svc.Subdomain, w.Config.Deploy.Domain, 0)
+	payload := map[string]string{
+		"state":       state,
+		"context":     "railpush/deploy",
+		"description": strings.TrimSpace(description),
+		"target_url":  targetURL,
+	}
+	body, _ := json.Marshal(payload)
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		url := fmt.Sprintf("https://api.github.com/repos/%s/statuses/%s", ownerRepo, sha)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+ghToken)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Printf("github status: request failed service=%s deploy=%s state=%s err=%v", svc.ID, deploy.ID, state, err)
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			log.Printf("github status: non-2xx service=%s deploy=%s state=%s status=%d", svc.ID, deploy.ID, state, resp.StatusCode)
+		}
+	}()
+}
+
 func NewWorker(cfg *config.Config) *Worker {
 	hostname, _ := os.Hostname()
 	if strings.TrimSpace(hostname) == "" {
@@ -666,6 +739,7 @@ func (w *Worker) processJob(job DeployJob) {
 	models.UpdateDeployStatus(deploy.ID, "deploying")
 	models.UpdateServiceStatus(svc.ID, "deploying", svc.ContainerID, svc.HostPort)
 	w.notifyDeployWebhook(svc, deploy, "started", true)
+	w.postGitHubCommitStatus(svc, deploy, "pending", "RailPush deploy started")
 	appendLog("==> Deploying...")
 
 	// 7. Stop old container
@@ -844,6 +918,7 @@ func (w *Worker) processJobKubernetes(job DeployJob, appendLog func(string)) {
 	// 2. Update deploy with image tag (and started_at)
 	_ = models.UpdateDeployStarted(deploy.ID, imageTag)
 	w.notifyDeployWebhook(svc, deploy, "started", true)
+	w.postGitHubCommitStatus(svc, deploy, "pending", "RailPush deploy started")
 
 	// 3. Resolve env vars (decrypt secrets) and always include PORT.
 	//    Merge linked env group vars first (lower priority), then service vars (higher priority).
@@ -1375,14 +1450,21 @@ func (w *Worker) notifyDeployResult(svc *models.Service, deploy *models.Deploy, 
 		deploy = fresh
 	}
 	phase := "failed"
+	ghState := "failure"
+	ghDesc := "RailPush deploy failed"
 	if ok {
 		if strings.EqualFold(strings.TrimSpace(deploy.Trigger), "rollback") {
 			phase = "rollback"
+			ghState = "success"
+			ghDesc = "RailPush rollback deployed"
 		} else {
 			phase = "success"
+			ghState = "success"
+			ghDesc = "RailPush deploy live"
 		}
 	}
 	w.notifyDeployWebhook(svc, deploy, phase, ok)
+	w.postGitHubCommitStatus(svc, deploy, ghState, ghDesc)
 
 	if !w.Config.Email.Enabled() {
 		return
@@ -1432,16 +1514,8 @@ func (w *Worker) postGitHubPRComment(svc *models.Service, deploy *models.Deploy)
 	}
 
 	// Get the workspace owner's GitHub token.
-	ws, err := models.GetWorkspace(svc.WorkspaceID)
-	if err != nil || ws == nil {
-		return
-	}
-	encToken, err := models.GetUserGitHubToken(ws.OwnerID)
-	if err != nil || encToken == "" {
-		return
-	}
-	ghToken, err := utils.Decrypt(encToken, w.Config.Crypto.EncryptionKey)
-	if err != nil || ghToken == "" {
+	ghToken := w.workspaceGitHubToken(svc.WorkspaceID)
+	if ghToken == "" {
 		return
 	}
 
