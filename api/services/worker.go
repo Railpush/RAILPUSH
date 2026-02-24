@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,75 @@ type Worker struct {
 	Jobs       chan DeployJob
 	OnBuildLog func(deployID string, line string) // callback for WebSocket broadcasting
 	wg         sync.WaitGroup
+}
+
+var internalDiscoveryEnvKeyRe = regexp.MustCompile(`[^A-Za-z0-9_]`)
+
+func internalDiscoveryKey(label string) string {
+	label = strings.TrimSpace(label)
+	label = strings.ToUpper(label)
+	label = strings.ReplaceAll(label, "-", "_")
+	label = internalDiscoveryEnvKeyRe.ReplaceAllString(label, "_")
+	label = strings.Trim(label, "_")
+	if label == "" {
+		return "SERVICE"
+	}
+	if label[0] >= '0' && label[0] <= '9' {
+		return "SVC_" + label
+	}
+	return label
+}
+
+// injectKubeInternalDiscoveryEnv publishes stable, cluster-local service endpoints
+// into runtime env vars so services can call each other without public ingress hops.
+// This is intentionally additive and non-breaking.
+func (w *Worker) injectKubeInternalDiscoveryEnv(svc *models.Service, env map[string]string) {
+	if w == nil || w.Config == nil || !w.Config.Kubernetes.Enabled || svc == nil || env == nil {
+		return
+	}
+	if strings.TrimSpace(svc.WorkspaceID) == "" || strings.TrimSpace(svc.ID) == "" {
+		return
+	}
+
+	selfPort := svc.Port
+	if selfPort <= 0 {
+		selfPort = 10000
+	}
+	selfHost := kubeServiceName(svc.ID)
+	env["RAILPUSH_INTERNAL_HOST"] = selfHost
+	env["RAILPUSH_INTERNAL_PORT"] = fmt.Sprintf("%d", selfPort)
+	env["RAILPUSH_INTERNAL_URL"] = fmt.Sprintf("http://%s:%d", selfHost, selfPort)
+
+	services, err := models.ListServices(svc.WorkspaceID)
+	if err != nil {
+		log.Printf("worker: internal discovery list services failed workspace=%s: %v", svc.WorkspaceID, err)
+		return
+	}
+
+	for _, peer := range services {
+		if strings.TrimSpace(peer.ID) == "" {
+			continue
+		}
+		peerPort := peer.Port
+		if peerPort <= 0 {
+			peerPort = 10000
+		}
+		peerHost := kubeServiceName(peer.ID)
+		label := internalDiscoveryKey(utils.ServiceHostLabel(peer.Name, peer.Subdomain))
+
+		hostKey := "RAILPUSH_SERVICE_" + label + "_HOST"
+		portKey := "RAILPUSH_SERVICE_" + label + "_PORT"
+		urlKey := "RAILPUSH_SERVICE_" + label + "_URL"
+		if _, exists := env[hostKey]; exists {
+			suffix := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(peer.ID), "-", "_"))
+			hostKey = hostKey + "_" + suffix
+			portKey = portKey + "_" + suffix
+			urlKey = urlKey + "_" + suffix
+		}
+		env[hostKey] = peerHost
+		env[portKey] = fmt.Sprintf("%d", peerPort)
+		env[urlKey] = fmt.Sprintf("http://%s:%d", peerHost, peerPort)
+	}
 }
 
 func NewWorker(cfg *config.Config) *Worker {
@@ -662,6 +732,7 @@ func (w *Worker) processJobKubernetes(job DeployJob, appendLog func(string)) {
 		svc.Port = 10000
 	}
 	env["PORT"] = fmt.Sprintf("%d", svc.Port)
+	w.injectKubeInternalDiscoveryEnv(svc, env)
 
 	// Warn about development-mode start commands that waste resources and crash in production.
 	if cmd := strings.ToLower(strings.TrimSpace(svc.StartCommand)); cmd != "" {
