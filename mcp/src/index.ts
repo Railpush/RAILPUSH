@@ -353,6 +353,47 @@ server.tool(
   },
 );
 
+server.tool(
+  "enable_github_actions_deploy_gate",
+  "Enable GitHub Actions-gated auto-deploy for a service. Push webhooks are ignored for this service until a successful workflow_run event is received.",
+  {
+    service_id: z.string().describe("Service ID"),
+    workflows: z.array(z.string()).optional().describe("Optional workflow names allowlist (e.g. ['CI', 'Release'])"),
+  },
+  async ({ service_id, workflows }) => {
+    try {
+      const envVars = [{ key: "RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY", value: "true", is_secret: false }];
+      const workflowNames = (workflows ?? []).map((w) => w.trim()).filter(Boolean);
+      if (workflowNames.length > 0) {
+        envVars.push({ key: "RAILPUSH_GITHUB_ACTIONS_WORKFLOWS", value: workflowNames.join(", "), is_secret: false });
+      }
+      const deleteKeys = workflowNames.length === 0 ? ["RAILPUSH_GITHUB_ACTIONS_WORKFLOW", "RAILPUSH_GITHUB_ACTIONS_WORKFLOWS"] : ["RAILPUSH_GITHUB_ACTIONS_WORKFLOW"];
+      return text(await client.mergeEnvVars(service_id, envVars, deleteKeys));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "disable_github_actions_deploy_gate",
+  "Disable GitHub Actions-gated auto-deploy for a service and return to push-webhook based auto-deploy behavior.",
+  {
+    service_id: z.string().describe("Service ID"),
+  },
+  async ({ service_id }) => {
+    try {
+      return text(await client.mergeEnvVars(service_id, [], [
+        "RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY",
+        "RAILPUSH_GITHUB_ACTIONS_ENABLED",
+        "RAILPUSH_DEPLOY_ON_GITHUB_ACTIONS",
+        "RAILPUSH_GITHUB_ACTIONS_WORKFLOW",
+        "RAILPUSH_GITHUB_ACTIONS_WORKFLOWS",
+      ]));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
 // ════════════════════════════════════════════════════════════════════════
 //  ENVIRONMENT VARIABLES
 // ════════════════════════════════════════════════════════════════════════
