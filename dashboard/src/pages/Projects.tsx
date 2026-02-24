@@ -35,6 +35,19 @@ interface ProjectData {
   ungroupedServices: Service[];
 }
 
+interface PreviewEditForm {
+  prTitle: string;
+  prBranch: string;
+  baseBranch: string;
+  commitSHA: string;
+  buildCommand: string;
+  startCommand: string;
+  preDeployCommand: string;
+  healthCheckPath: string;
+  port: string;
+  triggerDeploy: boolean;
+}
+
 const ROOT_FOLDER_VALUE = '__no_folder__';
 
 function summarizeHealth(services: Service[]): { label: string; tone: HealthTone } {
@@ -195,6 +208,10 @@ export function Projects() {
   const [serviceSearch, setServiceSearch] = useState('');
   const [deletingService, setDeletingService] = useState<Service | null>(null);
   const [deletingServicePending, setDeletingServicePending] = useState(false);
+  const [editingPreview, setEditingPreview] = useState<PreviewEnvironment | null>(null);
+  const [previewEditForm, setPreviewEditForm] = useState<PreviewEditForm | null>(null);
+  const [previewEditInitial, setPreviewEditInitial] = useState<PreviewEditForm | null>(null);
+  const [savingPreviewEdit, setSavingPreviewEdit] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -780,6 +797,91 @@ export function Projects() {
     }
   };
 
+  const closePreviewEditor = () => {
+    if (savingPreviewEdit) return;
+    setEditingPreview(null);
+    setPreviewEditForm(null);
+    setPreviewEditInitial(null);
+  };
+
+  const openPreviewEditor = (preview: PreviewEnvironment) => {
+    const svc = preview.service_id ? serviceByID.get(preview.service_id) : undefined;
+    const form: PreviewEditForm = {
+      prTitle: preview.pr_title || '',
+      prBranch: preview.pr_branch || svc?.branch || '',
+      baseBranch: preview.base_branch || '',
+      commitSHA: preview.commit_sha || '',
+      buildCommand: svc?.build_command || '',
+      startCommand: svc?.start_command || '',
+      preDeployCommand: svc?.pre_deploy_command || '',
+      healthCheckPath: svc?.health_check_path || '',
+      port: svc?.port ? String(svc.port) : '',
+      triggerDeploy: false,
+    };
+    setEditingPreview(preview);
+    setPreviewEditForm(form);
+    setPreviewEditInitial(form);
+  };
+
+  const updatePreviewForm = <K extends keyof PreviewEditForm>(key: K, value: PreviewEditForm[K]) => {
+    setPreviewEditForm((prev) => (prev ? { ...prev, [key]: value } : prev));
+  };
+
+  const savePreviewEdits = async () => {
+    if (!editingPreview || !previewEditForm || !previewEditInitial) return;
+
+    const payload: Record<string, unknown> = {};
+    if (previewEditForm.prTitle !== previewEditInitial.prTitle) payload.pr_title = previewEditForm.prTitle;
+    if (previewEditForm.prBranch !== previewEditInitial.prBranch) payload.pr_branch = previewEditForm.prBranch;
+    if (previewEditForm.baseBranch !== previewEditInitial.baseBranch) payload.base_branch = previewEditForm.baseBranch;
+    if (previewEditForm.commitSHA !== previewEditInitial.commitSHA) payload.commit_sha = previewEditForm.commitSHA;
+    if (previewEditForm.buildCommand !== previewEditInitial.buildCommand) payload.build_command = previewEditForm.buildCommand;
+    if (previewEditForm.startCommand !== previewEditInitial.startCommand) payload.start_command = previewEditForm.startCommand;
+    if (previewEditForm.preDeployCommand !== previewEditInitial.preDeployCommand) payload.pre_deploy_command = previewEditForm.preDeployCommand;
+    if (previewEditForm.healthCheckPath !== previewEditInitial.healthCheckPath) payload.health_check_path = previewEditForm.healthCheckPath;
+
+    if (previewEditForm.port !== previewEditInitial.port) {
+      const parsed = Number(previewEditForm.port);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        toast.error('Port must be a positive number');
+        return;
+      }
+      payload.port = parsed;
+    }
+
+    if (previewEditForm.triggerDeploy) {
+      payload.trigger_deploy = true;
+    }
+
+    if (Object.keys(payload).length === 0) {
+      closePreviewEditor();
+      return;
+    }
+
+    setSavingPreviewEdit(true);
+    try {
+      await previewEnvironmentsApi.update(editingPreview.id, payload as {
+        pr_title?: string;
+        pr_branch?: string;
+        base_branch?: string;
+        commit_sha?: string;
+        build_command?: string;
+        start_command?: string;
+        pre_deploy_command?: string;
+        health_check_path?: string;
+        port?: number;
+        trigger_deploy?: boolean;
+      });
+      toast.success(`Updated preview PR #${editingPreview.pr_number}`);
+      closePreviewEditor();
+      await loadData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update preview environment');
+    } finally {
+      setSavingPreviewEdit(false);
+    }
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -849,7 +951,7 @@ export function Projects() {
             </div>
 
             <div className="border border-border-default rounded-none overflow-x-auto overflow-y-visible">
-              <div className="grid grid-cols-[90px_1.3fr_1.1fr_0.9fr_0.8fr_110px] px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-content-tertiary border-b border-border-default">
+              <div className="grid grid-cols-[90px_1.2fr_1fr_0.9fr_0.8fr_190px] px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-content-tertiary border-b border-border-default">
                 <div>PR</div><div>Branch</div><div>Service</div><div>Status</div><div>Updated</div><div />
               </div>
               {openPreviewEnvironments.length === 0 ? (
@@ -858,13 +960,14 @@ export function Projects() {
                 openPreviewEnvironments.slice(0, 8).map((pe) => {
                   const service = pe.service_id ? serviceByID.get(pe.service_id) : undefined;
                   return (
-                    <div key={pe.id} className="grid grid-cols-[90px_1.3fr_1.1fr_0.9fr_0.8fr_110px] items-center px-4 py-3 border-b border-border-subtle last:border-b-0 hover:bg-surface-tertiary/40">
+                    <div key={pe.id} className="grid grid-cols-[90px_1.2fr_1fr_0.9fr_0.8fr_190px] items-center px-4 py-3 border-b border-border-subtle last:border-b-0 hover:bg-surface-tertiary/40">
                       <div className="text-sm text-content-primary font-medium">#{pe.pr_number}</div>
                       <div className="text-sm text-content-secondary truncate" title={pe.pr_branch}>{pe.pr_branch || '-'}</div>
                       <div className="text-sm text-content-secondary truncate" title={service?.name || pe.repository}>{service?.name || pe.repository}</div>
                       <div><StatusBadge status={pe.status === 'closed' ? 'deactivated' : pe.status === 'deploying' ? 'deploying' : pe.status === 'failed' ? 'failed' : 'live'} size="sm" /></div>
                       <div className="text-sm text-content-secondary">{timeAgo(pe.updated_at)}</div>
                       <div className="justify-self-end inline-flex items-center gap-2">
+                        <Button variant="secondary" size="sm" onClick={() => openPreviewEditor(pe)}>Edit</Button>
                         {service?.id && (
                           <Button variant="secondary" size="sm" onClick={() => navigate(`/services/${service.id}`)}>Open</Button>
                         )}
@@ -1134,6 +1237,42 @@ export function Projects() {
             ))}
           </select>
         </div>
+      </Modal>
+
+      {/* Edit Preview Modal */}
+      <Modal
+        open={!!editingPreview && !!previewEditForm}
+        onClose={closePreviewEditor}
+        title={editingPreview ? `Edit Preview PR #${editingPreview.pr_number}` : 'Edit Preview'}
+        footer={(
+          <>
+            <Button variant="secondary" onClick={closePreviewEditor} disabled={savingPreviewEdit}>Cancel</Button>
+            <Button onClick={savePreviewEdits} loading={savingPreviewEdit}>Save</Button>
+          </>
+        )}
+      >
+        {previewEditForm && (
+          <div className="space-y-3">
+            <Input label="PR title" value={previewEditForm.prTitle} onChange={(e) => updatePreviewForm('prTitle', e.target.value)} placeholder="Optional PR title" />
+            <Input label="PR branch" value={previewEditForm.prBranch} onChange={(e) => updatePreviewForm('prBranch', e.target.value)} placeholder="feature/my-branch" />
+            <Input label="Base branch" value={previewEditForm.baseBranch} onChange={(e) => updatePreviewForm('baseBranch', e.target.value)} placeholder="main" />
+            <Input label="Commit SHA" value={previewEditForm.commitSHA} onChange={(e) => updatePreviewForm('commitSHA', e.target.value)} placeholder="Optional commit SHA" />
+            <Input label="Build command" value={previewEditForm.buildCommand} onChange={(e) => updatePreviewForm('buildCommand', e.target.value)} placeholder="npm ci && npm run build" />
+            <Input label="Start command" value={previewEditForm.startCommand} onChange={(e) => updatePreviewForm('startCommand', e.target.value)} placeholder="npm start" />
+            <Input label="Pre-deploy command" value={previewEditForm.preDeployCommand} onChange={(e) => updatePreviewForm('preDeployCommand', e.target.value)} placeholder="Optional migration command" />
+            <Input label="Health check path" value={previewEditForm.healthCheckPath} onChange={(e) => updatePreviewForm('healthCheckPath', e.target.value)} placeholder="/healthz" />
+            <Input label="Port" type="number" min={1} value={previewEditForm.port} onChange={(e) => updatePreviewForm('port', e.target.value)} placeholder="10000" />
+            <label className="flex items-center gap-2 text-sm text-content-primary pt-1">
+              <input
+                type="checkbox"
+                checked={previewEditForm.triggerDeploy}
+                onChange={(e) => updatePreviewForm('triggerDeploy', e.target.checked)}
+                className="rounded border-border-default"
+              />
+              Trigger redeploy after saving
+            </label>
+          </div>
+        )}
       </Modal>
 
       {/* Move to Folder Modal */}
