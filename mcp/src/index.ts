@@ -403,6 +403,59 @@ server.tool(
   },
 );
 
+server.tool(
+  "get_github_actions_deploy_gate",
+  "Get GitHub Actions deploy-gate status for a service, including effective deploy mode and workflow allowlist.",
+  {
+    service_id: z.string().describe("Service ID"),
+  },
+  async ({ service_id }) => {
+    try {
+      const service = await client.getService(service_id) as Record<string, unknown>;
+      const envVars = await client.listEnvVars(service_id) as Array<Record<string, unknown>>;
+
+      const parseBool = (raw: string): boolean => {
+        const normalized = raw.trim().toLowerCase();
+        return ["1", "true", "yes", "on", "y"].includes(normalized);
+      };
+
+      const byKey = new Map<string, string>();
+      for (const row of envVars) {
+        const key = typeof row.key === "string" ? row.key.trim().toUpperCase() : "";
+        if (!key) continue;
+        const value = typeof row.value === "string" ? row.value.trim() : "";
+        byKey.set(key, value);
+      }
+
+      const gateEnabled =
+        parseBool(byKey.get("RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY") ?? "") ||
+        parseBool(byKey.get("RAILPUSH_GITHUB_ACTIONS_ENABLED") ?? "") ||
+        parseBool(byKey.get("RAILPUSH_DEPLOY_ON_GITHUB_ACTIONS") ?? "");
+
+      const workflowRaw = (byKey.get("RAILPUSH_GITHUB_ACTIONS_WORKFLOWS") || byKey.get("RAILPUSH_GITHUB_ACTIONS_WORKFLOW") || "").trim();
+      const workflows = workflowRaw.split(",").map((w) => w.trim()).filter(Boolean);
+      const autoDeploy = Boolean(service["auto_deploy"]);
+      const mode = !autoDeploy ? "off" : (gateEnabled ? "workflow_success" : "push");
+
+      return text({
+        service_id,
+        mode,
+        auto_deploy: autoDeploy,
+        gate_enabled: gateEnabled,
+        workflows,
+        env_flags: {
+          RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY: byKey.get("RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY") || null,
+          RAILPUSH_GITHUB_ACTIONS_ENABLED: byKey.get("RAILPUSH_GITHUB_ACTIONS_ENABLED") || null,
+          RAILPUSH_DEPLOY_ON_GITHUB_ACTIONS: byKey.get("RAILPUSH_DEPLOY_ON_GITHUB_ACTIONS") || null,
+          RAILPUSH_GITHUB_ACTIONS_WORKFLOW: byKey.get("RAILPUSH_GITHUB_ACTIONS_WORKFLOW") || null,
+          RAILPUSH_GITHUB_ACTIONS_WORKFLOWS: byKey.get("RAILPUSH_GITHUB_ACTIONS_WORKFLOWS") || null,
+        },
+      });
+    }
+    catch (e) { return err(e); }
+  },
+);
+
 // ════════════════════════════════════════════════════════════════════════
 //  ENVIRONMENT VARIABLES
 // ════════════════════════════════════════════════════════════════════════
