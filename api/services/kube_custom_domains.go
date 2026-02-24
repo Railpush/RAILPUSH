@@ -94,7 +94,7 @@ func (k *KubeDeployer) UpsertCustomDomainIngress(svc *models.Service, domain str
 	if ingClass == "" {
 		ingClass = "nginx"
 	}
-	ingressWhitelist := k.serviceIngressWhitelist(svc)
+	ingressPolicyAnnotations := k.serviceIngressPolicyAnnotations(svc)
 	annotations := map[string]string{
 		"nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
 		"nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
@@ -107,8 +107,8 @@ func (k *KubeDeployer) UpsertCustomDomainIngress(svc *models.Service, domain str
 		// Debugging/ops metadata.
 		"railpush.com/custom-domain": domain,
 	}
-	if ingressWhitelist != "" {
-		annotations["nginx.ingress.kubernetes.io/whitelist-source-range"] = ingressWhitelist
+	for k, v := range ingressPolicyAnnotations {
+		annotations[k] = v
 	}
 
 	ing := &networkingv1.Ingress{
@@ -204,7 +204,7 @@ func (k *KubeDeployer) UpsertCustomDomainRedirectIngress(svc *models.Service, do
 	if ingClass == "" {
 		ingClass = "nginx"
 	}
-	ingressWhitelist := k.serviceIngressWhitelist(svc)
+	ingressPolicyAnnotations := k.serviceIngressPolicyAnnotations(svc)
 	annotations := map[string]string{
 		// 301 permanent redirect to the target domain (preserves path + query).
 		"nginx.ingress.kubernetes.io/permanent-redirect":      "https://" + redirectTarget,
@@ -218,8 +218,8 @@ func (k *KubeDeployer) UpsertCustomDomainRedirectIngress(svc *models.Service, do
 		"railpush.com/custom-domain":   domain,
 		"railpush.com/redirect-target": redirectTarget,
 	}
-	if ingressWhitelist != "" {
-		annotations["nginx.ingress.kubernetes.io/whitelist-source-range"] = ingressWhitelist
+	for k, v := range ingressPolicyAnnotations {
+		annotations[k] = v
 	}
 
 	ing := &networkingv1.Ingress{

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,6 +71,54 @@ func ingressWhitelistFromEnv(env map[string]string) string {
 	return ""
 }
 
+func ingressRateLimitAnnotationsFromEnv(env map[string]string) map[string]string {
+	out := map[string]string{}
+	if len(env) == 0 {
+		return out
+	}
+	parse := func(keys ...string) string {
+		for _, k := range keys {
+			v := strings.TrimSpace(env[k])
+			if v == "" {
+				continue
+			}
+			n, err := strconv.Atoi(v)
+			if err != nil || n <= 0 {
+				continue
+			}
+			if n > 1000000 {
+				n = 1000000
+			}
+			return strconv.Itoa(n)
+		}
+		return ""
+	}
+	if v := parse("RAILPUSH_RATE_LIMIT_RPS", "INGRESS_RATE_LIMIT_RPS"); v != "" {
+		out["nginx.ingress.kubernetes.io/limit-rps"] = v
+	}
+	if v := parse("RAILPUSH_RATE_LIMIT_RPM", "INGRESS_RATE_LIMIT_RPM"); v != "" {
+		out["nginx.ingress.kubernetes.io/limit-rpm"] = v
+	}
+	if v := parse("RAILPUSH_RATE_LIMIT_CONNECTIONS", "INGRESS_RATE_LIMIT_CONNECTIONS"); v != "" {
+		out["nginx.ingress.kubernetes.io/limit-connections"] = v
+	}
+	if v := parse("RAILPUSH_RATE_LIMIT_BURST_MULTIPLIER", "INGRESS_RATE_LIMIT_BURST_MULTIPLIER"); v != "" {
+		out["nginx.ingress.kubernetes.io/limit-burst-multiplier"] = v
+	}
+	return out
+}
+
+func ingressPolicyAnnotationsFromEnv(env map[string]string) map[string]string {
+	out := map[string]string{}
+	if wl := ingressWhitelistFromEnv(env); wl != "" {
+		out["nginx.ingress.kubernetes.io/whitelist-source-range"] = wl
+	}
+	for k, v := range ingressRateLimitAnnotationsFromEnv(env) {
+		out[k] = v
+	}
+	return out
+}
+
 func (k *KubeDeployer) serviceIngressWhitelist(svc *models.Service) string {
 	if k == nil || k.Config == nil || svc == nil {
 		return ""
@@ -91,6 +140,29 @@ func (k *KubeDeployer) serviceIngressWhitelist(svc *models.Service) string {
 		env[key] = strings.TrimSpace(v)
 	}
 	return ingressWhitelistFromEnv(env)
+}
+
+func (k *KubeDeployer) serviceIngressPolicyAnnotations(svc *models.Service) map[string]string {
+	if k == nil || k.Config == nil || svc == nil {
+		return map[string]string{}
+	}
+	vars, err := models.ListEnvVars("service", svc.ID)
+	if err != nil {
+		return map[string]string{}
+	}
+	env := map[string]string{}
+	for _, ev := range vars {
+		key := strings.TrimSpace(ev.Key)
+		if key == "" || strings.TrimSpace(ev.EncryptedValue) == "" {
+			continue
+		}
+		v, err := utils.Decrypt(ev.EncryptedValue, k.Config.Crypto.EncryptionKey)
+		if err != nil {
+			continue
+		}
+		env[key] = strings.TrimSpace(v)
+	}
+	return ingressPolicyAnnotationsFromEnv(env)
 }
 
 type KubeDeployer struct {
@@ -383,7 +455,7 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 		}
 		cleanEnv[key] = v
 	}
-	ingressWhitelist := ingressWhitelistFromEnv(cleanEnv)
+	ingressPolicyAnnotations := ingressPolicyAnnotationsFromEnv(cleanEnv)
 
 	// This path performs multiple API calls (Secret/Deployment/Service/Ingress/custom domains), so keep a
 	// single reasonably-sized budget rather than a tiny shared 30s timeout that can expire mid-way.
@@ -744,8 +816,8 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 			"nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
 			"nginx.ingress.kubernetes.io/proxy-body-size":    "50m",
 		}
-		if ingressWhitelist != "" {
-			ingressAnnotations["nginx.ingress.kubernetes.io/whitelist-source-range"] = ingressWhitelist
+		for k, v := range ingressPolicyAnnotations {
+			ingressAnnotations[k] = v
 		}
 		// Static sites: add CDN-friendly headers (enable upstream caching, CORS for fonts/assets).
 		// NOTE: Do NOT use configuration-snippet or server-snippet — they are blocked by the
