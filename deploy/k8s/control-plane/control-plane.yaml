@@ -17,7 +17,7 @@ metadata:
   name: railpush-control-plane
   namespace: railpush
 spec:
-  replicas: 2
+  replicas: 3
   selector:
     matchLabels:
       app: railpush-control-plane
