@@ -134,8 +134,35 @@ jobs:
 
           mv -f "${NEW_BIN}" /opt/railpush/railpush-api-bin
 
-          ${SUDO} systemctl restart railpush-api.service
-          ${SUDO} systemctl is-active --quiet railpush-api.service
+          SERVICE_UNIT=""
+          for unit in railpush-api.service railpush-api railpush.service railpush-api-bin.service; do
+            if ${SUDO} systemctl list-unit-files --type=service --all --no-legend --no-pager | awk '{print $1}' | grep -Fxq "${unit}"; then
+              SERVICE_UNIT="${unit}"
+              break
+            fi
+          done
+
+          if [ -z "${SERVICE_UNIT}" ]; then
+            ALL_UNITS="$(${SUDO} systemctl list-units --type=service --all --no-legend --no-pager | awk '{print $1}')"
+            for unit in ${ALL_UNITS}; do
+              [ -z "${unit}" ] && continue
+              EXEC_START="$(${SUDO} systemctl show -p ExecStart --value "${unit}" 2>/dev/null || true)"
+              if printf '%s' "${EXEC_START}" | grep -Fq "/opt/railpush/railpush-api-bin"; then
+                SERVICE_UNIT="${unit}"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "${SERVICE_UNIT}" ]; then
+            echo "No systemd service found for /opt/railpush/railpush-api-bin"
+            ${SUDO} systemctl list-units --type=service --all --no-pager | grep -i railpush || true
+            exit 1
+          fi
+
+          echo "Restarting ${SERVICE_UNIT}"
+          ${SUDO} systemctl restart "${SERVICE_UNIT}"
+          ${SUDO} systemctl is-active --quiet "${SERVICE_UNIT}"
 
           HEALTH_OK=0
           for i in $(seq 1 20); do
@@ -151,13 +178,13 @@ jobs:
             echo "Health check failed after deploy, rolling back API binary..."
             if [ -f "${PREV_BIN}" ]; then
               cp -f "${PREV_BIN}" /opt/railpush/railpush-api-bin
-              ${SUDO} systemctl restart railpush-api.service
+              ${SUDO} systemctl restart "${SERVICE_UNIT}"
             fi
-            ${SUDO} systemctl --no-pager --lines=60 status railpush-api.service || true
+            ${SUDO} systemctl --no-pager --lines=60 status "${SERVICE_UNIT}" || true
             exit 1
           fi
 
-          ${SUDO} systemctl --no-pager --lines=20 status railpush-api.service
+          ${SUDO} systemctl --no-pager --lines=20 status "${SERVICE_UNIT}"
           SSH
 
       - name: Notify Slack
