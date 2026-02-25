@@ -553,6 +553,142 @@ func (w *Worker) notifyDeployWebhook(svc *models.Service, deploy *models.Deploy,
 	}()
 }
 
+func workspaceDeployLogURL(cfg *config.Config, serviceID string) string {
+	base := strings.TrimSpace(controlPlaneBaseURL(cfg))
+	serviceID = strings.TrimSpace(serviceID)
+	if base == "" || serviceID == "" {
+		return ""
+	}
+	return base + "/services/" + serviceID + "/logs?type=deploy"
+}
+
+func (w *Worker) workspaceDeployNotificationSummary(svc *models.Service, deploy *models.Deploy, event string) string {
+	stateLabel := "UNKNOWN"
+	switch models.NormalizeWorkspaceNotificationDeployEvent(event) {
+	case "success":
+		stateLabel = "SUCCESS"
+	case "failed":
+		stateLabel = "FAILED"
+	case "rollback":
+		stateLabel = "ROLLBACK"
+	}
+
+	serviceName := strings.TrimSpace(svc.Name)
+	if serviceName == "" {
+		serviceName = strings.TrimSpace(svc.ID)
+	}
+
+	lines := []string{fmt.Sprintf("RailPush deploy %s for %s", stateLabel, serviceName)}
+	if url := utils.ServicePublicURL(svc.Type, svc.Name, svc.Subdomain, w.Config.Deploy.Domain, 0); strings.TrimSpace(url) != "" {
+		lines = append(lines, "Service URL: "+strings.TrimSpace(url))
+	}
+	if branch := strings.TrimSpace(deploy.Branch); branch != "" {
+		lines = append(lines, "Branch: "+branch)
+	}
+	if sha := strings.TrimSpace(deploy.CommitSHA); sha != "" {
+		lines = append(lines, "Commit: "+shortSHA(sha))
+	}
+	if logsURL := workspaceDeployLogURL(w.Config, svc.ID); logsURL != "" {
+		lines = append(lines, "Logs: "+logsURL)
+	}
+	if models.NormalizeWorkspaceNotificationDeployEvent(event) == "failed" {
+		if errLine := deployErrorMessage(deploy.BuildLog); errLine != "" {
+			lines = append(lines, "Error: "+errLine)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (w *Worker) postWorkspaceChannelWebhook(channel string, webhookURL string, body []byte, svc *models.Service, deploy *models.Deploy) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
+	if err != nil {
+		log.Printf("workspace notification: %s request build failed service=%s deploy=%s err=%v", channel, svc.ID, deploy.ID, err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "railpush-workspace-notification/1.0")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("workspace notification: %s request failed service=%s deploy=%s err=%v", channel, svc.ID, deploy.ID, err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("workspace notification: %s non-2xx service=%s deploy=%s status=%d", channel, svc.ID, deploy.ID, resp.StatusCode)
+	}
+}
+
+func (w *Worker) notifyWorkspaceNotificationChannels(svc *models.Service, deploy *models.Deploy, phase string, ok bool) {
+	if w == nil || w.Config == nil || svc == nil || deploy == nil {
+		return
+	}
+	event := models.NormalizeWorkspaceNotificationDeployEvent(phase)
+	if event == "" {
+		return
+	}
+
+	cfg, err := models.GetWorkspaceNotificationChannels(svc.WorkspaceID)
+	if err != nil || cfg == nil {
+		return
+	}
+	if !models.IsWorkspaceNotificationDeployEventEnabled(cfg.DeployEvents, event) {
+		return
+	}
+
+	slackURL := strings.TrimSpace(cfg.SlackWebhookURL)
+	discordURL := strings.TrimSpace(cfg.DiscordWebhookURL)
+	if slackURL == "" && discordURL == "" && len(cfg.EmailRecipients) == 0 {
+		return
+	}
+
+	summary := w.workspaceDeployNotificationSummary(svc, deploy, event)
+	if slackURL != "" {
+		if payload, err := json.Marshal(map[string]string{"text": summary}); err == nil {
+			go w.postWorkspaceChannelWebhook("slack", slackURL, payload, svc, deploy)
+		}
+	}
+	if discordURL != "" {
+		if payload, err := json.Marshal(map[string]string{"content": summary}); err == nil {
+			go w.postWorkspaceChannelWebhook("discord", discordURL, payload, svc, deploy)
+		}
+	}
+
+	if !w.Config.Email.Enabled() || len(cfg.EmailRecipients) == 0 {
+		return
+	}
+
+	subject := ""
+	text := ""
+	html := ""
+	if event == "rollback" {
+		serviceName := strings.TrimSpace(svc.Name)
+		if serviceName == "" {
+			serviceName = strings.TrimSpace(svc.ID)
+		}
+		subject = "Deploy rollback: " + serviceName
+		text = summary + "\n"
+		html = emailHTMLShell(
+			"Deploy rollback: "+serviceName,
+			"RailPush completed a deploy rollback.",
+			`<h1 style="margin:0 0 10px 0;font-size:22px;line-height:1.25;">Deploy rollback completed</h1><p style="margin:0;color:#374151;line-height:1.65;">`+strings.ReplaceAll(htmlEscape(summary), "\n", "<br/>")+`</p>`,
+		)
+	} else {
+		subject, text, html = BuildDeployResultEmail(w.Config, svc, deploy, ok)
+	}
+	for _, recipient := range cfg.EmailRecipients {
+		email := strings.ToLower(strings.TrimSpace(recipient))
+		if email == "" {
+			continue
+		}
+		dedupe := "deploy-workspace-notification:" + strings.TrimSpace(deploy.ID) + ":" + email
+		if _, err := models.EnqueueEmail(dedupe, "deploy_workspace_notification", email, subject, text, html); err != nil {
+			log.Printf("workspace notification: email enqueue failed deploy=%s err=%v", deploy.ID, err)
+		}
+	}
+}
+
 func (w *Worker) workspaceGitHubToken(workspaceID string) string {
 	if w == nil || w.Config == nil || strings.TrimSpace(workspaceID) == "" {
 		return ""
@@ -1854,6 +1990,7 @@ func (w *Worker) notifyDeployResult(svc *models.Service, deploy *models.Deploy, 
 	}
 	w.notifyDeployWebhook(svc, deploy, phase, ok)
 	w.postGitHubCommitStatus(svc, deploy, ghState, ghDesc)
+	w.notifyWorkspaceNotificationChannels(svc, deploy, phase, ok)
 
 	if !w.Config.Email.Enabled() {
 		return
@@ -2227,10 +2364,16 @@ func (w *Worker) ProvisionDatabase(db *models.ManagedDatabase, password string) 
 		if certDir != "" {
 			args = append(args, "-v", fmt.Sprintf("%s:/etc/postgres-ssl:ro", certDir))
 		}
-		args = append(args, fmt.Sprintf("postgres:%d-alpine", db.PGVersion))
+		args = append(args,
+			fmt.Sprintf("postgres:%d-alpine", db.PGVersion),
+			"postgres",
+			"-c", "wal_level=replica",
+			"-c", "archive_mode=on",
+			"-c", "archive_timeout=60",
+			"-c", "archive_command=mkdir -p /var/lib/postgresql/data/wal-archive && test ! -f /var/lib/postgresql/data/wal-archive/%f && cp %p /var/lib/postgresql/data/wal-archive/%f",
+		)
 		if certDir != "" {
 			args = append(args,
-				"postgres",
 				"-c", "ssl=on",
 				"-c", "ssl_cert_file=/etc/postgres-ssl/server.crt",
 				"-c", "ssl_key_file=/etc/postgres-ssl/server.key",

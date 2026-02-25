@@ -36,6 +36,8 @@ type logFilterOptions struct {
 	search  string
 	regex   bool
 	level   string
+	filter  string
+	fields  map[string]string
 	since   *time.Time
 	until   *time.Time
 	pattern *regexp.Regexp
@@ -45,6 +47,7 @@ func parseLogFilterOptions(r *http.Request) (logFilterOptions, error) {
 	var out logFilterOptions
 	out.search = strings.TrimSpace(utils.GetQueryString(r, "search", ""))
 	out.level = normalizeLogLevel(strings.TrimSpace(utils.GetQueryString(r, "level", "")))
+	out.filter = strings.TrimSpace(utils.GetQueryString(r, "filter", ""))
 
 	rawRegex := strings.TrimSpace(strings.ToLower(utils.GetQueryString(r, "regex", "false")))
 	out.regex = rawRegex == "1" || rawRegex == "true" || rawRegex == "yes"
@@ -62,6 +65,21 @@ func parseLogFilterOptions(r *http.Request) (logFilterOptions, error) {
 			return out, fmt.Errorf("invalid until")
 		}
 		out.until = &ts
+	}
+
+	if out.filter != "" {
+		parsed, err := services.ParseStructuredFilter(out.filter)
+		if err != nil {
+			return out, fmt.Errorf("invalid filter")
+		}
+		if lv, ok := parsed["level"]; ok {
+			parsed["level"] = normalizeLogLevel(lv)
+			if out.level == "" {
+				out.level = parsed["level"]
+			}
+			delete(parsed, "level")
+		}
+		out.fields = parsed
 	}
 
 	if out.since != nil && out.until != nil && out.since.After(*out.until) {
@@ -91,7 +109,16 @@ func parseLogFilterTime(raw string) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
 		return t, nil
 	}
-	return time.Parse(time.RFC3339, raw)
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t, nil
+	}
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	raw = strings.TrimSuffix(raw, "ago")
+	raw = strings.TrimSpace(raw)
+	if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+		return time.Now().UTC().Add(-d), nil
+	}
+	return time.Time{}, fmt.Errorf("invalid time")
 }
 
 func normalizeLogLevel(level string) string {
@@ -173,6 +200,39 @@ func entryTimestamp(entry map[string]interface{}) (*time.Time, bool) {
 	return nil, false
 }
 
+func entryFields(entry map[string]interface{}) map[string]string {
+	out := map[string]string{}
+	for k, v := range entry {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		switch t := v.(type) {
+		case string:
+			out[key] = strings.TrimSpace(t)
+		case time.Time:
+			out[key] = t.Format(time.RFC3339Nano)
+		case *time.Time:
+			if t != nil {
+				out[key] = t.Format(time.RFC3339Nano)
+			}
+		case map[string]string:
+			for fk, fv := range t {
+				if strings.TrimSpace(fk) != "" {
+					out[fk] = strings.TrimSpace(fv)
+				}
+			}
+		case map[string]interface{}:
+			for fk, fv := range t {
+				if strings.TrimSpace(fk) != "" {
+					out[fk] = strings.TrimSpace(fmt.Sprintf("%v", fv))
+				}
+			}
+		}
+	}
+	return out
+}
+
 func applyLogFilters(entries []map[string]interface{}, filters logFilterOptions, limit int) []map[string]interface{} {
 	out := make([]map[string]interface{}, 0, len(entries))
 	for _, entry := range entries {
@@ -190,6 +250,12 @@ func applyLogFilters(entries []map[string]interface{}, filters logFilterOptions,
 
 		if filters.level != "" {
 			if entryLevel(entry) != filters.level {
+				continue
+			}
+		}
+
+		if len(filters.fields) > 0 {
+			if !services.MatchesStructuredFilter(entryFields(entry), filters.fields) {
 				continue
 			}
 		}
@@ -388,19 +454,34 @@ func (h *LogHandler) queryRuntimeLogs(w http.ResponseWriter, svc *models.Service
 			}
 		}
 
-		level := inferLogLevel(message)
+		parsed := services.ParseStructuredLogLine(message)
+		level := normalizeLogLevel(parsed.Level)
+		if level == "" {
+			level = inferLogLevel(message)
+		}
+		if strings.TrimSpace(parsed.Message) != "" {
+			message = strings.TrimSpace(parsed.Message)
+		}
+		if parsed.Timestamp != nil {
+			timestamp = parsed.Timestamp.UTC().Format(time.RFC3339Nano)
+		}
 
 		cid := svc.ContainerID
 		if len(cid) > 12 {
 			cid = cid[:12]
 		}
 
-		logs = append(logs, map[string]interface{}{
+		entry := map[string]interface{}{
 			"timestamp":   timestamp,
 			"level":       level,
 			"message":     message,
 			"instance_id": cid,
-		})
+		}
+		if len(parsed.Fields) > 0 {
+			entry["fields"] = parsed.Fields
+		}
+
+		logs = append(logs, entry)
 	}
 	if logs == nil {
 		logs = []map[string]interface{}{}
@@ -475,16 +556,31 @@ func (h *LogHandler) queryRuntimeLogsKubernetes(w http.ResponseWriter, svc *mode
 				}
 			}
 
-			level := inferLogLevel(msg)
+			parsed := services.ParseStructuredLogLine(msg)
+			level := normalizeLogLevel(parsed.Level)
+			if level == "" {
+				level = inferLogLevel(msg)
+			}
+			if strings.TrimSpace(parsed.Message) != "" {
+				msg = strings.TrimSpace(parsed.Message)
+			}
+			if parsed.Timestamp != nil {
+				ts = parsed.Timestamp.UTC()
+			}
+
+			payload := map[string]interface{}{
+				"timestamp":   ts.Format(time.RFC3339Nano),
+				"level":       level,
+				"message":     msg,
+				"instance_id": podName,
+			}
+			if len(parsed.Fields) > 0 {
+				payload["fields"] = parsed.Fields
+			}
 
 			out = append(out, entry{
 				ts: ts,
-				payload: map[string]interface{}{
-					"timestamp":   ts.Format(time.RFC3339Nano),
-					"level":       level,
-					"message":     msg,
-					"instance_id": podName,
-				},
+				payload: payload,
 			})
 		}
 	}

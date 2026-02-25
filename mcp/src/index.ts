@@ -1283,6 +1283,18 @@ server.tool(
 );
 
 server.tool(
+  "get_database_recovery_window",
+  "Get the currently available point-in-time recovery window for a managed database.",
+  {
+    database_id: z.string().describe("Database ID"),
+  },
+  async ({ database_id }) => {
+    try { return text(await client.getDatabaseRecoveryWindow(database_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
   "set_database_retention",
   "Update backup retention windows for a managed database. Values accept day numbers or strings like 30d, 12w, 6m, 1y.",
   {
@@ -1367,10 +1379,22 @@ server.tool(
 
 server.tool(
   "restore_database",
-  "Restore a soft-deleted managed database from the recovery window.",
-  { database_id: z.string().describe("Database ID") },
-  async ({ database_id }) => {
-    try { return text(await client.restoreDatabase(database_id)); }
+  "Restore a database. With no extra fields, restores a soft-deleted database. With target_time, performs time-targeted restore (to a new database by default, or in_place with confirm_destructive=true).",
+  {
+    database_id: z.string().describe("Database ID"),
+    target_time: z.string().optional().describe("RFC3339 timestamp for time-targeted restore (e.g. 2026-02-24T14:46:00Z)"),
+    restore_to: z.enum(["new_database", "in_place"]).optional().describe("Restore target mode for point-in-time restore"),
+    new_database_name: z.string().optional().describe("Required/used when restore_to=new_database (defaults if omitted)"),
+    confirm_destructive: z.boolean().optional().describe("Required when restore_to=in_place"),
+  },
+  async ({ database_id, target_time, restore_to, new_database_name, confirm_destructive }) => {
+    const payload = Object.fromEntries(Object.entries({ target_time, restore_to, new_database_name, confirm_destructive }).filter(([, v]) => v !== undefined));
+    try {
+      if (Object.keys(payload).length === 0) {
+        return text(await client.restoreDatabase(database_id));
+      }
+      return text(await client.restoreDatabase(database_id, payload));
+    }
     catch (e) { return err(e); }
   },
 );
@@ -1395,6 +1419,19 @@ server.tool(
   },
   async ({ database_id, limit, cursor }) => {
     try { return text(await client.listBackups(database_id, { limit, cursor })); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "list_database_restores",
+  "List recent database restore jobs (soft-delete restores and point-in-time restore jobs) for a database.",
+  {
+    database_id: z.string().describe("Database ID"),
+    limit: z.number().int().positive().max(200).optional().describe("Maximum number of restore jobs to return (default: 50)"),
+  },
+  async ({ database_id, limit }) => {
+    try { return text(await client.listDatabaseRestores(database_id, { limit })); }
     catch (e) { return err(e); }
   },
 );

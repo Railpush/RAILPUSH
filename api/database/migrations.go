@@ -500,4 +500,25 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 	`CREATE INDEX IF NOT EXISTS idx_service_shell_sessions_service_expires ON service_shell_sessions(service_id, expires_at DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_service_shell_sessions_workspace_expires ON service_shell_sessions(workspace_id, expires_at DESC)`,
 	`DELETE FROM service_shell_sessions WHERE expires_at <= NOW()`,
+
+	// Workspace-level deploy notifications (Slack/Discord/email fan-out).
+	`CREATE TABLE IF NOT EXISTS workspace_notification_channels (
+		workspace_id UUID PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+		slack_webhook_url TEXT NOT NULL DEFAULT '',
+		discord_webhook_url TEXT NOT NULL DEFAULT '',
+		email_recipients TEXT[] NOT NULL DEFAULT '{}'::text[],
+		deploy_events TEXT[] NOT NULL DEFAULT '{"success","failed","rollback"}'::text[],
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+	`ALTER TABLE workspace_notification_channels ADD COLUMN IF NOT EXISTS slack_webhook_url TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE workspace_notification_channels ADD COLUMN IF NOT EXISTS discord_webhook_url TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE workspace_notification_channels ADD COLUMN IF NOT EXISTS email_recipients TEXT[] NOT NULL DEFAULT '{}'::text[]`,
+	`ALTER TABLE workspace_notification_channels ADD COLUMN IF NOT EXISTS deploy_events TEXT[] NOT NULL DEFAULT '{"success","failed","rollback"}'::text[]`,
+	`ALTER TABLE workspace_notification_channels ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
+	`ALTER TABLE workspace_notification_channels ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
+	`UPDATE workspace_notification_channels
+	    SET deploy_events = '{"success","failed","rollback"}'::text[]
+	  WHERE deploy_events IS NULL`,
+
 }

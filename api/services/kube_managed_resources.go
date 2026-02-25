@@ -454,6 +454,10 @@ func (k *KubeDeployer) EnsureManagedDatabase(db *models.ManagedDatabase, passwor
 							},
 							Args: []string{
 								"postgres",
+								"-c", "wal_level=replica",
+								"-c", "archive_mode=on",
+								"-c", "archive_timeout=60",
+								"-c", "archive_command=mkdir -p /var/lib/postgresql/data/wal-archive && test ! -f /var/lib/postgresql/data/wal-archive/%f && cp %p /var/lib/postgresql/data/wal-archive/%f",
 								"-c", "ssl=on",
 								"-c", "ssl_cert_file=/etc/postgres-ssl/server.crt",
 								"-c", "ssl_key_file=/etc/postgres-ssl/server.key",

@@ -1136,6 +1136,17 @@ func (h *DatabaseHandler) RestoreDatabase(w http.ResponseWriter, r *http.Request
 		utils.RespondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
+
+	var pitrReq pointInTimeRestoreRequest
+	if err := decodeOptionalJSONBody(w, r, &pitrReq); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if pitrReq.hasPointInTimeFields() {
+		h.queuePointInTimeRestore(w, r, db, userID, pitrReq)
+		return
+	}
+
 	state, err := models.GetResourceDeletionState("database", db.ID)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to read deletion state")

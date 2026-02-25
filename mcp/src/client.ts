@@ -445,6 +445,10 @@ export class RailPushClient {
     return this.request("GET", `/databases/${id}/retention`);
   }
 
+  async getDatabaseRecoveryWindow(id: string) {
+    return this.request("GET", `/databases/${id}/recovery-window`);
+  }
+
   async setDatabaseRetention(id: string, data: {
     automated_backups?: string | number;
     manual_backups?: string | number;
@@ -474,8 +478,19 @@ export class RailPushClient {
     return this.performConfirmedDelete(`/databases/${id}`, hardDelete, extraPayload);
   }
 
-  async restoreDatabase(id: string) {
-    return this.request("POST", `/databases/${id}/restore`);
+  async restoreDatabase(id: string, data?: {
+    target_time?: string;
+    restore_to?: "new_database" | "in_place";
+    new_database_name?: string;
+    confirm_destructive?: boolean;
+  }) {
+    return this.request("POST", `/databases/${id}/restore`, data);
+  }
+
+  async listDatabaseRestores(dbId: string, opts?: { limit?: number }) {
+    const query: Record<string, string> = {};
+    if (typeof opts?.limit === "number" && opts.limit > 0) query.limit = String(opts.limit);
+    return this.request("GET", `/databases/${dbId}/restores`, undefined, query);
   }
 
   async triggerBackup(dbId: string) {
