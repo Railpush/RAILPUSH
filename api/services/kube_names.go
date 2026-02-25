@@ -18,3 +18,18 @@ func KubeBuildJobName(deployID string) string {
 	return name
 }
 
+// KubePreDeployJobName returns the Kubernetes Job name used for pre-deploy commands.
+// It must stay in sync with the naming logic in RunPreDeployJob.
+func KubePreDeployJobName(deployID string) string {
+	deployID = strings.TrimSpace(deployID)
+	if deployID == "" {
+		return ""
+	}
+	name := "rp-predeploy-" + strings.ToLower(deployID)
+	name = kubeNameInvalidChars.ReplaceAllString(name, "-")
+	name = strings.Trim(name, "-")
+	if len(name) > 63 {
+		name = strings.Trim(name[:63], "-")
+	}
+	return name
+}
