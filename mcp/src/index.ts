@@ -1541,16 +1541,40 @@ server.tool(
 
 server.tool(
   "list_ops_tickets",
-  "List all support tickets across all users (ops/admin). Filter by status, category, or search by subject/email/workspace.",
+  "List support tickets across all users (ops/admin). Filter by status/category/priority and search by subject/email/workspace.",
   {
     status: z.enum(["open", "pending", "solved", "closed"]).optional().describe("Filter by ticket status"),
     category: z.enum(["support", "feature_request", "bug_report"]).optional().describe("Filter by ticket category"),
+    priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("Filter by ticket priority"),
     query: z.string().optional().describe("Search by subject, email, or workspace name"),
     limit: z.number().optional().describe("Max results (default 50, max 200)"),
     offset: z.number().optional().describe("Pagination offset"),
   },
-  async ({ status, category, query, limit, offset }) => {
-    try { return text(await client.listOpsTickets({ status, category, query, limit, offset })); }
+  async ({ status, category, priority, query, limit, offset }) => {
+    try { return text(await client.listOpsTickets({ status, category, priority, query, limit, offset })); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "search_ops_tickets",
+  "Advanced search for ops tickets with metadata (total + facets), including date filters and sorting.",
+  {
+    status: z.enum(["open", "pending", "solved", "closed"]).optional().describe("Filter by ticket status"),
+    category: z.enum(["support", "feature_request", "bug_report"]).optional().describe("Filter by ticket category"),
+    priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("Filter by ticket priority"),
+    query: z.string().optional().describe("Search by subject, email, or workspace name"),
+    created_after: z.string().optional().describe("Only tickets created after this date/time (YYYY-MM-DD or RFC3339)"),
+    created_before: z.string().optional().describe("Only tickets created before this date/time (YYYY-MM-DD or RFC3339)"),
+    sort_by: z.enum(["updated_at", "created_at", "priority"]).optional().describe("Sort field (default: updated_at)"),
+    sort_order: z.enum(["asc", "desc"]).optional().describe("Sort direction (default: desc)"),
+    limit: z.number().optional().describe("Max results (default 50, max 200)"),
+    offset: z.number().optional().describe("Pagination offset"),
+  },
+  async ({ status, category, priority, query, created_after, created_before, sort_by, sort_order, limit, offset }) => {
+    try {
+      return text(await client.searchOpsTickets({ status, category, priority, query, created_after, created_before, sort_by, sort_order, limit, offset }));
+    }
     catch (e) { return err(e); }
   },
 );
@@ -1582,6 +1606,22 @@ server.tool(
     if (category) data.category = category;
     if (assigned_to) data.assigned_to = assigned_to;
     try { return text(await client.updateOpsTicket(ticket_id, data)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "bulk_update_ops_tickets",
+  "Bulk update multiple ops tickets at once (status/priority/category), with an optional customer-visible reason message.",
+  {
+    ticket_ids: z.array(z.string()).min(1).describe("Ticket IDs to update (max 200)"),
+    status: z.enum(["open", "pending", "solved", "closed"]).optional().describe("New status for all selected tickets"),
+    priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("New priority for all selected tickets"),
+    category: z.enum(["support", "feature_request", "bug_report"]).optional().describe("New category for all selected tickets"),
+    reason: z.string().optional().describe("Optional customer-visible message posted to each updated ticket"),
+  },
+  async ({ ticket_ids, status, priority, category, reason }) => {
+    try { return text(await client.bulkUpdateOpsTickets({ ticket_ids, status, priority, category, reason })); }
     catch (e) { return err(e); }
   },
 );

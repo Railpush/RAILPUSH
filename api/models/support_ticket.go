@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/lib/pq"
 	"github.com/railpush/api/database"
 )
 
@@ -169,6 +170,26 @@ func UpdateSupportTicketOpsFields(ticketID, status, priority, assignedTo, catego
 		ticketID, status, priority, assignedTo, category,
 	)
 	return err
+}
+
+func BulkUpdateSupportTicketOpsFields(ticketIDs []string, status, priority, category string) (int64, error) {
+	if len(ticketIDs) == 0 {
+		return 0, nil
+	}
+	res, err := database.DB.Exec(
+		`UPDATE support_tickets
+		    SET status = COALESCE(NULLIF($2,''), status),
+		        priority = COALESCE(NULLIF($3,''), priority),
+		        category = COALESCE(NULLIF($4,''), category),
+		        updated_at = NOW()
+		  WHERE id = ANY($1::uuid[])`,
+		pq.Array(ticketIDs), status, priority, category,
+	)
+	if err != nil {
+		return 0, err
+	}
+	updated, _ := res.RowsAffected()
+	return updated, nil
 }
 
 func TouchSupportTicketCustomerReply(ticketID string) error {

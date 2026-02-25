@@ -3,7 +3,7 @@ import type {
   GitHubRepo, GitHubBranch, GitHubWorkflow, RegisteredDomain, DnsRecord, DomainSearchResult, Project, ProjectFolder, Environment, PreviewEnvironment, OneOffJob, AutoscalingPolicy,
   ServiceGitHubWebhookStatus,
   DatabaseReplica, WorkspaceMember, AuditLogEntry, SamlSSOConfig, Incident, IncidentDetail, OpsOverview, OpsUserItem, OpsWorkspaceItem, OpsServiceItem, OpsDeployItem,
-  OpsEmailOutboxItem, OpsBillingCustomerItem, OpsBillingCustomerDetail, OpsTicketItem, OpsTicketDetail, OpsWorkspaceCreditItem, OpsWorkspaceCreditDetail,
+  OpsEmailOutboxItem, OpsBillingCustomerItem, OpsBillingCustomerDetail, OpsTicketItem, OpsTicketDetail, OpsTicketSearchResult, OpsWorkspaceCreditItem, OpsWorkspaceCreditDetail,
   OpsKubeSummary, OpsClusterSummary, OpsPerformanceSummary, OpsDatastoreItem, OpsAuditLogEntry, SupportTicket, SupportTicketMessage, BlueprintAISettings, AIFixSession,
   Disk,
 } from '../types';
@@ -371,9 +371,37 @@ export const ops = {
     const suffix = qs.toString() ? `?${qs}` : '';
     return request<OpsTicketItem[]>(`/ops/tickets${suffix}`);
   },
+  searchTickets: (params?: {
+    query?: string;
+    status?: string;
+    category?: string;
+    priority?: string;
+    created_after?: string;
+    created_before?: string;
+    sort_by?: 'priority' | 'created_at' | 'updated_at';
+    sort_order?: 'asc' | 'desc';
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    qs.set('include_meta', 'true');
+    if (params?.query) qs.set('query', params.query);
+    if (params?.status) qs.set('status', params.status);
+    if (params?.category) qs.set('category', params.category);
+    if (params?.priority) qs.set('priority', params.priority);
+    if (params?.created_after) qs.set('created_after', params.created_after);
+    if (params?.created_before) qs.set('created_before', params.created_before);
+    if (params?.sort_by) qs.set('sort_by', params.sort_by);
+    if (params?.sort_order) qs.set('sort_order', params.sort_order);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    return request<OpsTicketSearchResult>(`/ops/tickets?${qs.toString()}`);
+  },
   getTicket: (id: string) => request<OpsTicketDetail>(`/ops/tickets/${encodeURIComponent(id)}`),
   updateTicket: (id: string, data: { status?: string; priority?: string; assigned_to?: string; category?: string }) =>
     request<{ status: string }>(`/ops/tickets/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  bulkUpdateTickets: (data: { ticket_ids: string[]; status?: string; priority?: string; category?: string; reason?: string }) =>
+    request<{ status: string; updated: number }>('/ops/tickets/bulk', { method: 'POST', body: JSON.stringify(data) }),
   createTicketMessage: (id: string, data: { message: string; is_internal?: boolean }) =>
     request<SupportTicketMessage>(`/ops/tickets/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify(data) }),
 

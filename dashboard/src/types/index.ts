@@ -678,6 +678,18 @@ export interface OpsTicketItem extends SupportTicket {
   created_by_username: string;
 }
 
+export interface OpsTicketFacets {
+  by_status: Record<string, number>;
+  by_priority: Record<string, number>;
+  by_category: Record<string, number>;
+}
+
+export interface OpsTicketSearchResult {
+  tickets: OpsTicketItem[];
+  total: number;
+  facets: OpsTicketFacets;
+}
+
 export interface OpsTicketDetail {
   ticket: OpsTicketItem;
   messages: SupportTicketMessage[];

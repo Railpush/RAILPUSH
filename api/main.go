@@ -254,6 +254,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 
 	opsTicketsH := handlers.NewOpsTicketsHandler(cfg)
 	authed.HandleFunc("/ops/tickets", opsTicketsH.ListTickets).Methods("GET")
+	authed.HandleFunc("/ops/tickets/bulk", opsTicketsH.BulkUpdateTickets).Methods("POST")
 	authed.HandleFunc("/ops/tickets/{id}", opsTicketsH.GetTicket).Methods("GET")
 	authed.HandleFunc("/ops/tickets/{id}", opsTicketsH.UpdateTicket).Methods("PATCH")
 	authed.HandleFunc("/ops/tickets/{id}/messages", opsTicketsH.CreateMessage).Methods("POST")

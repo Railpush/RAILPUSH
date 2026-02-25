@@ -1,8 +1,9 @@
 package handlers
 
 import (
-	"encoding/json"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -51,6 +52,108 @@ type opsTicketItem struct {
 	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
+type opsTicketFacets struct {
+	ByStatus   map[string]int64 `json:"by_status"`
+	ByPriority map[string]int64 `json:"by_priority"`
+	ByCategory map[string]int64 `json:"by_category"`
+}
+
+type opsTicketListResponse struct {
+	Tickets []opsTicketItem `json:"tickets"`
+	Total   int64           `json:"total"`
+	Facets  opsTicketFacets `json:"facets"`
+}
+
+const opsTicketsWhereClause = `
+	FROM support_tickets t
+	LEFT JOIN workspaces w ON w.id = t.workspace_id
+	LEFT JOIN users u ON u.id = t.created_by
+	WHERE ($1 = '' OR COALESCE(t.status,'') = $1)
+	  AND ($2 = '' OR COALESCE(t.subject,'') ILIKE $3 OR COALESCE(u.email,'') ILIKE $3 OR COALESCE(w.name,'') ILIKE $3)
+	  AND ($4 = '' OR COALESCE(t.category,'support') = $4)
+	  AND ($5 = '' OR COALESCE(t.priority,'normal') = $5)
+	  AND ($8::timestamptz IS NULL OR t.created_at >= $8::timestamptz)
+	  AND ($9::timestamptz IS NULL OR t.created_at <= $9::timestamptz)`
+
+func normalizeSupportTicketStatus(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "open", "pending", "solved", "closed":
+		return strings.ToLower(strings.TrimSpace(raw))
+	default:
+		return ""
+	}
+}
+
+func normalizeSupportTicketPriority(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "low", "normal", "high", "urgent":
+		return strings.ToLower(strings.TrimSpace(raw))
+	default:
+		return ""
+	}
+}
+
+func normalizeDateFilter(raw string, endOfDay bool) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t.UTC().Format(time.RFC3339), nil
+	}
+	if t, err := time.Parse("2006-01-02", raw); err == nil {
+		if endOfDay {
+			t = t.Add(24*time.Hour - time.Nanosecond)
+		}
+		return t.UTC().Format(time.RFC3339), nil
+	}
+	return "", fmt.Errorf("invalid date format")
+}
+
+func buildOpsTicketOrderClause(sortBy, sortOrder string) (string, error) {
+	order := "DESC"
+	switch strings.ToLower(strings.TrimSpace(sortOrder)) {
+	case "", "desc":
+		order = "DESC"
+	case "asc":
+		order = "ASC"
+	default:
+		return "", fmt.Errorf("invalid sort_order")
+	}
+
+	switch strings.ToLower(strings.TrimSpace(sortBy)) {
+	case "", "updated_at":
+		return "t.updated_at " + order + ", t.created_at DESC", nil
+	case "created_at":
+		return "t.created_at " + order + ", t.updated_at DESC", nil
+	case "priority":
+		return "CASE COALESCE(t.priority,'normal') WHEN 'urgent' THEN 4 WHEN 'high' THEN 3 WHEN 'normal' THEN 2 ELSE 1 END " + order + ", t.updated_at DESC", nil
+	default:
+		return "", fmt.Errorf("invalid sort_by")
+	}
+}
+
+func listFacetCounts(expr string, args []interface{}) (map[string]int64, error) {
+	rows, err := database.DB.Query(
+		"SELECT "+expr+" AS value, COUNT(*) "+opsTicketsWhereClause+" GROUP BY value",
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var key string
+		var count int64
+		if err := rows.Scan(&key, &count); err != nil {
+			continue
+		}
+		out[key] = count
+	}
+	return out, nil
+}
+
 func (h *OpsTicketsHandler) ListTickets(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureOps(w, r) {
 		return
@@ -68,25 +171,77 @@ func (h *OpsTicketsHandler) ListTickets(w http.ResponseWriter, r *http.Request) 
 		offset = 0
 	}
 
-	status := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
-	category := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("category")))
+	statusInput := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
+	status := ""
+	if statusInput != "" {
+		status = normalizeSupportTicketStatus(statusInput)
+		if status == "" {
+			utils.RespondError(w, http.StatusBadRequest, "invalid status filter")
+			return
+		}
+	}
+
+	categoryInput := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("category")))
+	category := ""
+	if categoryInput != "" {
+		category = models.NormalizeSupportTicketCategory(categoryInput)
+		if category != categoryInput {
+			utils.RespondError(w, http.StatusBadRequest, "invalid category filter")
+			return
+		}
+	}
+
+	priorityInput := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("priority")))
+	priority := ""
+	if priorityInput != "" {
+		priority = normalizeSupportTicketPriority(priorityInput)
+		if priority == "" {
+			utils.RespondError(w, http.StatusBadRequest, "invalid priority filter")
+			return
+		}
+	}
+
 	q := strings.TrimSpace(r.URL.Query().Get("query"))
 	like := "%" + q + "%"
+	includeMeta := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_meta")), "true") || strings.TrimSpace(r.URL.Query().Get("include_meta")) == "1"
+
+	createdAfter, err := normalizeDateFilter(r.URL.Query().Get("created_after"), false)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid created_after")
+		return
+	}
+	createdBefore, err := normalizeDateFilter(r.URL.Query().Get("created_before"), true)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid created_before")
+		return
+	}
+
+	orderClause, err := buildOpsTicketOrderClause(r.URL.Query().Get("sort_by"), r.URL.Query().Get("sort_order"))
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var createdAfterArg interface{}
+	if createdAfter != "" {
+		createdAfterArg = createdAfter
+	}
+	var createdBeforeArg interface{}
+	if createdBefore != "" {
+		createdBeforeArg = createdBefore
+	}
+
+	args := []interface{}{status, q, like, category, priority, limit, offset, createdAfterArg, createdBeforeArg}
 
 	rows, err := database.DB.Query(
 		`SELECT t.id::text, COALESCE(t.workspace_id::text,''), COALESCE(w.name,''), COALESCE(t.created_by::text,''),
 		        COALESCE(u.email,''), COALESCE(u.username,''), COALESCE(t.subject,''),
 		        COALESCE(t.category,'support'), COALESCE(t.status,'open'), COALESCE(t.priority,'normal'), COALESCE(t.assigned_to::text,''),
 		        t.last_customer_reply_at, t.last_ops_reply_at, t.created_at, t.updated_at
-		   FROM support_tickets t
-		   LEFT JOIN workspaces w ON w.id = t.workspace_id
-		   LEFT JOIN users u ON u.id = t.created_by
-		  WHERE ($1 = '' OR COALESCE(t.status,'') = $1)
-		    AND ($2 = '' OR COALESCE(t.subject,'') ILIKE $3 OR COALESCE(u.email,'') ILIKE $3 OR COALESCE(w.name,'') ILIKE $3)
-		    AND ($6 = '' OR COALESCE(t.category,'support') = $6)
-		  ORDER BY t.updated_at DESC, t.created_at DESC
-		  LIMIT $4 OFFSET $5`,
-		status, q, like, limit, offset, category,
+		   `+opsTicketsWhereClause+`
+		  ORDER BY `+orderClause+`
+		  LIMIT $6 OFFSET $7`,
+		args...,
 	)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to list tickets")
@@ -119,7 +274,43 @@ func (h *OpsTicketsHandler) ListTickets(w http.ResponseWriter, r *http.Request) 
 	if out == nil {
 		out = []opsTicketItem{}
 	}
-	utils.RespondJSON(w, http.StatusOK, out)
+
+	if !includeMeta {
+		utils.RespondJSON(w, http.StatusOK, out)
+		return
+	}
+
+	var total int64
+	if err := database.DB.QueryRow("SELECT COUNT(*) "+opsTicketsWhereClause, args...).Scan(&total); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to count tickets")
+		return
+	}
+
+	byStatus, err := listFacetCounts("COALESCE(t.status,'open')", args)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to aggregate ticket status facets")
+		return
+	}
+	byPriority, err := listFacetCounts("COALESCE(t.priority,'normal')", args)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to aggregate ticket priority facets")
+		return
+	}
+	byCategory, err := listFacetCounts("COALESCE(t.category,'support')", args)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to aggregate ticket category facets")
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusOK, opsTicketListResponse{
+		Tickets: out,
+		Total:   total,
+		Facets: opsTicketFacets{
+			ByStatus:   byStatus,
+			ByPriority: byPriority,
+			ByCategory: byCategory,
+		},
+	})
 }
 
 func (h *OpsTicketsHandler) GetTicket(w http.ResponseWriter, r *http.Request) {
@@ -253,4 +444,104 @@ func (h *OpsTicketsHandler) CreateMessage(w http.ResponseWriter, r *http.Request
 	_ = models.TouchSupportTicketOpsReply(t.ID)
 
 	utils.RespondJSON(w, http.StatusCreated, m)
+}
+
+func (h *OpsTicketsHandler) BulkUpdateTickets(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureOps(w, r) {
+		return
+	}
+	userID := middleware.GetUserID(r)
+
+	var req struct {
+		TicketIDs []string `json:"ticket_ids"`
+		Status    string   `json:"status"`
+		Priority  string   `json:"priority"`
+		Category  string   `json:"category"`
+		Reason    string   `json:"reason"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024)).Decode(&req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if len(req.TicketIDs) == 0 {
+		utils.RespondError(w, http.StatusBadRequest, "ticket_ids is required")
+		return
+	}
+	if len(req.TicketIDs) > 200 {
+		utils.RespondError(w, http.StatusBadRequest, "ticket_ids limit exceeded (max 200)")
+		return
+	}
+
+	ids := make([]string, 0, len(req.TicketIDs))
+	seen := map[string]bool{}
+	for _, rawID := range req.TicketIDs {
+		id := strings.TrimSpace(rawID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		utils.RespondError(w, http.StatusBadRequest, "ticket_ids is required")
+		return
+	}
+
+	status := strings.ToLower(strings.TrimSpace(req.Status))
+	if status != "" && normalizeSupportTicketStatus(status) == "" {
+		utils.RespondError(w, http.StatusBadRequest, "invalid status")
+		return
+	}
+
+	priority := strings.ToLower(strings.TrimSpace(req.Priority))
+	if priority != "" && normalizeSupportTicketPriority(priority) == "" {
+		utils.RespondError(w, http.StatusBadRequest, "invalid priority")
+		return
+	}
+
+	category := strings.ToLower(strings.TrimSpace(req.Category))
+	if category != "" {
+		normalized := models.NormalizeSupportTicketCategory(category)
+		if normalized != category {
+			utils.RespondError(w, http.StatusBadRequest, "invalid category")
+			return
+		}
+		category = normalized
+	}
+
+	if status == "" && priority == "" && category == "" {
+		utils.RespondError(w, http.StatusBadRequest, "at least one of status, priority, or category is required")
+		return
+	}
+
+	updated, err := models.BulkUpdateSupportTicketOpsFields(ids, status, priority, category)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to bulk update tickets")
+		return
+	}
+
+	reason := strings.TrimSpace(req.Reason)
+	if reason != "" {
+		for _, ticketID := range ids {
+			ticket, err := models.GetSupportTicket(ticketID)
+			if err != nil || ticket == nil {
+				continue
+			}
+			m := &models.SupportTicketMessage{
+				TicketID:   ticketID,
+				AuthorID:   userID,
+				Body:       reason,
+				IsInternal: false,
+			}
+			if err := models.CreateSupportTicketMessage(m); err == nil {
+				_ = models.TouchSupportTicketOpsReply(ticketID)
+			}
+		}
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "ok",
+		"updated": updated,
+	})
 }

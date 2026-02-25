@@ -469,15 +469,43 @@ export class RailPushClient {
 
   // ── Ops: Support Tickets (admin/ops role required) ─────────────────
 
-  async listOpsTickets(params?: { status?: string; category?: string; query?: string; limit?: number; offset?: number }) {
+  async listOpsTickets(params?: { status?: string; category?: string; priority?: string; query?: string; limit?: number; offset?: number }) {
     const qs = new URLSearchParams();
     if (params?.status) qs.set("status", params.status);
     if (params?.category) qs.set("category", params.category);
+    if (params?.priority) qs.set("priority", params.priority);
     if (params?.query) qs.set("query", params.query);
     if (params?.limit) qs.set("limit", String(params.limit));
     if (params?.offset) qs.set("offset", String(params.offset));
     const q = qs.toString();
     return this.request("GET", `/ops/tickets${q ? `?${q}` : ""}`);
+  }
+
+  async searchOpsTickets(params?: {
+    status?: string;
+    category?: string;
+    priority?: string;
+    query?: string;
+    created_after?: string;
+    created_before?: string;
+    sort_by?: "priority" | "created_at" | "updated_at";
+    sort_order?: "asc" | "desc";
+    limit?: number;
+    offset?: number;
+  }) {
+    const qs = new URLSearchParams();
+    qs.set("include_meta", "true");
+    if (params?.status) qs.set("status", params.status);
+    if (params?.category) qs.set("category", params.category);
+    if (params?.priority) qs.set("priority", params.priority);
+    if (params?.query) qs.set("query", params.query);
+    if (params?.created_after) qs.set("created_after", params.created_after);
+    if (params?.created_before) qs.set("created_before", params.created_before);
+    if (params?.sort_by) qs.set("sort_by", params.sort_by);
+    if (params?.sort_order) qs.set("sort_order", params.sort_order);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    if (params?.offset) qs.set("offset", String(params.offset));
+    return this.request("GET", `/ops/tickets?${qs.toString()}`);
   }
 
   async getOpsTicket(id: string) {
@@ -486,6 +514,10 @@ export class RailPushClient {
 
   async updateOpsTicket(id: string, data: { status?: string; priority?: string; assigned_to?: string; category?: string }) {
     return this.request("PATCH", `/ops/tickets/${id}`, data);
+  }
+
+  async bulkUpdateOpsTickets(data: { ticket_ids: string[]; status?: string; priority?: string; category?: string; reason?: string }) {
+    return this.request("POST", "/ops/tickets/bulk", data);
   }
 
   async addOpsTicketMessage(ticketId: string, message: string, isInternal = false) {
