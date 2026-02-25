@@ -23,6 +23,7 @@ const (
 	rpLabelProjectID   = "railpush.com/project-id"
 	rpLabelServiceID   = "railpush.com/service-id"
 	rpLabelDatabaseID  = "railpush.com/database-id"
+	rpLabelMTLSStrict  = "railpush.com/mtls-strict"
 	rpManagedByValue   = "railpush"
 )
 
@@ -370,6 +371,10 @@ func (k *KubeDeployer) ensureTenantNetpolWorkspace(ctx context.Context, workspac
 				MatchExpressions: []metav1.LabelSelectorRequirement{{
 					Key:      rpLabelProjectID,
 					Operator: metav1.LabelSelectorOpDoesNotExist,
+				}, {
+					Key:      rpLabelMTLSStrict,
+					Operator: metav1.LabelSelectorOpNotIn,
+					Values:   []string{"true"},
 				}},
 			},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
@@ -426,6 +431,11 @@ func (k *KubeDeployer) ensureTenantNetpolProject(ctx context.Context, workspaceI
 					rpLabelWorkspaceID: workspaceID,
 					rpLabelProjectID:   projectID,
 				},
+				MatchExpressions: []metav1.LabelSelectorRequirement{{
+					Key:      rpLabelMTLSStrict,
+					Operator: metav1.LabelSelectorOpNotIn,
+					Values:   []string{"true"},
+				}},
 			},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{

@@ -206,6 +206,14 @@ export class RailPushClient {
     return this.request("PUT", `/services/${id}/retention`, data);
   }
 
+  async getServiceMTLS(id: string) {
+    return this.request("GET", `/services/${id}/mtls`);
+  }
+
+  async setServiceMTLS(id: string, data: Record<string, unknown>) {
+    return this.request("PUT", `/services/${id}/mtls`, data);
+  }
+
   async getServiceAccessControl(id: string) {
     return this.request("GET", `/services/${id}/access-control`);
   }

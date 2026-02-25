@@ -321,6 +321,8 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/services/{id}", svcH.UpdateService).Methods("PATCH")
 	authed.HandleFunc("/services/{id}/retention", svcH.GetRetention).Methods("GET")
 	authed.HandleFunc("/services/{id}/retention", svcH.UpdateRetention).Methods("PUT")
+	authed.HandleFunc("/services/{id}/mtls", svcH.GetServiceMTLS).Methods("GET")
+	authed.HandleFunc("/services/{id}/mtls", svcH.UpsertServiceMTLS).Methods("PUT")
 	authed.HandleFunc("/services/{id}/access-control", svcH.GetAccessControl).Methods("GET")
 	authed.HandleFunc("/services/{id}/access-control", svcH.UpsertAccessControl).Methods("PUT")
 	authed.HandleFunc("/services/{id}/access-control/log", svcH.ListAccessControlLog).Methods("GET")

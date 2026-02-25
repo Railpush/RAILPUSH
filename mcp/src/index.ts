@@ -358,6 +358,39 @@ server.tool(
 );
 
 server.tool(
+  "get_service_mtls",
+  "Get per-service mTLS policy configuration for internal service-to-service traffic.",
+  {
+    service_id: z.string().describe("Service ID"),
+  },
+  async ({ service_id }) => {
+    try { return text(await client.getServiceMTLS(service_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "set_service_mtls",
+  "Configure per-service mTLS policy. strict mode enforces service allowlist via network policy; permissive mode stores policy without strict deny enforcement.",
+  {
+    service_id: z.string().describe("Service ID"),
+    enabled: z.boolean().describe("Enable or disable mTLS policy for the service"),
+    mode: z.enum(["strict", "permissive"]).optional().describe("strict (enforce allowlist) or permissive (observe/prepare)"),
+    allowed_services: z.array(z.string()).max(200).optional().describe("Allowed caller services (service IDs or service names)"),
+  },
+  async ({ service_id, enabled, mode, allowed_services }) => {
+    try {
+      return text(await client.setServiceMTLS(service_id, {
+        enabled,
+        mode,
+        allowed_services,
+      }));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
   "get_service_access_control",
   "Get ingress access-control policy for a service (IP allowlist/blocklist mode, rules, and active CIDRs).",
   {

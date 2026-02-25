@@ -1594,6 +1594,8 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'PATCH', path: '/services/:id', desc: 'Update a service (supports deletion_protection)' },
                   { method: 'GET', path: '/services/:id/retention', desc: 'Get service log retention policy' },
                   { method: 'PUT', path: '/services/:id/retention', desc: 'Set service log retention policy' },
+                  { method: 'GET', path: '/services/:id/mtls', desc: 'Get service mTLS policy (enabled/mode/allowed services)' },
+                  { method: 'PUT', path: '/services/:id/mtls', desc: 'Set service mTLS policy (strict/permissive + allowed services)' },
                   { method: 'GET', path: '/services/:id/access-control', desc: 'Get service ingress access-control policy (IP allowlist/blocklist + active CIDRs)' },
                   { method: 'PUT', path: '/services/:id/access-control', desc: 'Set service ingress access-control policy (mode, CIDR rules, optional deny response)' },
                   { method: 'GET', path: '/services/:id/access-control/log', desc: 'List recent access-control policy change events for the service' },
@@ -1919,7 +1921,7 @@ npm run build`} />
                   <tbody className="text-content-secondary">
                     {[
                       ['Auth', 'whoami, get_rate_limit'],
-                      ['Services', 'list (with server-side filters + limit/cursor pagination), get, create, update, exec command (sync in-container), get/set retention policy, get/set ingress access control + list policy-change log, delete (token-confirmed soft delete), restore, restart, suspend, resume, search/filter'],
+                      ['Services', 'list (with server-side filters + limit/cursor pagination), get, create, update, exec command (sync in-container), get/set retention policy, get/set mTLS policy, get/set ingress access control + list policy-change log, delete (token-confirmed soft delete), restore, restart, suspend, resume, search/filter'],
                       ['Bulk Operations', 'bulk update services, bulk deploy, bulk restart, bulk set env vars, bulk update databases, plus bulk suspend/resume helpers'],
                       ['Deploys', 'trigger, list (status/branch/since/until + limit/cursor pagination), get, wait_for_deploy, rollback, queue position + estimated wait'],
                       ['Env Vars', 'list (limit/cursor pagination), set (bulk replace), upsert (additive), get/set/enable/disable GitHub Actions deploy gate, set workflow allowlist'],

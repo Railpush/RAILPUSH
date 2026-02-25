@@ -690,6 +690,11 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 		}
 		cleanEnv[key] = v
 	}
+	mtlsConfig, _ := ParseServiceMTLSConfig(cleanEnv[ServiceMTLSConfigEnvKey], time.Now().UTC())
+	mtlsStrict := IsStrictServiceMTLS(mtlsConfig)
+	if mtlsStrict {
+		podLabels[rpLabelMTLSStrict] = "true"
+	}
 	ingressPolicyAnnotations := ingressPolicyAnnotationsFromEnv(cleanEnv)
 	probes := probeTuningFromEnv(cleanEnv)
 
@@ -701,6 +706,15 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 	// Enforce multi-tenant network isolation (best-effort upsert; fails deploy if it can't be applied).
 	if err := k.EnsureTenantNetworkPolicies(ctx, svc.WorkspaceID); err != nil {
 		return "", fmt.Errorf("ensure tenant networkpolicies: %w", err)
+	}
+	if mtlsStrict {
+		if err := k.upsertServiceMTLSStrictPolicy(ctx, svc, mtlsConfig.AllowedServices); err != nil {
+			return "", fmt.Errorf("ensure service mtls policy: %w", err)
+		}
+	} else {
+		if err := k.deleteServiceMTLSStrictPolicy(ctx, svc.ID); err != nil {
+			return "", fmt.Errorf("clear service mtls policy: %w", err)
+		}
 	}
 
 	// 1) Secret (env)
@@ -1461,6 +1475,7 @@ func (k *KubeDeployer) DeleteServiceResources(svc *models.Service) error {
 	}
 	_ = k.Client.CoreV1().Services(ns).Delete(ctx, name, metav1.DeleteOptions{})
 	_ = k.Client.AppsV1().Deployments(ns).Delete(ctx, name, metav1.DeleteOptions{})
+	_ = k.Client.NetworkingV1().NetworkPolicies(ns).Delete(ctx, kubeNetpolNameServiceMTLS(svc.ID), metav1.DeleteOptions{})
 	_ = k.Client.PolicyV1().PodDisruptionBudgets(ns).Delete(ctx, kubeServicePDBName(svc.ID), metav1.DeleteOptions{})
 	_ = k.Client.CoreV1().Secrets(ns).Delete(ctx, envSecretName, metav1.DeleteOptions{})
 
