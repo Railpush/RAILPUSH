@@ -91,7 +91,7 @@ func (h *GitHubHandler) getDecryptedToken(userID string) (string, error) {
 // ParseGitHubOwnerRepo extracts owner and repo from a GitHub URL.
 // e.g. "https://github.com/owner/repo.git" -> ("owner", "repo")
 func ParseGitHubOwnerRepo(repoURL string) (string, string) {
-	repoURL = strings.TrimSpace(strings.TrimSuffix(repoURL, ".git"))
+	repoURL = strings.TrimSuffix(strings.TrimSpace(repoURL), ".git")
 	if strings.HasPrefix(repoURL, "git@github.com:") {
 		repoURL = strings.TrimPrefix(repoURL, "git@github.com:")
 		segments := strings.SplitN(repoURL, "/", 3)
