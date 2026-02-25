@@ -71,6 +71,54 @@ type pvcInfo struct {
 	StorageClass string `json:"storage_class"`
 }
 
+func shortNodeName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	if idx := strings.Index(name, "."); idx > 0 {
+		return name[:idx]
+	}
+	return name
+}
+
+func buildNodeNameLookup(nodes []clusterNode) map[string]string {
+	lookup := map[string]string{}
+	for _, n := range nodes {
+		raw := strings.TrimSpace(n.Name)
+		if raw == "" {
+			continue
+		}
+		short := shortNodeName(raw)
+		lookup[raw] = raw
+		lookup[strings.ToLower(raw)] = raw
+		lookup[short] = raw
+		lookup[strings.ToLower(short)] = raw
+	}
+	return lookup
+}
+
+func resolveNodeName(lookup map[string]string, name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	if canonical, ok := lookup[name]; ok {
+		return canonical
+	}
+	if canonical, ok := lookup[strings.ToLower(name)]; ok {
+		return canonical
+	}
+	short := shortNodeName(name)
+	if canonical, ok := lookup[short]; ok {
+		return canonical
+	}
+	if canonical, ok := lookup[strings.ToLower(short)]; ok {
+		return canonical
+	}
+	return name
+}
+
 // ---------- handler ----------
 
 func (h *OpsClusterHandler) Summary(w http.ResponseWriter, r *http.Request) {
@@ -167,11 +215,25 @@ func (h *OpsClusterHandler) Summary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// ---------- pods (all namespaces) ----------
-	allPods, _ := kd.Client.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	// ---------- pods ----------
+	podScope := "all_namespaces"
+	podWarnings := []string{}
+	allPods, allPodsErr := kd.Client.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	if allPodsErr != nil {
+		podScope = ns
+		fallbackPods, fallbackErr := kd.Client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
+		if fallbackErr != nil {
+			allPods = nil
+			podWarnings = append(podWarnings, "pod listing unavailable")
+		} else {
+			allPods = fallbackPods
+			podWarnings = append(podWarnings, "cluster-wide pod listing unavailable; showing namespace pod counts")
+		}
+	}
 	phases := podPhases{}
 	nsPodCounts := map[string]int{}
 	nodePodCounts := map[string]int{}
+	nodeNameLookup := buildNodeNameLookup(nodes)
 	totalPods := 0
 	if allPods != nil {
 		totalPods = len(allPods.Items)
@@ -189,8 +251,8 @@ func (h *OpsClusterHandler) Summary(w http.ResponseWriter, r *http.Request) {
 				phases.Unknown++
 			}
 			nsPodCounts[p.Namespace]++
-			if p.Spec.NodeName != "" {
-				nodePodCounts[p.Spec.NodeName]++
+			if nodeName := resolveNodeName(nodeNameLookup, p.Spec.NodeName); nodeName != "" {
+				nodePodCounts[nodeName]++
 			}
 		}
 	}
@@ -271,6 +333,7 @@ func (h *OpsClusterHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"enabled":   true,
 		"namespace": ns,
+		"pod_scope": podScope,
 		"cluster_totals": clusterTotals{
 			Nodes:             len(nodes),
 			Pods:              totalPods,
@@ -285,5 +348,6 @@ func (h *OpsClusterHandler) Summary(w http.ResponseWriter, r *http.Request) {
 		"pod_phases": phases,
 		"namespaces": namespaces,
 		"pvcs":       pvcs,
+		"warnings":   podWarnings,
 	})
 }
