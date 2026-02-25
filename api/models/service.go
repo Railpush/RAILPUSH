@@ -224,7 +224,7 @@ func getServiceByIDExact(id string) (*Service, error) {
 	s := &Service{}
 	var projectID, environmentID string
 	err := database.DB.QueryRow(
-		"SELECT "+serviceSelectCols+" FROM services WHERE id=$1", id,
+		"SELECT "+serviceSelectCols+" FROM services WHERE id::text=$1", id,
 	).Scan(&s.ID, &s.WorkspaceID, &projectID, &environmentID, &s.Name, &s.Subdomain, &s.Type, &s.Runtime, &s.RepoURL, &s.Branch, &s.BuildCommand, &s.StartCommand, &s.DockerfilePath, &s.DockerContext, &s.ImageURL, &s.HealthCheckPath, &s.Port, &s.AutoDeploy, &s.IsSuspended, &s.MaxShutdownDelay, &s.PreDeployCommand, &s.StaticPublishPath, &s.Schedule, &s.Plan, &s.Instances, &s.DockerAccess, &s.BaseImage, &s.BuildInclude, &s.BuildExclude, &s.Status, &s.ContainerID, &s.HostPort, &s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil

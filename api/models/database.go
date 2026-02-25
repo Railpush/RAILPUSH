@@ -61,7 +61,7 @@ func getManagedDatabaseByIDExact(id string) (*ManagedDatabase, error) {
 	var standbyReplicaID sql.NullString
 	var externalPort sql.NullInt64
 	var passwordRotatedAt sql.NullTime
-	err := database.DB.QueryRow("SELECT id, COALESCE(workspace_id::text,''), name, COALESCE(plan,'starter'), COALESCE(pg_version,16), COALESCE(container_id,''), COALESCE(host,'localhost'), COALESCE(port,5432), external_port, COALESCE(db_name,''), COALESCE(username,''), COALESCE(encrypted_password,''), COALESCE(status,'creating'), COALESCE(ha_enabled,false), COALESCE(ha_strategy,'none'), standby_replica_id::text, COALESCE(init_script,''), created_at, password_rotated_at FROM managed_databases WHERE id=$1", id).Scan(
+	err := database.DB.QueryRow("SELECT id, COALESCE(workspace_id::text,''), name, COALESCE(plan,'starter'), COALESCE(pg_version,16), COALESCE(container_id,''), COALESCE(host,'localhost'), COALESCE(port,5432), external_port, COALESCE(db_name,''), COALESCE(username,''), COALESCE(encrypted_password,''), COALESCE(status,'creating'), COALESCE(ha_enabled,false), COALESCE(ha_strategy,'none'), standby_replica_id::text, COALESCE(init_script,''), created_at, password_rotated_at FROM managed_databases WHERE id::text=$1", id).Scan(
 		&d.ID, &d.WorkspaceID, &d.Name, &d.Plan, &d.PGVersion, &d.ContainerID, &d.Host, &d.Port, &externalPort, &d.DBName, &d.Username, &d.EncryptedPassword, &d.Status, &d.HAEnabled, &d.HAStrategy, &standbyReplicaID, &d.InitScript, &d.CreatedAt, &passwordRotatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil

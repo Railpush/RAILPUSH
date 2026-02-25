@@ -43,7 +43,7 @@ func GetManagedKeyValue(id string) (*ManagedKeyValue, error) {
 
 func getManagedKeyValueByIDExact(id string) (*ManagedKeyValue, error) {
 	kv := &ManagedKeyValue{}
-	err := database.DB.QueryRow("SELECT id, COALESCE(workspace_id::text,''), name, COALESCE(plan,'starter'), COALESCE(container_id,''), COALESCE(host,'localhost'), COALESCE(port,6379), COALESCE(encrypted_password,''), COALESCE(maxmemory_policy,'allkeys-lru'), COALESCE(status,'creating'), created_at FROM managed_keyvalue WHERE id=$1", id).Scan(
+	err := database.DB.QueryRow("SELECT id, COALESCE(workspace_id::text,''), name, COALESCE(plan,'starter'), COALESCE(container_id,''), COALESCE(host,'localhost'), COALESCE(port,6379), COALESCE(encrypted_password,''), COALESCE(maxmemory_policy,'allkeys-lru'), COALESCE(status,'creating'), created_at FROM managed_keyvalue WHERE id::text=$1", id).Scan(
 		&kv.ID, &kv.WorkspaceID, &kv.Name, &kv.Plan, &kv.ContainerID, &kv.Host, &kv.Port, &kv.EncryptedPassword, &kv.MaxmemoryPolicy, &kv.Status, &kv.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
