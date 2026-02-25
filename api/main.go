@@ -191,14 +191,10 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	samlH := handlers.NewSamlSSOHandler(cfg)
 	aiFixH := handlers.NewAIFixHandler(cfg, worker)
 	tplH := handlers.NewTemplateHandler(cfg, worker)
-	verH := handlers.NewAPIVersionHandler()
 	regRouter := registrar.NewProviderRouter(cfg.Registrar)
 	rdH := handlers.NewRegisteredDomainHandler(cfg, regRouter)
 
 	api := r.PathPrefix("/api/v1").Subrouter()
-	api.Use(middleware.APIVersionMiddleware())
-	api.HandleFunc("/version", verH.GetVersion).Methods("GET")
-	api.HandleFunc("/version/changelog", verH.GetVersionChangelog).Methods("GET")
 
 	api.HandleFunc("/auth/register", auth.Register).Methods("POST")
 	api.HandleFunc("/auth/login", auth.Login).Methods("POST")
