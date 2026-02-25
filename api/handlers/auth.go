@@ -433,16 +433,32 @@ func (h *AuthHandler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	if keys == nil {
 		keys = []models.APIKey{}
 	}
+	for i := range keys {
+		if len(keys[i].Scopes) == 0 {
+			keys[i].Scopes = []string{models.APIKeyScopeAll}
+		}
+	}
 	utils.RespondJSON(w, http.StatusOK, keys)
 }
 
 func (h *AuthHandler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r)
 	var req struct {
-		Name string `json:"name"`
+		Name      string     `json:"name"`
+		Scopes    []string   `json:"scopes"`
+		ExpiresAt *time.Time `json:"expires_at"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.ExpiresAt != nil && req.ExpiresAt.Before(time.Now()) {
+		utils.RespondError(w, http.StatusBadRequest, "expires_at must be in the future")
+		return
+	}
+	scopes, err := models.NormalizeAndValidateAPIKeyScopes(req.Scopes)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	rawKey, err := utils.GenerateRandomString(32)
@@ -455,12 +471,18 @@ func (h *AuthHandler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to hash key")
 		return
 	}
-	key := &models.APIKey{UserID: userID, Name: req.Name, KeyHash: hash}
+	key := &models.APIKey{UserID: userID, Name: req.Name, KeyHash: hash, Scopes: scopes, ExpiresAt: req.ExpiresAt}
 	if err := models.CreateAPIKey(key); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to create api key")
 		return
 	}
-	utils.RespondJSON(w, http.StatusCreated, map[string]interface{}{"id": key.ID, "key": rawKey, "name": key.Name})
+	utils.RespondJSON(w, http.StatusCreated, map[string]interface{}{
+		"id":         key.ID,
+		"key":        rawKey,
+		"name":       key.Name,
+		"scopes":     key.Scopes,
+		"expires_at": key.ExpiresAt,
+	})
 }
 
 func (h *AuthHandler) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {

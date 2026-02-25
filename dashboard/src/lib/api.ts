@@ -60,9 +60,9 @@ export const auth = {
 
 // API Keys
 export const apiKeys = {
-  list: () => request<Array<{ id: string; name: string; created_at: string }>>('/auth/api-keys'),
-  create: (name: string) =>
-    request<{ id: string; key: string; name: string }>('/auth/api-keys', { method: 'POST', body: JSON.stringify({ name }) }),
+  list: () => request<Array<{ id: string; name: string; scopes: string[]; expires_at?: string | null; created_at: string }>>('/auth/api-keys'),
+  create: (payload: { name: string; scopes?: string[]; expires_at?: string | null }) =>
+    request<{ id: string; key: string; name: string; scopes: string[]; expires_at?: string | null }>('/auth/api-keys', { method: 'POST', body: JSON.stringify(payload) }),
   delete: (id: string) =>
     request<{ status: string }>(`/auth/api-keys/${id}`, { method: 'DELETE' }),
 };

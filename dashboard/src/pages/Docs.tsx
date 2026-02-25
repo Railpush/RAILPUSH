@@ -1500,7 +1500,7 @@ railpush databases create --name mydb --engine postgresql --plan starter`} />
               {/* ── REST API ── */}
               <h3 className="text-lg font-semibold mt-8 mb-3">REST API</h3>
               <p className="text-content-secondary text-base leading-relaxed mb-6">
-                The RailPush API is a RESTful JSON API. Authenticate with a Bearer token from <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-content-primary text-xs font-mono">/api/v1/auth/login</code> (JWT) or an API key from <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-content-primary text-xs font-mono">/api/v1/auth/api-keys</code>.
+                The RailPush API is a RESTful JSON API. Authenticate with a Bearer token from <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-content-primary text-xs font-mono">/api/v1/auth/login</code> (JWT) or a scoped API key from <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-content-primary text-xs font-mono">/api/v1/auth/api-keys</code>.
               </p>
 
               <h3 className="text-lg font-semibold mb-3">Authentication</h3>
@@ -1693,15 +1693,18 @@ curl https://railpush.com/api/v1/services \\
 
               <h3 className="text-lg font-semibold mb-3">1. Create an API Key</h3>
               <p className="text-content-secondary text-sm leading-relaxed mb-4">
-                Go to <strong>Settings &rarr; API Keys</strong> in the dashboard (or use the API) to create an API key. The raw key is shown only once&mdash;copy it immediately.
+                Go to <strong>Settings &rarr; API Keys</strong> in the dashboard (or use the API) to create a scoped API key. The raw key is shown only once&mdash;copy it immediately.
               </p>
               <CodeBlock language="bash" filename="terminal" code={`# Or via the API:
 curl -X POST https://apps.railpush.com/api/v1/auth/api-keys \\
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
   -H "Content-Type: application/json" \\
-  -d '{"name": "mcp-server"}'
+  -d '{"name": "mcp-server", "scopes": ["read", "write", "deploy"], "expires_at": "2026-12-31T23:59:59Z"}'
 
-# Response: {"id": "...", "key": "abc123...", "name": "mcp-server"}`} />
+# Response: {"id": "...", "key": "abc123...", "name": "mcp-server", "scopes": ["read", "write", "deploy"]}`} />
+              <p className="text-xs text-content-tertiary mb-4">
+                Available scopes: <code className="text-[11px] bg-surface-tertiary px-1 rounded">read</code>, <code className="text-[11px] bg-surface-tertiary px-1 rounded">write</code>, <code className="text-[11px] bg-surface-tertiary px-1 rounded">deploy</code>, <code className="text-[11px] bg-surface-tertiary px-1 rounded">support</code>, <code className="text-[11px] bg-surface-tertiary px-1 rounded">ops</code>, <code className="text-[11px] bg-surface-tertiary px-1 rounded">billing</code>, <code className="text-[11px] bg-surface-tertiary px-1 rounded">admin</code>, or <code className="text-[11px] bg-surface-tertiary px-1 rounded">*</code> for full access.
+              </p>
 
               <h3 className="text-lg font-semibold mt-8 mb-3">2. Install the MCP Server</h3>
               <CodeBlock language="bash" filename="terminal" code={`# Clone the repo and build

@@ -7,6 +7,16 @@ import { Button } from '../components/ui/Button';
 import { auth, apiKeys, settings as settingsApi } from '../lib/api';
 import { useSession } from '../lib/session';
 
+const API_KEY_SCOPE_OPTIONS: Array<{ value: string; label: string; hint: string }> = [
+  { value: 'read', label: 'Read', hint: 'View resources and status' },
+  { value: 'write', label: 'Write', hint: 'Create and update resources' },
+  { value: 'deploy', label: 'Deploy', hint: 'Trigger deploys and restarts' },
+  { value: 'support', label: 'Support', hint: 'Read/reply support tickets' },
+  { value: 'ops', label: 'Ops', hint: 'Access /ops endpoints' },
+  { value: 'billing', label: 'Billing', hint: 'Access billing endpoints' },
+  { value: 'admin', label: 'Admin', hint: 'Manage API keys and admin actions' },
+];
+
 export function Settings() {
   const navigate = useNavigate();
   const { user, workspace } = useSession();
@@ -17,9 +27,11 @@ export function Settings() {
   const [blueprintAISaving, setBlueprintAISaving] = useState<boolean>(false);
 
   // API Keys state
-  const [keys, setKeys] = useState<Array<{ id: string; name: string; created_at: string }>>([]);
+  const [keys, setKeys] = useState<Array<{ id: string; name: string; scopes: string[]; expires_at?: string | null; created_at: string }>>([]);
   const [keysLoading, setKeysLoading] = useState(true);
   const [newKeyName, setNewKeyName] = useState('');
+  const [newKeyScopes, setNewKeyScopes] = useState<string[]>(['read', 'write', 'deploy']);
+  const [newKeyExpiresAt, setNewKeyExpiresAt] = useState('');
   const [creatingKey, setCreatingKey] = useState(false);
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState(false);
@@ -37,11 +49,21 @@ export function Settings() {
 
   const handleCreateKey = async () => {
     const name = newKeyName.trim() || 'Untitled key';
+    if (newKeyScopes.length === 0) {
+      toast.error('Select at least one scope');
+      return;
+    }
     setCreatingKey(true);
     try {
-      const result = await apiKeys.create(name);
+      const result = await apiKeys.create({
+        name,
+        scopes: newKeyScopes,
+        expires_at: newKeyExpiresAt ? new Date(`${newKeyExpiresAt}T23:59:59Z`).toISOString() : null,
+      });
       setRevealedKey(result.key);
       setNewKeyName('');
+      setNewKeyScopes(['read', 'write', 'deploy']);
+      setNewKeyExpiresAt('');
       toast.success('API key created');
       loadKeys();
     } catch (e) {
@@ -49,6 +71,14 @@ export function Settings() {
     } finally {
       setCreatingKey(false);
     }
+  };
+
+  const toggleScope = (scope: string) => {
+    setNewKeyScopes((prev) => (
+      prev.includes(scope)
+        ? prev.filter((s) => s !== scope)
+        : [...prev, scope]
+    ));
   };
 
   const handleDeleteKey = async (id: string) => {
@@ -275,19 +305,53 @@ export function Settings() {
               )}
 
               {/* Create new key */}
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  placeholder="Key name (e.g. mcp-server)"
-                  value={newKeyName}
-                  onChange={(e) => setNewKeyName(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleCreateKey()}
-                  className="flex-1 bg-surface-tertiary border border-border-default rounded-lg px-3 py-2 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:border-brand focus:ring-1 focus:ring-brand/20 transition-all"
-                />
-                <Button size="sm" loading={creatingKey} onClick={handleCreateKey}>
-                  <Plus className="w-3.5 h-3.5 mr-1" />
-                  Create
-                </Button>
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="Key name (e.g. mcp-server)"
+                    value={newKeyName}
+                    onChange={(e) => setNewKeyName(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleCreateKey()}
+                    className="flex-1 bg-surface-tertiary border border-border-default rounded-lg px-3 py-2 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:border-brand focus:ring-1 focus:ring-brand/20 transition-all"
+                  />
+                  <Button size="sm" loading={creatingKey} onClick={handleCreateKey}>
+                    <Plus className="w-3.5 h-3.5 mr-1" />
+                    Create
+                  </Button>
+                </div>
+
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-content-tertiary mb-2">Scopes</p>
+                  <div className="flex flex-wrap gap-2">
+                    {API_KEY_SCOPE_OPTIONS.map((scope) => {
+                      const selected = newKeyScopes.includes(scope.value);
+                      return (
+                        <button
+                          key={scope.value}
+                          onClick={() => toggleScope(scope.value)}
+                          className={`px-2.5 py-1.5 rounded-md border text-[11px] transition-colors ${selected
+                            ? 'border-brand/50 bg-brand/15 text-brand'
+                            : 'border-border-default bg-surface-tertiary text-content-tertiary hover:text-content-primary'
+                            }`}
+                          title={scope.hint}
+                        >
+                          {scope.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-content-tertiary min-w-[90px]">Expires (opt)</label>
+                  <input
+                    type="date"
+                    value={newKeyExpiresAt}
+                    onChange={(e) => setNewKeyExpiresAt(e.target.value)}
+                    className="bg-surface-tertiary border border-border-default rounded-lg px-3 py-2 text-xs text-content-primary focus:outline-none focus:border-brand focus:ring-1 focus:ring-brand/20 transition-all"
+                  />
+                </div>
               </div>
 
               {/* Existing keys */}
@@ -306,6 +370,18 @@ export function Settings() {
                           <span className="text-[10px] text-content-tertiary">
                             Created {new Date(k.created_at).toLocaleDateString()}
                           </span>
+                          {k.expires_at && (
+                            <span className="text-[10px] text-content-tertiary">
+                              Expires {new Date(k.expires_at).toLocaleDateString()}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {(k.scopes || []).map((scope) => (
+                            <span key={`${k.id}-${scope}`} className="px-1.5 py-0.5 rounded bg-surface-tertiary border border-border-subtle text-[10px] text-content-tertiary">
+                              {scope}
+                            </span>
+                          ))}
                         </div>
                       </div>
                       <button

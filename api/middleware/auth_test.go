@@ -3,11 +3,13 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/railpush/api/config"
+	"github.com/railpush/api/models"
 )
 
 func signedToken(t *testing.T, secret, subject string) string {
@@ -71,5 +73,28 @@ func TestAuthenticateRequestRejectsQueryToken(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://example.com?token="+tok, nil)
 	if _, err := AuthenticateRequest(cfg, req); err == nil {
 		t.Fatalf("expected query token to be rejected")
+	}
+}
+
+func TestRequiredAPIKeyScopesForRequest(t *testing.T) {
+	tests := []struct {
+		method string
+		path   string
+		want   []string
+	}{
+		{method: http.MethodGet, path: "/api/v1/services", want: []string{models.APIKeyScopeRead}},
+		{method: http.MethodPost, path: "/api/v1/services", want: []string{models.APIKeyScopeWrite}},
+		{method: http.MethodPost, path: "/api/v1/services/abc/deploys", want: []string{models.APIKeyScopeDeploy}},
+		{method: http.MethodGet, path: "/api/v1/ops/tickets", want: []string{models.APIKeyScopeOps}},
+		{method: http.MethodPost, path: "/api/v1/auth/api-keys", want: []string{models.APIKeyScopeAdmin}},
+		{method: http.MethodGet, path: "/api/v1/billing", want: []string{models.APIKeyScopeBilling, models.APIKeyScopeRead}},
+	}
+
+	for _, tc := range tests {
+		req := httptest.NewRequest(tc.method, "http://example.com"+tc.path, nil)
+		got := requiredAPIKeyScopesForRequest(req)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("requiredAPIKeyScopesForRequest(%s %s): got %v want %v", tc.method, tc.path, got, tc.want)
+		}
 	}
 }

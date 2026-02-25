@@ -2,8 +2,11 @@ package models
 
 import (
 	"database/sql"
+	"fmt"
+	"strings"
 	"time"
 
+	"github.com/lib/pq"
 	"github.com/railpush/api/database"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -32,6 +35,90 @@ type APIKey struct {
 	Scopes    []string   `json:"scopes"`
 	ExpiresAt *time.Time `json:"expires_at"`
 	CreatedAt time.Time  `json:"created_at"`
+}
+
+const (
+	APIKeyScopeAll     = "*"
+	APIKeyScopeRead    = "read"
+	APIKeyScopeWrite   = "write"
+	APIKeyScopeDeploy  = "deploy"
+	APIKeyScopeSupport = "support"
+	APIKeyScopeOps     = "ops"
+	APIKeyScopeBilling = "billing"
+	APIKeyScopeAdmin   = "admin"
+)
+
+var validAPIKeyScopes = map[string]struct{}{
+	APIKeyScopeAll:     {},
+	APIKeyScopeRead:    {},
+	APIKeyScopeWrite:   {},
+	APIKeyScopeDeploy:  {},
+	APIKeyScopeSupport: {},
+	APIKeyScopeOps:     {},
+	APIKeyScopeBilling: {},
+	APIKeyScopeAdmin:   {},
+}
+
+var DefaultAPIKeyScopes = []string{APIKeyScopeRead, APIKeyScopeWrite, APIKeyScopeDeploy}
+
+type ResolvedAPIKey struct {
+	ID        string
+	UserID    string
+	Scopes    []string
+	ExpiresAt *time.Time
+}
+
+func NormalizeAndValidateAPIKeyScopes(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return append([]string{}, DefaultAPIKeyScopes...), nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(raw))
+	for _, s := range raw {
+		norm := strings.ToLower(strings.TrimSpace(s))
+		if norm == "" {
+			continue
+		}
+		if _, ok := validAPIKeyScopes[norm]; !ok {
+			return nil, fmt.Errorf("invalid scope %q", s)
+		}
+		if norm == APIKeyScopeAll {
+			return []string{APIKeyScopeAll}, nil
+		}
+		if _, ok := seen[norm]; ok {
+			continue
+		}
+		seen[norm] = struct{}{}
+		out = append(out, norm)
+	}
+	if len(out) == 0 {
+		return append([]string{}, DefaultAPIKeyScopes...), nil
+	}
+	return out, nil
+}
+
+func HasAnyAPIKeyScope(granted []string, required ...string) bool {
+	normGranted := map[string]struct{}{}
+	for _, s := range granted {
+		norm := strings.ToLower(strings.TrimSpace(s))
+		if norm == "" {
+			continue
+		}
+		normGranted[norm] = struct{}{}
+	}
+	if _, ok := normGranted[APIKeyScopeAll]; ok {
+		return true
+	}
+	for _, s := range required {
+		norm := strings.ToLower(strings.TrimSpace(s))
+		if norm == "" {
+			continue
+		}
+		if _, ok := normGranted[norm]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func GetUserByGitHubID(ghID int64) (*User, error) {
@@ -132,9 +219,17 @@ func LinkGitHubToUser(userID string, githubID int64, username string, email stri
 }
 
 func CreateAPIKey(k *APIKey) error {
+	if k == nil {
+		return fmt.Errorf("missing api key")
+	}
+	scopes, err := NormalizeAndValidateAPIKeyScopes(k.Scopes)
+	if err != nil {
+		return err
+	}
+	k.Scopes = scopes
 	return database.DB.QueryRow(
-		"INSERT INTO api_keys (user_id, name, key_hash, expires_at) VALUES ($1, $2, $3, $4) RETURNING id, created_at",
-		k.UserID, k.Name, k.KeyHash, k.ExpiresAt,
+		"INSERT INTO api_keys (user_id, name, key_hash, scopes, expires_at) VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at",
+		k.UserID, k.Name, k.KeyHash, pq.Array(k.Scopes), k.ExpiresAt,
 	).Scan(&k.ID, &k.CreatedAt)
 }
 
@@ -144,7 +239,7 @@ func DeleteAPIKey(id, userID string) error {
 }
 
 func ListAPIKeys(userID string) ([]APIKey, error) {
-	rows, err := database.DB.Query("SELECT id, user_id, name, key_hash, expires_at, created_at FROM api_keys WHERE user_id=$1", userID)
+	rows, err := database.DB.Query("SELECT id, user_id, name, key_hash, scopes, expires_at, created_at FROM api_keys WHERE user_id=$1", userID)
 	if err != nil {
 		return nil, err
 	}
@@ -152,40 +247,59 @@ func ListAPIKeys(userID string) ([]APIKey, error) {
 	var keys []APIKey
 	for rows.Next() {
 		var k APIKey
-		if err := rows.Scan(&k.ID, &k.UserID, &k.Name, &k.KeyHash, &k.ExpiresAt, &k.CreatedAt); err != nil {
+		var scopes pq.StringArray
+		if err := rows.Scan(&k.ID, &k.UserID, &k.Name, &k.KeyHash, &scopes, &k.ExpiresAt, &k.CreatedAt); err != nil {
 			return nil, err
+		}
+		if len(scopes) == 0 {
+			k.Scopes = []string{APIKeyScopeAll}
+		} else {
+			k.Scopes = []string(scopes)
 		}
 		keys = append(keys, k)
 	}
 	return keys, nil
 }
 
-// ResolveAPIKey checks a raw API key against all stored hashes and returns the
-// owning user ID if a match is found.  Returns ("", nil) when no match.
-func ResolveAPIKey(rawKey string) (string, error) {
+// ResolveAPIKey checks a raw API key against stored hashes and returns
+// key identity + normalized scopes on match. Returns (nil, nil) when no match.
+func ResolveAPIKey(rawKey string) (*ResolvedAPIKey, error) {
 	rows, err := database.DB.Query(
-		"SELECT user_id, key_hash, expires_at FROM api_keys",
+		"SELECT id, user_id, key_hash, scopes, expires_at FROM api_keys",
 	)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer rows.Close()
 
 	now := time.Now()
 	for rows.Next() {
-		var userID, hash string
+		var id, userID, hash string
+		var scopes pq.StringArray
 		var expiresAt sql.NullTime
-		if err := rows.Scan(&userID, &hash, &expiresAt); err != nil {
-			return "", err
+		if err := rows.Scan(&id, &userID, &hash, &scopes, &expiresAt); err != nil {
+			return nil, err
 		}
 		if expiresAt.Valid && expiresAt.Time.Before(now) {
 			continue // expired
 		}
 		if bcrypt.CompareHashAndPassword([]byte(hash), []byte(rawKey)) == nil {
-			return userID, nil
+			normalizedScopes := []string{APIKeyScopeAll}
+			if len(scopes) > 0 {
+				normalized, nerr := NormalizeAndValidateAPIKeyScopes([]string(scopes))
+				if nerr == nil && len(normalized) > 0 {
+					normalizedScopes = normalized
+				}
+			}
+			var expPtr *time.Time
+			if expiresAt.Valid {
+				exp := expiresAt.Time
+				expPtr = &exp
+			}
+			return &ResolvedAPIKey{ID: id, UserID: userID, Scopes: normalizedScopes, ExpiresAt: expPtr}, nil
 		}
 	}
-	return "", nil
+	return nil, nil
 }
 
 func GetUserGitHubToken(userID string) (string, error) {
