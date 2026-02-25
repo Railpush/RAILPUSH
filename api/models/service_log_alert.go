@@ -2,6 +2,7 @@ package models
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -36,7 +37,7 @@ type ServiceLogAlert struct {
 
 func scanServiceLogAlert(scanner interface{ Scan(dest ...interface{}) error }) (*ServiceLogAlert, error) {
 	var a ServiceLogAlert
-	var channels []string
+	var channelsJSON string
 	var lastEval sql.NullTime
 	var lastTrig sql.NullTime
 	var lastRes sql.NullTime
@@ -54,7 +55,7 @@ func scanServiceLogAlert(scanner interface{ Scan(dest ...interface{}) error }) (
 		&a.WindowSeconds,
 		&a.Comparison,
 		&a.CooldownSeconds,
-		&channels,
+		&channelsJSON,
 		&a.WebhookURL,
 		&a.Priority,
 		&a.Status,
@@ -68,6 +69,10 @@ func scanServiceLogAlert(scanner interface{ Scan(dest ...interface{}) error }) (
 	)
 	if err != nil {
 		return nil, err
+	}
+	var channels []string
+	if strings.TrimSpace(channelsJSON) != "" {
+		_ = json.Unmarshal([]byte(channelsJSON), &channels)
 	}
 	a.Channels = normalizeLogAlertChannels(channels)
 	if lastEval.Valid {
@@ -141,7 +146,7 @@ func NormalizeLogAlertChannels(channels []string) []string {
 func ListServiceLogAlerts(serviceID string) ([]ServiceLogAlert, error) {
 	rows, err := database.DB.Query(
 		`SELECT id, service_id, workspace_id, name, enabled, COALESCE(filter_query,''), COALESCE(pattern,''),
-		        threshold, window_seconds, comparison, cooldown_seconds, COALESCE(channels, '{incident}'::text[]),
+		        threshold, window_seconds, comparison, cooldown_seconds, COALESCE(array_to_json(channels)::text, '["incident"]'),
 		        COALESCE(webhook_url,''), COALESCE(priority,'normal'), COALESCE(status,'ok'), COALESCE(last_match_count,0),
 		        last_evaluated_at, last_triggered_at, last_resolved_at, created_by::text, created_at, updated_at
 		   FROM service_log_alerts
@@ -171,7 +176,7 @@ func ListServiceLogAlerts(serviceID string) ([]ServiceLogAlert, error) {
 func GetServiceLogAlert(id string) (*ServiceLogAlert, error) {
 	row := database.DB.QueryRow(
 		`SELECT id, service_id, workspace_id, name, enabled, COALESCE(filter_query,''), COALESCE(pattern,''),
-		        threshold, window_seconds, comparison, cooldown_seconds, COALESCE(channels, '{incident}'::text[]),
+		        threshold, window_seconds, comparison, cooldown_seconds, COALESCE(array_to_json(channels)::text, '["incident"]'),
 		        COALESCE(webhook_url,''), COALESCE(priority,'normal'), COALESCE(status,'ok'), COALESCE(last_match_count,0),
 		        last_evaluated_at, last_triggered_at, last_resolved_at, created_by::text, created_at, updated_at
 		   FROM service_log_alerts
@@ -262,7 +267,7 @@ func ListEnabledServiceLogAlerts(limit int) ([]ServiceLogAlert, error) {
 	}
 	rows, err := database.DB.Query(
 		`SELECT id, service_id, workspace_id, name, enabled, COALESCE(filter_query,''), COALESCE(pattern,''),
-		        threshold, window_seconds, comparison, cooldown_seconds, COALESCE(channels, '{incident}'::text[]),
+		        threshold, window_seconds, comparison, cooldown_seconds, COALESCE(array_to_json(channels)::text, '["incident"]'),
 		        COALESCE(webhook_url,''), COALESCE(priority,'normal'), COALESCE(status,'ok'), COALESCE(last_match_count,0),
 		        last_evaluated_at, last_triggered_at, last_resolved_at, created_by::text, created_at, updated_at
 		   FROM service_log_alerts
