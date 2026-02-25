@@ -152,7 +152,10 @@ func validateCriticalConfig(cfg *config.Config) error {
 		return fmt.Errorf("missing config")
 	}
 	if strings.TrimSpace(cfg.Database.Password) == "" && strings.TrimSpace(os.Getenv("DATABASE_URL")) == "" {
-		return fmt.Errorf("DB_PASSWORD is required")
+		host := strings.ToLower(strings.TrimSpace(cfg.Database.Host))
+		if host != "localhost" && host != "127.0.0.1" {
+			return fmt.Errorf("DB_PASSWORD is required")
+		}
 	}
 	if strings.TrimSpace(cfg.JWT.Secret) == "" {
 		return fmt.Errorf("JWT_SECRET is required")
