@@ -432,6 +432,9 @@ disable_github_actions_deploy_gate(service_id)`} />
               <p className="text-xs text-content-tertiary mb-3">
                 Security default: <code className="text-[11px] bg-surface-tertiary px-1 rounded">GET /databases/:id</code> and <code className="text-[11px] bg-surface-tertiary px-1 rounded">GET /keyvalue/:id</code> return redacted credentials. Plaintext credentials require explicit reveal endpoints and acknowledgement.
               </p>
+              <p className="text-xs text-content-tertiary mb-3">
+                External PostgreSQL TCP endpoints are currently disabled until per-database IP allowlisting is available. Use internal service-to-service URLs for managed databases.
+              </p>
               <CodeBlock language="bash" filename=".env" code={`DATABASE_URL=postgres://mydb:password@localhost:5432/mydb
 
 # Or use individual variables:

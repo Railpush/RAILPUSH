@@ -663,8 +663,8 @@ func (w *Worker) Start(numWorkers int) {
 	if w.Config != nil && w.Config.Kubernetes.Enabled {
 		w.wg.Add(1)
 		go w.tenantNetpolLoop()
-		// One-time backfill: assign external TCP ports to existing databases that don't have one.
-		go w.backfillDatabaseExternalPorts()
+		// One-time hardening: remove legacy external database TCP proxy exposure.
+		go w.revokeDatabaseExternalPorts()
 	}
 	// Transactional email outbox sender (runs only in worker pods).
 	if w.Config != nil && w.Config.Email.Enabled() {
@@ -2033,19 +2033,6 @@ func (w *Worker) ProvisionDatabase(db *models.ManagedDatabase, password string) 
 			w.syncDatabaseServiceLinks(db.ID)
 			log.Printf("Database %s provisioned successfully in k8s (%s)", db.Name, name)
 
-			// Allocate an external TCP port and register it with the nginx ingress TCP proxy.
-			if extPort, err := models.AllocateExternalPort(db.ID); err != nil {
-				log.Printf("Database %s: failed to allocate external port: %v (internal access still works)", db.Name, err)
-			} else {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				if err := kd.SetTCPServiceEntry(ctx, extPort, name, 5432); err != nil {
-					log.Printf("Database %s: failed to set tcp-services entry for port %d: %v", db.Name, extPort, err)
-				} else {
-					log.Printf("Database %s: external access enabled on port %d", db.Name, extPort)
-				}
-				cancel()
-			}
-
 			// Run init script if specified (one-time, on first provision only).
 			if initScript := strings.TrimSpace(db.InitScript); initScript != "" {
 				log.Printf("Database %s: running init script (%d bytes)", db.Name, len(initScript))
@@ -2311,54 +2298,42 @@ func (w *Worker) ProvisionKeyValue(kv *models.ManagedKeyValue, password string) 
 	}()
 }
 
-// backfillDatabaseExternalPorts assigns external TCP ports to all existing databases
-// that don't have one yet and registers them in the nginx tcp-services ConfigMap.
-// Runs once on worker startup; safe to call repeatedly (idempotent).
-func (w *Worker) backfillDatabaseExternalPorts() {
+// revokeDatabaseExternalPorts removes legacy external database TCP proxy entries
+// and clears stored external_port assignments. Databases remain reachable only via
+// internal service networking.
+func (w *Worker) revokeDatabaseExternalPorts() {
 	if w == nil || w.Config == nil || !w.Config.Kubernetes.Enabled {
 		return
 	}
 	kd, err := w.GetKubeDeployer()
 	if err != nil || kd == nil {
-		log.Printf("backfillDatabaseExternalPorts: kube deployer not available: %v", err)
+		log.Printf("revokeDatabaseExternalPorts: kube deployer not available: %v", err)
 		return
 	}
 	dbs, err := models.ListManagedDatabases()
 	if err != nil {
-		log.Printf("backfillDatabaseExternalPorts: list databases failed: %v", err)
+		log.Printf("revokeDatabaseExternalPorts: list databases failed: %v", err)
 		return
 	}
-	var backfilled int
+	var revoked int
 	for _, db := range dbs {
-		if db.ExternalPort > 0 {
-			// Already has a port — just ensure the tcp-services entry exists.
-			svcName := kubeManagedDatabaseName(db.ID)
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if err := kd.SetTCPServiceEntry(ctx, db.ExternalPort, svcName, 5432); err != nil {
-				log.Printf("backfillDatabaseExternalPorts: set tcp entry for %s port %d: %v", db.Name, db.ExternalPort, err)
-			}
-			cancel()
+		if db.ExternalPort <= 0 {
 			continue
 		}
-		if db.Status != "available" {
-			continue // skip databases still provisioning or failed
-		}
-		port, err := models.AllocateExternalPort(db.ID)
-		if err != nil {
-			log.Printf("backfillDatabaseExternalPorts: allocate port for %s: %v", db.Name, err)
-			continue
-		}
-		svcName := kubeManagedDatabaseName(db.ID)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := kd.SetTCPServiceEntry(ctx, port, svcName, 5432); err != nil {
-			log.Printf("backfillDatabaseExternalPorts: set tcp entry for %s port %d: %v", db.Name, port, err)
+		if err := kd.RemoveTCPServiceEntry(ctx, db.ExternalPort); err != nil {
+			log.Printf("revokeDatabaseExternalPorts: remove tcp entry for %s port %d: %v", db.Name, db.ExternalPort, err)
 		}
 		cancel()
-		backfilled++
-		log.Printf("backfillDatabaseExternalPorts: assigned port %d to database %s", port, db.Name)
+		if err := models.ClearExternalPort(db.ID); err != nil {
+			log.Printf("revokeDatabaseExternalPorts: clear external port for %s: %v", db.Name, err)
+			continue
+		}
+		revoked++
+		log.Printf("revokeDatabaseExternalPorts: disabled external access for database %s (port %d)", db.Name, db.ExternalPort)
 	}
-	if backfilled > 0 {
-		log.Printf("backfillDatabaseExternalPorts: assigned external ports to %d databases", backfilled)
+	if revoked > 0 {
+		log.Printf("revokeDatabaseExternalPorts: removed external access from %d databases", revoked)
 	}
-	log.Printf("backfillDatabaseExternalPorts: complete (%d databases checked)", len(dbs))
+	log.Printf("revokeDatabaseExternalPorts: complete (%d databases checked)", len(dbs))
 }

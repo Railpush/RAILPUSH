@@ -104,10 +104,18 @@ function InfoTab({ db }: { db: ManagedDatabase }) {
           <Card>
             <div className="text-xs font-medium text-content-secondary mb-1.5">External Database URL</div>
             <div className="flex items-center gap-2">
-              <code className="flex-1 text-xs font-mono text-content-primary bg-surface-tertiary px-3 py-2 rounded-md overflow-x-auto">
-                {db.external_url}
-              </code>
-              <CopyButton text={db.external_url} />
+              {db.external_url ? (
+                <>
+                  <code className="flex-1 text-xs font-mono text-content-primary bg-surface-tertiary px-3 py-2 rounded-md overflow-x-auto">
+                    {db.external_url}
+                  </code>
+                  <CopyButton text={db.external_url} />
+                </>
+              ) : (
+                <div className="flex-1 text-xs text-content-tertiary bg-surface-tertiary px-3 py-2 rounded-md">
+                  External database access is disabled until IP allowlisting support is available.
+                </div>
+              )}
             </div>
           </Card>
           <Card>
@@ -293,20 +301,20 @@ function AccessControlTab({ db }: { db: ManagedDatabase }) {
           <div className="flex items-center justify-between p-3 bg-surface-tertiary rounded-lg">
             <div>
               <div className="text-sm font-medium text-content-primary">External Access</div>
-              <div className="text-xs text-content-tertiary mt-0.5">Accessible from outside the platform via public URL</div>
+              <div className="text-xs text-content-tertiary mt-0.5">Disabled pending IP allowlisting support</div>
             </div>
-            <StatusBadge status="live" />
+            <StatusBadge status="created" pulse={false} />
           </div>
         </div>
       </Card>
 
       <Card>
         <h3 className="text-sm font-semibold text-content-primary mb-3">Allowed IP Addresses</h3>
-        <p className="text-xs text-content-tertiary mb-4">Restrict external access to specific IP addresses. Leave empty to allow all.</p>
+        <p className="text-xs text-content-tertiary mb-4">External access is currently disabled platform-wide while per-database IP allowlisting is being rolled out.</p>
         <div className="p-8 text-center border border-dashed border-border-default rounded-lg">
           <Shield className="w-8 h-8 text-content-tertiary mx-auto mb-2" />
-          <div className="text-sm text-content-secondary">No IP restrictions configured</div>
-          <div className="text-xs text-content-tertiary mt-1">All external connections are currently allowed</div>
+          <div className="text-sm text-content-secondary">External access disabled</div>
+          <div className="text-xs text-content-tertiary mt-1">IP allowlisting controls will appear here when available</div>
         </div>
       </Card>
 

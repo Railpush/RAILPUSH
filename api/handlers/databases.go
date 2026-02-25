@@ -250,26 +250,8 @@ func (h *DatabaseHandler) databaseResponse(db *models.ManagedDatabase, password 
 		passwordForURL = password
 	}
 
-	externalHost := db.Host
-	if strings.TrimSpace(h.Config.ControlPlane.Domain) != "" {
-		externalHost = h.Config.ControlPlane.Domain
-	}
-	// DB_EXTERNAL_HOST is a DNS-only record (no Cloudflare proxy) pointing to
-	// the ingress node IP. Falls back to control plane domain if not set.
-	dbExtHost := strings.TrimSpace(h.Config.ControlPlane.DBExternalHost)
-	if dbExtHost == "" {
-		dbExtHost = externalHost
-	}
-
 	internalURL := "postgresql://" + db.Username + ":" + passwordForURL + "@" + db.Host + ":" + intToStr(db.Port) + "/" + db.DBName
 	psqlCommand := "PGPASSWORD=" + passwordForURL + " psql -h " + db.Host + " -p " + intToStr(db.Port) + " -U " + db.Username + " " + db.DBName
-
-	externalURL := ""
-	externalPSQL := ""
-	if db.ExternalPort > 0 && dbExtHost != "" {
-		externalURL = "postgresql://" + db.Username + ":" + passwordForURL + "@" + dbExtHost + ":" + intToStr(db.ExternalPort) + "/" + db.DBName + "?sslmode=require"
-		externalPSQL = "PGPASSWORD=" + passwordForURL + " psql -h " + dbExtHost + " -p " + intToStr(db.ExternalPort) + " -U " + db.Username + " " + db.DBName
-	}
 
 	resp := map[string]interface{}{
 		"id":                 db.ID,
@@ -280,7 +262,7 @@ func (h *DatabaseHandler) databaseResponse(db *models.ManagedDatabase, password 
 		"container_id":       db.ContainerID,
 		"host":               db.Host,
 		"port":               db.Port,
-		"external_port":      db.ExternalPort,
+		"external_port":      0,
 		"db_name":            db.DBName,
 		"username":           db.Username,
 		"status":             db.Status,
@@ -289,9 +271,10 @@ func (h *DatabaseHandler) databaseResponse(db *models.ManagedDatabase, password 
 		"standby_replica_id": db.StandbyReplicaID,
 		"init_script":        db.InitScript,
 		"created_at":         db.CreatedAt,
-		"internal_url":       internalURL,
-		"external_url":       externalURL,
-		"external_psql_command": externalPSQL,
+		"internal_url":          internalURL,
+		"external_url":          "",
+		"external_psql_command": "",
+		"external_access":       "disabled",
 		"psql_command":          psqlCommand,
 		"credentials_exposed":   revealCredentials,
 	}
@@ -777,23 +760,15 @@ func (h *DatabaseHandler) linkedDatabaseURL(db *models.ManagedDatabase, password
 	}
 	host := strings.TrimSpace(db.Host)
 	port := db.Port
-	if !useInternal && db.ExternalPort > 0 {
-		extHost := strings.TrimSpace(h.Config.ControlPlane.DBExternalHost)
-		if extHost == "" {
-			extHost = strings.TrimSpace(h.Config.ControlPlane.Domain)
-		}
-		if extHost != "" {
-			host = extHost
-			port = db.ExternalPort
-		}
+	if !useInternal {
+		// External managed database endpoints are currently disabled platform-wide
+		// until IP allowlisting is available.
+		useInternal = true
 	}
 	if host == "" || port <= 0 {
 		return ""
 	}
 	url := "postgresql://" + db.Username + ":" + password + "@" + host + ":" + intToStr(port) + "/" + db.DBName
-	if !useInternal && db.ExternalPort > 0 {
-		url += "?sslmode=require"
-	}
 	return url
 }
 
@@ -870,10 +845,11 @@ func (h *DatabaseHandler) LinkDatabaseToService(w http.ResponseWriter, r *http.R
 	if envVar == "" {
 		envVar = "DATABASE_URL"
 	}
-	useInternal := true
-	if req.UseInternalURL != nil {
-		useInternal = *req.UseInternalURL
+	if req.UseInternalURL != nil && !*req.UseInternalURL {
+		utils.RespondError(w, http.StatusBadRequest, "external database URLs are disabled pending IP allowlisting support")
+		return
 	}
+	useInternal := true
 
 	if strings.TrimSpace(db.EncryptedPassword) == "" {
 		utils.RespondError(w, http.StatusBadRequest, "database credentials are not ready yet")
