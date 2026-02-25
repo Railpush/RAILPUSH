@@ -155,9 +155,32 @@ jobs:
           fi
 
           if [ -z "${SERVICE_UNIT}" ]; then
-            echo "No systemd service found for /opt/railpush/railpush-api-bin"
-            ${SUDO} systemctl list-units --type=service --all --no-pager | grep -i railpush || true
-            exit 1
+            SERVICE_UNIT="railpush-api.service"
+            RUN_USER="$(id -un)"
+            RUN_GROUP="$(id -gn)"
+            echo "No existing API systemd unit found. Bootstrapping ${SERVICE_UNIT} for ${RUN_USER}:${RUN_GROUP}."
+            {
+              printf '%s\n' '[Unit]'
+              printf '%s\n' 'Description=RailPush API'
+              printf '%s\n' 'After=network.target'
+              printf '%s\n' 'Wants=network-online.target'
+              printf '%s\n' ''
+              printf '%s\n' '[Service]'
+              printf '%s\n' 'Type=simple'
+              printf '%s\n' 'WorkingDirectory=/opt/railpush/railpush-api'
+              printf '%s\n' 'EnvironmentFile=-/opt/railpush/railpush-api/.env'
+              printf '%s\n' 'EnvironmentFile=-/opt/railpush/.env'
+              printf '%s\n' 'ExecStart=/opt/railpush/railpush-api-bin'
+              printf '%s\n' 'Restart=always'
+              printf '%s\n' 'RestartSec=5'
+              printf '%s\n' "User=${RUN_USER}"
+              printf '%s\n' "Group=${RUN_GROUP}"
+              printf '%s\n' ''
+              printf '%s\n' '[Install]'
+              printf '%s\n' 'WantedBy=multi-user.target'
+            } | ${SUDO} tee "/etc/systemd/system/${SERVICE_UNIT}" >/dev/null
+            ${SUDO} systemctl daemon-reload
+            ${SUDO} systemctl enable "${SERVICE_UNIT}" || true
           fi
 
           echo "Restarting ${SERVICE_UNIT}"
