@@ -28,6 +28,7 @@ type Scheduler struct {
 	lastBackup    time.Time
 	lastUsageSync time.Time
 	lastLogAlerts time.Time
+	lastLogDrains time.Time
 }
 
 func NewScheduler(cfg *config.Config) *Scheduler {
@@ -49,6 +50,7 @@ func (s *Scheduler) Start() {
 				s.runNightlyBackups()
 				s.reportMeteredUsage()
 				s.runLogAlertEvaluations()
+				s.runLogDrainForwarding()
 			case <-s.stop:
 				ticker.Stop()
 				return

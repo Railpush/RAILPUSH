@@ -365,6 +365,11 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/services/{id}/rewrite-rules/{ruleId}", rwH.DeleteRewriteRule).Methods("DELETE")
 
 	authed.HandleFunc("/services/{id}/logs", logH.QueryLogs).Methods("GET")
+	authed.HandleFunc("/services/{id}/log-drains", logH.ListLogDrains).Methods("GET")
+	authed.HandleFunc("/services/{id}/log-drains", logH.CreateLogDrain).Methods("POST")
+	authed.HandleFunc("/services/{id}/log-drains/{drainId}", logH.DeleteLogDrain).Methods("DELETE")
+	authed.HandleFunc("/services/{id}/log-drains/{drainId}/stats", logH.GetLogDrainStats).Methods("GET")
+	authed.HandleFunc("/services/{id}/log-drains/{drainId}/test", logH.TestLogDrain).Methods("POST")
 	authed.HandleFunc("/services/{id}/log-alerts", logH.ListLogAlerts).Methods("GET")
 	authed.HandleFunc("/services/{id}/log-alerts", logH.CreateLogAlert).Methods("POST")
 	authed.HandleFunc("/services/{id}/log-alerts/{alertId}", logH.UpdateLogAlert).Methods("PATCH")

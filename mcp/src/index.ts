@@ -762,7 +762,7 @@ server.tool(
 
 server.tool(
   "get_deploy_queue_position",
-  "Check a deploy's position in the build queue. Useful when a deploy is queued and you want to know how long until it starts building.",
+  "Check a deploy's position in the build queue, including estimated wait time until execution starts.",
   {
     service_id: z.string().describe("Service ID"),
     deploy_id: z.string().describe("Deploy ID"),
@@ -1646,6 +1646,90 @@ server.tool(
       });
       return text(filterLogEntries(logs, { search, regex, since, until, level: normalizedLevel, filter: filterExpr }));
     }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "list_log_drains",
+  "List log forwarding drains configured for a service.",
+  {
+    service_id: z.string().describe("Service ID"),
+  },
+  async ({ service_id }) => {
+    try { return text(await client.listLogDrains(service_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "create_log_drain",
+  "Create a log forwarding drain for a service (webhook, datadog, loki/grafana cloud, splunk, elasticsearch/opensearch).",
+  {
+    service_id: z.string().describe("Service ID"),
+    name: z.string().describe("Drain name"),
+    destination: z.enum(["webhook", "datadog", "loki", "grafana_cloud", "splunk", "elasticsearch", "opensearch"]).describe("Drain destination"),
+    config: z.record(z.any()).describe("Destination-specific config object"),
+    enabled: z.boolean().optional().describe("Enable or disable the drain (default: true)"),
+    log_types: z.array(z.enum(["app", "request", "build"])).optional().describe("Log types to forward"),
+    min_level: z.enum(["debug", "info", "warn", "warning", "error"]).optional().describe("Minimum forwarded log level"),
+    include_patterns: z.array(z.string()).optional().describe("Regex patterns that must match"),
+    exclude_patterns: z.array(z.string()).optional().describe("Regex patterns to exclude"),
+  },
+  async ({ service_id, name, destination, config, enabled, log_types, min_level, include_patterns, exclude_patterns }) => {
+    try {
+      return text(await client.createLogDrain(service_id, {
+        name,
+        destination,
+        config,
+        enabled,
+        filter: {
+          log_types,
+          min_level,
+          include_patterns,
+          exclude_patterns,
+        },
+      }));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "delete_log_drain",
+  "Delete a log forwarding drain from a service.",
+  {
+    service_id: z.string().describe("Service ID"),
+    drain_id: z.string().describe("Log drain ID"),
+  },
+  async ({ service_id, drain_id }) => {
+    try { return text(await client.deleteLogDrain(service_id, drain_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_log_drain_stats",
+  "Get delivery stats for a log forwarding drain.",
+  {
+    service_id: z.string().describe("Service ID"),
+    drain_id: z.string().describe("Log drain ID"),
+  },
+  async ({ service_id, drain_id }) => {
+    try { return text(await client.getLogDrainStats(service_id, drain_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "test_log_drain",
+  "Send a synthetic test log entry through a configured log drain.",
+  {
+    service_id: z.string().describe("Service ID"),
+    drain_id: z.string().describe("Log drain ID"),
+  },
+  async ({ service_id, drain_id }) => {
+    try { return text(await client.testLogDrain(service_id, drain_id)); }
     catch (e) { return err(e); }
   },
 );

@@ -600,6 +600,26 @@ export class RailPushClient {
     return this.request("GET", `/services/${serviceId}/logs`, undefined, query);
   }
 
+  async listLogDrains(serviceId: string) {
+    return this.request("GET", `/services/${serviceId}/log-drains`);
+  }
+
+  async createLogDrain(serviceId: string, data: Record<string, unknown>) {
+    return this.request("POST", `/services/${serviceId}/log-drains`, data);
+  }
+
+  async deleteLogDrain(serviceId: string, drainId: string) {
+    return this.request("DELETE", `/services/${serviceId}/log-drains/${drainId}`);
+  }
+
+  async getLogDrainStats(serviceId: string, drainId: string) {
+    return this.request("GET", `/services/${serviceId}/log-drains/${drainId}/stats`);
+  }
+
+  async testLogDrain(serviceId: string, drainId: string) {
+    return this.request("POST", `/services/${serviceId}/log-drains/${drainId}/test`, {});
+  }
+
   async listLogAlerts(serviceId: string) {
     return this.request("GET", `/services/${serviceId}/log-alerts`);
   }
