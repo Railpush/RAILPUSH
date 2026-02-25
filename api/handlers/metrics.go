@@ -189,7 +189,7 @@ func (h *MetricsHandler) queryServicePrometheusMetrics(ctx context.Context, svc 
 	}
 
 	if !haveData && len(errors) > 0 {
-		return series, fmt.Errorf(strings.Join(errors, "; "))
+		return series, fmt.Errorf("%s", strings.Join(errors, "; "))
 	}
 
 	return series, nil
