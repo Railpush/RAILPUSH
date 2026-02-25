@@ -65,10 +65,11 @@ jobs:
         run: |
           set -euo pipefail
           PORT="${DEPLOY_PORT:-22}"
-          RSYNC_SSH="ssh -p ${PORT}"
+          SSH_OPTS="-p ${PORT} -o ControlMaster=auto -o ControlPersist=600 -o ControlPath=~/.ssh/cm-%C"
+          RSYNC_SSH="ssh ${SSH_OPTS}"
 
           # Ensure target directories exist on the server before rsync --delete
-          ssh -p "${PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+          ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "mkdir -p /opt/railpush/railpush-api /opt/railpush/dashboard"
 
           rsync -az --delete \
@@ -92,8 +93,9 @@ jobs:
         run: |
           set -euo pipefail
           PORT="${DEPLOY_PORT:-22}"
+          SSH_OPTS="-p ${PORT} -o ControlMaster=auto -o ControlPersist=600 -o ControlPath=~/.ssh/cm-%C"
 
-          ssh -p "${PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" <<'SSH'
+          ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" <<'SSH'
           set -euo pipefail
 
           if [ "$(id -u)" -eq 0 ]; then
