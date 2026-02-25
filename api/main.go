@@ -282,6 +282,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/support/tickets", supportH.ListTickets).Methods("GET")
 	authed.HandleFunc("/support/tickets", supportH.CreateTicket).Methods("POST")
 	authed.HandleFunc("/support/tickets/{id}", supportH.GetTicket).Methods("GET")
+	authed.HandleFunc("/support/tickets/{id}/tags", supportH.UpdateTicketTags).Methods("PATCH")
 	authed.HandleFunc("/support/tickets/{id}/messages", supportH.CreateMessage).Methods("POST")
 
 	authed.HandleFunc("/services", svcH.ListServices).Methods("GET")

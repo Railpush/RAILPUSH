@@ -610,7 +610,8 @@ export interface OpsEmailOutboxItem {
 }
 
 // Support (customer-facing)
-export type TicketCategory = 'support' | 'feature_request' | 'bug_report';
+export type TicketCategory = 'support' | 'feature_request' | 'bug' | 'security' | 'billing' | 'how_to' | 'incident' | 'feedback' | 'bug_report';
+export type SupportTicketComponent = '' | 'services' | 'databases' | 'key-value' | 'deployments' | 'env-vars' | 'domains' | 'mcp-api' | 'billing' | 'auth' | 'builds' | 'dashboard';
 
 export interface SupportTicket {
   id: string;
@@ -618,6 +619,8 @@ export interface SupportTicket {
   created_by: string;
   subject: string;
   category: TicketCategory;
+  component?: SupportTicketComponent;
+  tags?: string[];
   status: string;
   priority: string;
   assigned_to: string;
@@ -682,6 +685,8 @@ export interface OpsTicketFacets {
   by_status: Record<string, number>;
   by_priority: Record<string, number>;
   by_category: Record<string, number>;
+  by_component: Record<string, number>;
+  by_tag: Record<string, number>;
 }
 
 export interface OpsTicketSearchResult {

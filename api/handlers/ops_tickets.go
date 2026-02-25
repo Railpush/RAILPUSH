@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/lib/pq"
 	"github.com/railpush/api/config"
 	"github.com/railpush/api/database"
 	"github.com/railpush/api/middleware"
@@ -43,6 +44,8 @@ type opsTicketItem struct {
 	CreatedByUsername   string     `json:"created_by_username"`
 	Subject             string     `json:"subject"`
 	Category            string     `json:"category"`
+	Component           string     `json:"component"`
+	Tags                []string   `json:"tags,omitempty"`
 	Status              string     `json:"status"`
 	Priority            string     `json:"priority"`
 	AssignedTo          string     `json:"assigned_to"`
@@ -56,6 +59,8 @@ type opsTicketFacets struct {
 	ByStatus   map[string]int64 `json:"by_status"`
 	ByPriority map[string]int64 `json:"by_priority"`
 	ByCategory map[string]int64 `json:"by_category"`
+	ByComponent map[string]int64 `json:"by_component"`
+	ByTag      map[string]int64 `json:"by_tag"`
 }
 
 type opsTicketListResponse struct {
@@ -73,7 +78,9 @@ const opsTicketsWhereClause = `
 	  AND ($4 = '' OR COALESCE(t.category,'support') = $4)
 	  AND ($5 = '' OR COALESCE(t.priority,'normal') = $5)
 	  AND ($6::timestamptz IS NULL OR t.created_at >= $6::timestamptz)
-	  AND ($7::timestamptz IS NULL OR t.created_at <= $7::timestamptz)`
+	  AND ($7::timestamptz IS NULL OR t.created_at <= $7::timestamptz)
+	  AND ($8 = '' OR COALESCE(t.component,'') = $8)
+	  AND ($9::text[] IS NULL OR COALESCE(t.tags, '{}'::text[]) @> $9::text[])`
 
 func normalizeSupportTicketStatus(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
@@ -154,6 +161,34 @@ func listFacetCounts(expr string, args []interface{}) (map[string]int64, error) 
 	return out, nil
 }
 
+func listTagFacetCounts(args []interface{}) (map[string]int64, error) {
+	rows, err := database.DB.Query(
+		`SELECT tag, COUNT(*)
+		   FROM (
+		     SELECT unnest(COALESCE(t.tags, '{}'::text[])) AS tag `+opsTicketsWhereClause+`
+		   ) tag_rows
+		  WHERE tag <> ''
+		  GROUP BY tag
+		  ORDER BY COUNT(*) DESC, tag ASC
+		  LIMIT 25`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var key string
+		var count int64
+		if err := rows.Scan(&key, &count); err != nil {
+			continue
+		}
+		out[key] = count
+	}
+	return out, nil
+}
+
 func (h *OpsTicketsHandler) ListTickets(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureOps(w, r) {
 		return
@@ -185,7 +220,7 @@ func (h *OpsTicketsHandler) ListTickets(w http.ResponseWriter, r *http.Request) 
 	category := ""
 	if categoryInput != "" {
 		category = models.NormalizeSupportTicketCategory(categoryInput)
-		if category != categoryInput {
+		if category == "" {
 			utils.RespondError(w, http.StatusBadRequest, "invalid category filter")
 			return
 		}
@@ -199,6 +234,31 @@ func (h *OpsTicketsHandler) ListTickets(w http.ResponseWriter, r *http.Request) 
 			utils.RespondError(w, http.StatusBadRequest, "invalid priority filter")
 			return
 		}
+	}
+
+	componentInput := strings.TrimSpace(r.URL.Query().Get("component"))
+	component := ""
+	if componentInput != "" {
+		component = models.NormalizeSupportTicketComponent(componentInput)
+		if component == "" {
+			utils.RespondError(w, http.StatusBadRequest, "invalid component filter")
+			return
+		}
+	}
+
+	tagParts := make([]string, 0)
+	for _, v := range r.URL.Query()["tags"] {
+		for _, part := range strings.Split(v, ",") {
+			tagParts = append(tagParts, part)
+		}
+	}
+	for _, v := range r.URL.Query()["tag"] {
+		tagParts = append(tagParts, v)
+	}
+	normalizedTagFilter := models.NormalizeSupportTicketTags(tagParts)
+	var tagFilterArg interface{}
+	if len(normalizedTagFilter) > 0 {
+		tagFilterArg = pq.Array(normalizedTagFilter)
 	}
 
 	q := strings.TrimSpace(r.URL.Query().Get("query"))
@@ -231,17 +291,17 @@ func (h *OpsTicketsHandler) ListTickets(w http.ResponseWriter, r *http.Request) 
 		createdBeforeArg = createdBefore
 	}
 
-	filterArgs := []interface{}{status, q, like, category, priority, createdAfterArg, createdBeforeArg}
+	filterArgs := []interface{}{status, q, like, category, priority, createdAfterArg, createdBeforeArg, component, tagFilterArg}
 	listArgs := append(filterArgs, limit, offset)
 
 	rows, err := database.DB.Query(
 		`SELECT t.id::text, COALESCE(t.workspace_id::text,''), COALESCE(w.name,''), COALESCE(t.created_by::text,''),
 		        COALESCE(u.email,''), COALESCE(u.username,''), COALESCE(t.subject,''),
-		        COALESCE(t.category,'support'), COALESCE(t.status,'open'), COALESCE(t.priority,'normal'), COALESCE(t.assigned_to::text,''),
+		        COALESCE(t.category,'support'), COALESCE(t.component,''), COALESCE(t.tags, '{}'::text[]), COALESCE(t.status,'open'), COALESCE(t.priority,'normal'), COALESCE(t.assigned_to::text,''),
 		        t.last_customer_reply_at, t.last_ops_reply_at, t.created_at, t.updated_at
 		   `+opsTicketsWhereClause+`
 		  ORDER BY `+orderClause+`
-		  LIMIT $8 OFFSET $9`,
+		  LIMIT $10 OFFSET $11`,
 		listArgs...,
 	)
 	if err != nil {
@@ -254,13 +314,18 @@ func (h *OpsTicketsHandler) ListTickets(w http.ResponseWriter, r *http.Request) 
 	for rows.Next() {
 		var it opsTicketItem
 		var lastCust, lastOps sql.NullTime
+		var tags []string
 		if err := rows.Scan(
 			&it.ID, &it.WorkspaceID, &it.WorkspaceName, &it.CreatedBy,
 			&it.CreatedByEmail, &it.CreatedByUsername, &it.Subject,
-			&it.Category, &it.Status, &it.Priority, &it.AssignedTo,
+			&it.Category, &it.Component, pq.Array(&tags), &it.Status, &it.Priority, &it.AssignedTo,
 			&lastCust, &lastOps, &it.CreatedAt, &it.UpdatedAt,
 		); err != nil {
 			continue
+		}
+		it.Tags = tags
+		if it.Tags == nil {
+			it.Tags = []string{}
 		}
 		if lastCust.Valid {
 			v := lastCust.Time
@@ -302,6 +367,16 @@ func (h *OpsTicketsHandler) ListTickets(w http.ResponseWriter, r *http.Request) 
 		utils.RespondError(w, http.StatusInternalServerError, "failed to aggregate ticket category facets")
 		return
 	}
+	byComponent, err := listFacetCounts("COALESCE(t.component,'')", filterArgs)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to aggregate ticket component facets")
+		return
+	}
+	byTag, err := listTagFacetCounts(filterArgs)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to aggregate ticket tag facets")
+		return
+	}
 
 	utils.RespondJSON(w, http.StatusOK, opsTicketListResponse{
 		Tickets: out,
@@ -310,6 +385,8 @@ func (h *OpsTicketsHandler) ListTickets(w http.ResponseWriter, r *http.Request) 
 			ByStatus:   byStatus,
 			ByPriority: byPriority,
 			ByCategory: byCategory,
+			ByComponent: byComponent,
+			ByTag:      byTag,
 		},
 	})
 }
@@ -362,6 +439,8 @@ func (h *OpsTicketsHandler) GetTicket(w http.ResponseWriter, r *http.Request) {
 			"created_by_username":  creatorUsername,
 			"subject":              t.Subject,
 			"category":             t.Category,
+			"component":            t.Component,
+			"tags":                 t.Tags,
 			"status":               t.Status,
 			"priority":             t.Priority,
 			"assigned_to":          t.AssignedTo,
@@ -380,22 +459,55 @@ func (h *OpsTicketsHandler) UpdateTicket(w http.ResponseWriter, r *http.Request)
 	}
 	id := strings.TrimSpace(mux.Vars(r)["id"])
 	var req struct {
-		Status     string `json:"status"`
-		Priority   string `json:"priority"`
-		AssignedTo string `json:"assigned_to"`
-		Category   string `json:"category"`
+		Status     string    `json:"status"`
+		Priority   string    `json:"priority"`
+		AssignedTo *string   `json:"assigned_to"`
+		Category   string    `json:"category"`
+		Component  *string   `json:"component"`
+		Tags       *[]string `json:"tags"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
+	status := strings.ToLower(strings.TrimSpace(req.Status))
+	if status != "" && normalizeSupportTicketStatus(status) == "" {
+		utils.RespondError(w, http.StatusBadRequest, "invalid status")
+		return
+	}
+	priority := strings.ToLower(strings.TrimSpace(req.Priority))
+	if priority != "" && normalizeSupportTicketPriority(priority) == "" {
+		utils.RespondError(w, http.StatusBadRequest, "invalid priority")
+		return
+	}
+
 	cat := strings.ToLower(strings.TrimSpace(req.Category))
 	if cat != "" {
 		cat = models.NormalizeSupportTicketCategory(cat)
+		if cat == "" {
+			utils.RespondError(w, http.StatusBadRequest, "invalid category")
+			return
+		}
 	}
 
-	if err := models.UpdateSupportTicketOpsFields(id, strings.ToLower(strings.TrimSpace(req.Status)), strings.ToLower(strings.TrimSpace(req.Priority)), strings.TrimSpace(req.AssignedTo), cat); err != nil {
+	var component *string
+	if req.Component != nil {
+		norm := models.NormalizeSupportTicketComponent(strings.TrimSpace(*req.Component))
+		if strings.TrimSpace(*req.Component) != "" && norm == "" {
+			utils.RespondError(w, http.StatusBadRequest, "invalid component")
+			return
+		}
+		component = &norm
+	}
+
+	var tags *[]string
+	if req.Tags != nil {
+		normalized := models.NormalizeSupportTicketTags(*req.Tags)
+		tags = &normalized
+	}
+
+	if err := models.UpdateSupportTicketOpsFields(id, status, priority, req.AssignedTo, cat, component, tags); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to update ticket")
 		return
 	}
@@ -458,6 +570,8 @@ func (h *OpsTicketsHandler) BulkUpdateTickets(w http.ResponseWriter, r *http.Req
 		Status    string   `json:"status"`
 		Priority  string   `json:"priority"`
 		Category  string   `json:"category"`
+		Component *string  `json:"component"`
+		Tags      *[]string `json:"tags"`
 		Reason    string   `json:"reason"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024)).Decode(&req); err != nil {
@@ -504,19 +618,35 @@ func (h *OpsTicketsHandler) BulkUpdateTickets(w http.ResponseWriter, r *http.Req
 	category := strings.ToLower(strings.TrimSpace(req.Category))
 	if category != "" {
 		normalized := models.NormalizeSupportTicketCategory(category)
-		if normalized != category {
+		if normalized == "" {
 			utils.RespondError(w, http.StatusBadRequest, "invalid category")
 			return
 		}
 		category = normalized
 	}
 
-	if status == "" && priority == "" && category == "" {
-		utils.RespondError(w, http.StatusBadRequest, "at least one of status, priority, or category is required")
+	var component *string
+	if req.Component != nil {
+		norm := models.NormalizeSupportTicketComponent(strings.TrimSpace(*req.Component))
+		if strings.TrimSpace(*req.Component) != "" && norm == "" {
+			utils.RespondError(w, http.StatusBadRequest, "invalid component")
+			return
+		}
+		component = &norm
+	}
+
+	var tags *[]string
+	if req.Tags != nil {
+		normalized := models.NormalizeSupportTicketTags(*req.Tags)
+		tags = &normalized
+	}
+
+	if status == "" && priority == "" && category == "" && component == nil && tags == nil {
+		utils.RespondError(w, http.StatusBadRequest, "at least one of status, priority, category, component, or tags is required")
 		return
 	}
 
-	updated, err := models.BulkUpdateSupportTicketOpsFields(ids, status, priority, category)
+	updated, err := models.BulkUpdateSupportTicketOpsFields(ids, status, priority, category, component, tags)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to bulk update tickets")
 		return

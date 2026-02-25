@@ -11,7 +11,27 @@ import type { SupportTicket, SupportTicketMessage, TicketCategory } from '../typ
 const categoryLabels: Record<TicketCategory, string> = {
   support: 'Support',
   feature_request: 'Feature Request',
-  bug_report: 'Bug Report',
+  bug: 'Bug',
+  security: 'Security',
+  billing: 'Billing',
+  how_to: 'How-to',
+  incident: 'Incident',
+  feedback: 'Feedback',
+  bug_report: 'Bug',
+};
+
+const componentLabels: Record<string, string> = {
+  services: 'Services',
+  databases: 'Databases',
+  'key-value': 'Key-Value',
+  deployments: 'Deployments',
+  'env-vars': 'Env Vars',
+  domains: 'Domains',
+  'mcp-api': 'MCP / API',
+  billing: 'Billing',
+  auth: 'Auth',
+  builds: 'Builds',
+  dashboard: 'Dashboard',
 };
 
 export function SupportTicketDetailPage() {
@@ -24,7 +44,9 @@ export function SupportTicketDetailPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [message, setMessage] = useState('');
+  const [tagsDraft, setTagsDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [savingTags, setSavingTags] = useState(false);
 
   const load = () => {
     if (!ticketId) return;
@@ -35,6 +57,7 @@ export function SupportTicketDetailPage() {
       .then((d) => {
         setTicket(d.ticket);
         setMessages(d.messages);
+        setTagsDraft((d.ticket.tags || []).join(', '));
       })
       .catch((e) => {
         if (e instanceof ApiError) setError(e.message);
@@ -66,6 +89,22 @@ export function SupportTicketDetailPage() {
     }
   };
 
+  const saveTags = async () => {
+    if (!ticketId) return;
+    setSavingTags(true);
+    setError(null);
+    try {
+      const normalized = tagsDraft.split(',').map((v) => v.trim()).filter(Boolean);
+      const updated = await support.updateTicketTags(ticketId, { tags: normalized });
+      setTicket(updated);
+      setTagsDraft((updated.tags || []).join(', '));
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to update tags');
+    } finally {
+      setSavingTags(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-3">
@@ -83,10 +122,14 @@ export function SupportTicketDetailPage() {
               <p className="text-sm text-content-secondary">{ticket.subject}</p>
               <span className={cn('text-xs px-2 py-0.5 rounded-full border inline-flex',
                 ticket.category === 'feature_request' ? 'border-purple-400/30 bg-purple-500/10 text-purple-300' :
-                ticket.category === 'bug_report' ? 'border-red-400/30 bg-red-500/10 text-red-300' :
+                ticket.category === 'bug' || ticket.category === 'bug_report' ? 'border-red-400/30 bg-red-500/10 text-red-300' :
+                ticket.category === 'security' ? 'border-orange-400/30 bg-orange-500/10 text-orange-300' :
                 'border-border-default bg-surface-secondary text-content-secondary'
               )}>
                 {categoryLabels[ticket.category as TicketCategory] || ticket.category || 'Support'}
+              </span>
+              <span className="text-xs px-2 py-0.5 rounded-full border border-border-default bg-surface-secondary text-content-secondary">
+                {componentLabels[ticket.component || ''] || 'Unspecified'}
               </span>
             </div>
           )}
@@ -113,6 +156,23 @@ export function SupportTicketDetailPage() {
             Conversation
           </div>
           <div className="p-4 space-y-3">
+            <div className="rounded-md border border-border-default p-3 bg-surface-secondary/40">
+              <div className="text-xs text-content-tertiary mb-1.5">Tags</div>
+              <div className="flex flex-wrap gap-1 mb-2">
+                {(ticket.tags || []).length > 0 ? (ticket.tags || []).map((tag) => (
+                  <span key={tag} className="text-[11px] px-2 py-0.5 rounded border border-border-default bg-surface-secondary text-content-tertiary">#{tag}</span>
+                )) : <span className="text-xs text-content-tertiary">No tags</span>}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={tagsDraft}
+                  onChange={(e) => setTagsDraft(e.target.value)}
+                  placeholder="mcp, api, billing"
+                  className="h-9 px-3 rounded-md bg-surface-secondary border border-border-default text-sm flex-1 min-w-[220px]"
+                />
+                <Button variant="secondary" onClick={saveTags} loading={savingTags}>Update Tags</Button>
+              </div>
+            </div>
             {messages.length === 0 ? (
               <div className="text-sm text-content-tertiary text-center py-6">No messages yet.</div>
             ) : (
@@ -147,4 +207,3 @@ export function SupportTicketDetailPage() {
     </div>
   );
 }
-

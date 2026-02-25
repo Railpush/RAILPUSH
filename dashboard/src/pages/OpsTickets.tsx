@@ -7,24 +7,47 @@ import { Skeleton } from '../components/ui/Skeleton';
 import { ApiError, ops } from '../lib/api';
 import { cn, truncate } from '../lib/utils';
 import { toast } from 'sonner';
-import type { OpsTicketFacets, OpsTicketItem, TicketCategory } from '../types';
+import type { OpsTicketFacets, OpsTicketItem, SupportTicketComponent, TicketCategory } from '../types';
 
 type StatusFilter = 'all' | 'open' | 'pending' | 'solved' | 'closed';
-type CategoryFilter = 'all' | 'support' | 'feature_request' | 'bug_report';
+type CategoryFilter = 'all' | 'support' | 'feature_request' | 'bug' | 'security' | 'billing' | 'how_to' | 'incident' | 'feedback';
 type PriorityFilter = 'all' | 'low' | 'normal' | 'high' | 'urgent';
+type ComponentFilter = 'all' | Exclude<SupportTicketComponent, ''>;
 type SortBy = 'updated_at' | 'created_at' | 'priority';
 type SortOrder = 'asc' | 'desc';
 
 const categoryLabels: Record<TicketCategory, string> = {
   support: 'Support',
   feature_request: 'Feature Request',
-  bug_report: 'Bug Report',
+  bug: 'Bug',
+  security: 'Security',
+  billing: 'Billing',
+  how_to: 'How-to',
+  incident: 'Incident',
+  feedback: 'Feedback',
+  bug_report: 'Bug',
+};
+
+const componentLabels: Record<Exclude<SupportTicketComponent, ''>, string> = {
+  services: 'Services',
+  databases: 'Databases',
+  'key-value': 'Key-Value',
+  deployments: 'Deployments',
+  'env-vars': 'Env Vars',
+  domains: 'Domains',
+  'mcp-api': 'MCP / API',
+  billing: 'Billing',
+  auth: 'Auth',
+  builds: 'Builds',
+  dashboard: 'Dashboard',
 };
 
 const emptyFacets: OpsTicketFacets = {
   by_status: {},
   by_priority: {},
   by_category: {},
+  by_component: {},
+  by_tag: {},
 };
 
 const statusLabels: Record<Exclude<StatusFilter, 'all'>, string> = {
@@ -46,6 +69,8 @@ export function OpsTicketsPage() {
   const [status, setStatus] = useState<StatusFilter>('all');
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all');
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>('all');
+  const [componentFilter, setComponentFilter] = useState<ComponentFilter>('all');
+  const [tagFilter, setTagFilter] = useState('');
   const [query, setQuery] = useState('');
   const [createdAfter, setCreatedAfter] = useState('');
   const [createdBefore, setCreatedBefore] = useState('');
@@ -58,6 +83,8 @@ export function OpsTicketsPage() {
   const [bulkStatus, setBulkStatus] = useState('');
   const [bulkPriority, setBulkPriority] = useState('');
   const [bulkCategory, setBulkCategory] = useState('');
+  const [bulkComponent, setBulkComponent] = useState('');
+  const [bulkTags, setBulkTags] = useState('');
   const [bulkReason, setBulkReason] = useState('');
   const [bulkBusy, setBulkBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -65,6 +92,7 @@ export function OpsTicketsPage() {
   const [error, setError] = useState<string | null>(null);
 
   const q = useMemo(() => query.trim(), [query]);
+  const parsedTags = useMemo(() => tagFilter.split(',').map((v) => v.trim()).filter(Boolean), [tagFilter]);
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   const allVisibleSelected = rows.length > 0 && rows.every((r) => selectedSet.has(r.id));
   const openCount = facets.by_status.open || 0;
@@ -81,6 +109,8 @@ export function OpsTicketsPage() {
         status: status === 'all' ? '' : status,
         category: categoryFilter === 'all' ? '' : categoryFilter,
         priority: priorityFilter === 'all' ? '' : priorityFilter,
+        component: componentFilter === 'all' ? '' : componentFilter,
+        tags: parsedTags.length ? parsedTags : undefined,
         query: q,
         created_after: createdAfter || undefined,
         created_before: createdBefore || undefined,
@@ -106,11 +136,11 @@ export function OpsTicketsPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, categoryFilter, priorityFilter, q, createdAfter, createdBefore, sortBy, sortOrder]);
+  }, [status, categoryFilter, priorityFilter, componentFilter, parsedTags.join(','), q, createdAfter, createdBefore, sortBy, sortOrder]);
 
   useEffect(() => {
     setSelected([]);
-  }, [status, categoryFilter, priorityFilter, q, createdAfter, createdBefore, sortBy, sortOrder]);
+  }, [status, categoryFilter, priorityFilter, componentFilter, parsedTags.join(','), q, createdAfter, createdBefore, sortBy, sortOrder]);
 
   const toggleRow = (ticketID: string) => {
     setSelected((prev) => (prev.includes(ticketID) ? prev.filter((id) => id !== ticketID) : [...prev, ticketID]));
@@ -127,12 +157,15 @@ export function OpsTicketsPage() {
 
   const applyBulkUpdate = async () => {
     if (selected.length === 0) return;
-    const patch: { status?: string; priority?: string; category?: string; reason?: string } = {};
+    const patch: { status?: string; priority?: string; category?: string; component?: string; tags?: string[]; reason?: string } = {};
     if (bulkStatus) patch.status = bulkStatus;
     if (bulkPriority) patch.priority = bulkPriority;
     if (bulkCategory) patch.category = bulkCategory;
+    if (bulkComponent) patch.component = bulkComponent;
+    const parsedBulkTags = bulkTags.split(',').map((v) => v.trim()).filter(Boolean);
+    if (parsedBulkTags.length > 0) patch.tags = parsedBulkTags;
     if (bulkReason.trim()) patch.reason = bulkReason.trim();
-    if (!patch.status && !patch.priority && !patch.category) {
+    if (!patch.status && !patch.priority && !patch.category && !patch.component && !patch.tags) {
       toast.error('Select at least one field to update');
       return;
     }
@@ -144,10 +177,14 @@ export function OpsTicketsPage() {
         status: patch.status,
         priority: patch.priority,
         category: patch.category,
+        component: patch.component,
+        tags: patch.tags,
         reason: patch.reason,
       });
       toast.success(`Updated ${res.updated} tickets`);
       setBulkReason('');
+      setBulkTags('');
+      setBulkComponent('');
       setSelected([]);
       load();
     } catch (e: unknown) {
@@ -162,7 +199,7 @@ export function OpsTicketsPage() {
       toast.info('No tickets to export');
       return;
     }
-    const headers = ['id', 'subject', 'status', 'priority', 'category', 'workspace_name', 'created_by_email', 'updated_at'];
+    const headers = ['id', 'subject', 'status', 'priority', 'category', 'component', 'tags', 'workspace_name', 'created_by_email', 'updated_at'];
     const lines = [headers.join(',')];
     for (const row of rows) {
       lines.push([
@@ -171,6 +208,8 @@ export function OpsTicketsPage() {
         row.status || '',
         row.priority || '',
         row.category || '',
+        row.component || '',
+        (row.tags || []).join('|'),
         row.workspace_name || '',
         row.created_by_email || row.created_by_username || '',
         row.updated_at || '',
@@ -239,13 +278,18 @@ export function OpsTicketsPage() {
               <div className="w-px h-5 bg-border-default mx-1" />
               {([
                 { key: 'all', label: 'All Types' },
-              { key: 'support', label: 'Support' },
-              { key: 'feature_request', label: 'Feature Req' },
-              { key: 'bug_report', label: 'Bug Report' },
-            ] as const).map((t) => (
-              <button
-                key={t.key}
-                onClick={() => setCategoryFilter(t.key)}
+                { key: 'support', label: 'Support' },
+                { key: 'feature_request', label: 'Feature Req' },
+                { key: 'bug', label: 'Bug' },
+                { key: 'security', label: 'Security' },
+                { key: 'billing', label: 'Billing' },
+                { key: 'how_to', label: 'How-to' },
+                { key: 'incident', label: 'Incident' },
+                { key: 'feedback', label: 'Feedback' },
+              ] as const).map((t) => (
+                <button
+                  key={t.key}
+                  onClick={() => setCategoryFilter(t.key)}
                 className={cn(
                   'px-3 py-1.5 rounded-full border transition-colors',
                   categoryFilter === t.key
@@ -291,7 +335,7 @@ export function OpsTicketsPage() {
             </div>
           </div>
 
-          <div className="px-4 py-3 border-b border-border-default/60 bg-surface-tertiary/20 grid grid-cols-1 lg:grid-cols-6 gap-3">
+          <div className="px-4 py-3 border-b border-border-default/60 bg-surface-tertiary/20 grid grid-cols-1 lg:grid-cols-8 gap-3">
             <label className="text-xs text-content-tertiary">
               Created after
               <input
@@ -333,7 +377,29 @@ export function OpsTicketsPage() {
                 <option value="asc">Asc</option>
               </select>
             </label>
-            <div className="lg:col-span-2 flex items-end">
+            <label className="text-xs text-content-tertiary">
+              Component
+              <select
+                value={componentFilter}
+                onChange={(e) => setComponentFilter(e.target.value as ComponentFilter)}
+                className="mt-1 w-full h-9 px-2 rounded-md bg-surface-secondary border border-border-default text-sm"
+              >
+                <option value="all">All Components</option>
+                {Object.entries(componentLabels).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs text-content-tertiary lg:col-span-2">
+              Tag filter (comma-separated)
+              <input
+                value={tagFilter}
+                onChange={(e) => setTagFilter(e.target.value)}
+                className="mt-1 w-full h-9 px-3 rounded-md bg-surface-secondary border border-border-default text-sm"
+                placeholder="mcp, agent-dx"
+              />
+            </label>
+            <div className="lg:col-span-8 flex items-end justify-end">
               <Button
                 variant="secondary"
                 className="h-9"
@@ -344,6 +410,8 @@ export function OpsTicketsPage() {
                   setSortOrder('desc');
                   setPriorityFilter('all');
                   setCategoryFilter('all');
+                  setComponentFilter('all');
+                  setTagFilter('');
                   setStatus('all');
                   setQuery('');
                 }}
@@ -354,7 +422,7 @@ export function OpsTicketsPage() {
           </div>
 
           {selected.length > 0 && (
-            <div className="px-4 py-3 border-b border-border-default/60 bg-brand/5 grid grid-cols-1 lg:grid-cols-6 gap-3 items-end">
+            <div className="px-4 py-3 border-b border-border-default/60 bg-brand/5 grid grid-cols-1 lg:grid-cols-8 gap-3 items-end">
               <div className="text-xs text-content-secondary lg:col-span-2">
                 Selected <span className="font-semibold text-content-primary">{selected.length}</span> tickets
               </div>
@@ -395,8 +463,35 @@ export function OpsTicketsPage() {
                   <option value="">No change</option>
                   <option value="support">Support</option>
                   <option value="feature_request">Feature Request</option>
-                  <option value="bug_report">Bug Report</option>
+                  <option value="bug">Bug</option>
+                  <option value="security">Security</option>
+                  <option value="billing">Billing</option>
+                  <option value="how_to">How-to</option>
+                  <option value="incident">Incident</option>
+                  <option value="feedback">Feedback</option>
                 </select>
+              </label>
+              <label className="text-xs text-content-tertiary">
+                Bulk component
+                <select
+                  value={bulkComponent}
+                  onChange={(e) => setBulkComponent(e.target.value)}
+                  className="mt-1 w-full h-9 px-2 rounded-md bg-surface-secondary border border-border-default text-sm"
+                >
+                  <option value="">No change</option>
+                  {Object.entries(componentLabels).map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-xs text-content-tertiary">
+                Bulk tags (replace)
+                <input
+                  value={bulkTags}
+                  onChange={(e) => setBulkTags(e.target.value)}
+                  placeholder="mcp,api"
+                  className="mt-1 w-full h-9 px-3 rounded-md bg-surface-secondary border border-border-default text-sm"
+                />
               </label>
               <label className="text-xs text-content-tertiary lg:col-span-2">
                 Optional reason (posted to each selected ticket)
@@ -407,7 +502,7 @@ export function OpsTicketsPage() {
                   className="mt-1 w-full h-9 px-3 rounded-md bg-surface-secondary border border-border-default text-sm"
                 />
               </label>
-              <div className="lg:col-span-6 flex justify-end">
+              <div className="lg:col-span-8 flex justify-end">
                 <Button onClick={applyBulkUpdate} loading={bulkBusy}>Apply Bulk Update</Button>
               </div>
             </div>
@@ -466,6 +561,13 @@ export function OpsTicketsPage() {
                 >
                   <div className="text-sm font-semibold text-content-primary truncate">{t.subject}</div>
                   <div className="text-xs text-content-tertiary truncate">{t.workspace_name || truncate(t.workspace_id, 10) || '—'} · {truncate(t.id, 10)}</div>
+                  {(t.tags || []).length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {(t.tags || []).slice(0, 3).map((tag) => (
+                        <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded border border-border-default bg-surface-secondary text-content-tertiary">#{tag}</span>
+                      ))}
+                    </div>
+                  )}
                 </button>
                 <div className="col-span-2 min-w-0">
                   <div className="text-sm text-content-secondary truncate">{t.created_by_email || t.created_by_username || truncate(t.created_by, 10)}</div>
@@ -474,11 +576,13 @@ export function OpsTicketsPage() {
                 <div className="col-span-2 text-sm">
                   <span className={cn('text-xs px-2 py-0.5 rounded-full border inline-flex',
                     t.category === 'feature_request' ? 'border-purple-400/30 bg-purple-500/10 text-purple-300' :
-                    t.category === 'bug_report' ? 'border-red-400/30 bg-red-500/10 text-red-300' :
+                    t.category === 'bug' || t.category === 'bug_report' ? 'border-red-400/30 bg-red-500/10 text-red-300' :
+                    t.category === 'security' ? 'border-orange-400/30 bg-orange-500/10 text-orange-300' :
                     'border-border-default bg-surface-secondary text-content-secondary'
                   )}>
                     {categoryLabels[t.category as TicketCategory] || t.category || 'Support'}
                   </span>
+                  <div className="text-xs text-content-tertiary mt-1">{componentLabels[t.component as keyof typeof componentLabels] || 'Unspecified'}</div>
                 </div>
                 <div className="col-span-2 text-sm text-content-secondary">{t.status}</div>
                 <div className="col-span-2 text-right text-xs text-content-tertiary">

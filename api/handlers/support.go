@@ -35,7 +35,56 @@ func (h *SupportHandler) ListTickets(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	tickets, err := models.ListSupportTicketsForUser(userID, limit, offset)
+	status := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
+	if status != "" {
+		switch status {
+		case "open", "pending", "solved", "closed":
+		default:
+			utils.RespondError(w, http.StatusBadRequest, "invalid status filter")
+			return
+		}
+	}
+
+	categoryInput := strings.TrimSpace(r.URL.Query().Get("category"))
+	category := ""
+	if categoryInput != "" {
+		category = models.NormalizeSupportTicketCategory(categoryInput)
+		if category == "" {
+			utils.RespondError(w, http.StatusBadRequest, "invalid category filter")
+			return
+		}
+	}
+
+	componentInput := strings.TrimSpace(r.URL.Query().Get("component"))
+	component := ""
+	if componentInput != "" {
+		component = models.NormalizeSupportTicketComponent(componentInput)
+		if component == "" {
+			utils.RespondError(w, http.StatusBadRequest, "invalid component filter")
+			return
+		}
+	}
+
+	tagParts := make([]string, 0)
+	for _, v := range r.URL.Query()["tags"] {
+		for _, part := range strings.Split(v, ",") {
+			tagParts = append(tagParts, part)
+		}
+	}
+	for _, v := range r.URL.Query()["tag"] {
+		tagParts = append(tagParts, v)
+	}
+	tags := models.NormalizeSupportTicketTags(tagParts)
+
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+
+	tickets, err := models.ListSupportTicketsForUser(userID, limit, offset, &models.SupportTicketListFilters{
+		Status:    status,
+		Category:  category,
+		Component: component,
+		Query:     query,
+		Tags:      tags,
+	})
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to list tickets")
 		return
@@ -51,6 +100,8 @@ func (h *SupportHandler) CreateTicket(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID string `json:"workspace_id"`
 		Priority   string `json:"priority"`
 		Category   string `json:"category"`
+		Component  string   `json:"component"`
+		Tags       []string `json:"tags"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128*1024)).Decode(&req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
@@ -71,11 +122,29 @@ func (h *SupportHandler) CreateTicket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	category := models.NormalizeSupportTicketCategory(strings.TrimSpace(req.Category))
+	if strings.TrimSpace(req.Category) != "" && category == "" {
+		utils.RespondError(w, http.StatusBadRequest, "invalid category")
+		return
+	}
+	if category == "" {
+		category = "support"
+	}
+
+	component := models.NormalizeSupportTicketComponent(strings.TrimSpace(req.Component))
+	if strings.TrimSpace(req.Component) != "" && component == "" {
+		utils.RespondError(w, http.StatusBadRequest, "invalid component")
+		return
+	}
+	tags := models.NormalizeSupportTicketTags(req.Tags)
+
 	t := &models.SupportTicket{
 		WorkspaceID: workspaceID,
 		CreatedBy:   userID,
 		Subject:     subject,
-		Category:    models.NormalizeSupportTicketCategory(strings.ToLower(strings.TrimSpace(req.Category))),
+		Category:    category,
+		Component:   component,
+		Tags:        tags,
 		Status:      "open",
 		Priority:    strings.ToLower(strings.TrimSpace(req.Priority)),
 	}
@@ -182,4 +251,40 @@ func (h *SupportHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = models.TouchSupportTicketCustomerReply(t.ID)
 	utils.RespondJSON(w, http.StatusCreated, m)
+}
+
+func (h *SupportHandler) UpdateTicketTags(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	id := strings.TrimSpace(mux.Vars(r)["id"])
+	t, err := models.GetSupportTicket(id)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to load ticket")
+		return
+	}
+	if t == nil {
+		utils.RespondError(w, http.StatusNotFound, "ticket not found")
+		return
+	}
+	if t.CreatedBy != userID {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	var req struct {
+		Tags []string `json:"tags"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	tags := models.NormalizeSupportTicketTags(req.Tags)
+	if err := models.UpdateSupportTicketTags(t.ID, tags); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to update ticket tags")
+		return
+	}
+	if updated, _ := models.GetSupportTicket(t.ID); updated != nil {
+		utils.RespondJSON(w, http.StatusOK, updated)
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "tags": tags})
 }

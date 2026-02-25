@@ -1489,25 +1489,35 @@ server.tool(
 
 server.tool(
   "list_support_tickets",
-  "List your support tickets.",
-  {},
-  async () => {
-    try { return text(await client.listSupportTickets()); }
+  "List your support tickets with optional filters (status/category/component/tags/query).",
+  {
+    status: z.enum(["open", "pending", "solved", "closed"]).optional().describe("Filter by ticket status"),
+    category: z.enum(["support", "feature_request", "bug", "bug_report", "security", "billing", "how_to", "incident", "feedback"]).optional().describe("Filter by ticket category"),
+    component: z.enum(["services", "databases", "key-value", "deployments", "env-vars", "domains", "mcp-api", "billing", "auth", "builds", "dashboard"]).optional().describe("Filter by component"),
+    tags: z.array(z.string()).optional().describe("Only tickets containing all of these tags"),
+    query: z.string().optional().describe("Search subject text"),
+    limit: z.number().optional().describe("Max results (default 50, max 200)"),
+    offset: z.number().optional().describe("Pagination offset"),
+  },
+  async ({ status, category, component, tags, query, limit, offset }) => {
+    try { return text(await client.listSupportTickets({ status, category, component, tags, query, limit, offset })); }
     catch (e) { return err(e); }
   },
 );
 
 server.tool(
   "create_support_ticket",
-  "Create a new support ticket to get help from the RailPush team. Use category to classify the ticket as support, feature_request, or bug_report.",
+  "Create a new support ticket. Supports structured category, component, and tags for better triage.",
   {
     subject: z.string().describe("Ticket subject"),
     message: z.string().describe("Detailed description of the issue or question"),
     priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("Ticket priority (default: normal)"),
-    category: z.enum(["support", "feature_request", "bug_report"]).optional().describe("Ticket category (default: support). Use 'feature_request' for feature ideas, 'bug_report' for bugs."),
+    category: z.enum(["support", "feature_request", "bug", "bug_report", "security", "billing", "how_to", "incident", "feedback"]).optional().describe("Ticket category (default: support)"),
+    component: z.enum(["services", "databases", "key-value", "deployments", "env-vars", "domains", "mcp-api", "billing", "auth", "builds", "dashboard"]).optional().describe("Product component area"),
+    tags: z.array(z.string()).optional().describe("User-defined tags"),
   },
-  async ({ subject, message, priority, category }) => {
-    try { return text(await client.createSupportTicket({ subject, message, priority, category })); }
+  async ({ subject, message, priority, category, component, tags }) => {
+    try { return text(await client.createSupportTicket({ subject, message, priority, category, component, tags })); }
     catch (e) { return err(e); }
   },
 );
@@ -1535,6 +1545,19 @@ server.tool(
   },
 );
 
+server.tool(
+  "update_support_ticket_tags",
+  "Replace tags on one of your support tickets.",
+  {
+    ticket_id: z.string().describe("Ticket ID"),
+    tags: z.array(z.string()).describe("New full tag set (replaces existing tags)"),
+  },
+  async ({ ticket_id, tags }) => {
+    try { return text(await client.updateSupportTicketTags(ticket_id, tags)); }
+    catch (e) { return err(e); }
+  },
+);
+
 // ════════════════════════════════════════════════════════════════════════
 //  OPS: SUPPORT TICKETS (admin/ops role required)
 // ════════════════════════════════════════════════════════════════════════
@@ -1544,14 +1567,16 @@ server.tool(
   "List support tickets across all users (ops/admin). Filter by status/category/priority and search by subject/email/workspace.",
   {
     status: z.enum(["open", "pending", "solved", "closed"]).optional().describe("Filter by ticket status"),
-    category: z.enum(["support", "feature_request", "bug_report"]).optional().describe("Filter by ticket category"),
+    category: z.enum(["support", "feature_request", "bug", "bug_report", "security", "billing", "how_to", "incident", "feedback"]).optional().describe("Filter by ticket category"),
     priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("Filter by ticket priority"),
+    component: z.enum(["services", "databases", "key-value", "deployments", "env-vars", "domains", "mcp-api", "billing", "auth", "builds", "dashboard"]).optional().describe("Filter by component"),
+    tags: z.array(z.string()).optional().describe("Only tickets containing all of these tags"),
     query: z.string().optional().describe("Search by subject, email, or workspace name"),
     limit: z.number().optional().describe("Max results (default 50, max 200)"),
     offset: z.number().optional().describe("Pagination offset"),
   },
-  async ({ status, category, priority, query, limit, offset }) => {
-    try { return text(await client.listOpsTickets({ status, category, priority, query, limit, offset })); }
+  async ({ status, category, priority, component, tags, query, limit, offset }) => {
+    try { return text(await client.listOpsTickets({ status, category, priority, component, tags, query, limit, offset })); }
     catch (e) { return err(e); }
   },
 );
@@ -1561,8 +1586,10 @@ server.tool(
   "Advanced search for ops tickets with metadata (total + facets), including date filters and sorting.",
   {
     status: z.enum(["open", "pending", "solved", "closed"]).optional().describe("Filter by ticket status"),
-    category: z.enum(["support", "feature_request", "bug_report"]).optional().describe("Filter by ticket category"),
+    category: z.enum(["support", "feature_request", "bug", "bug_report", "security", "billing", "how_to", "incident", "feedback"]).optional().describe("Filter by ticket category"),
     priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("Filter by ticket priority"),
+    component: z.enum(["services", "databases", "key-value", "deployments", "env-vars", "domains", "mcp-api", "billing", "auth", "builds", "dashboard"]).optional().describe("Filter by component"),
+    tags: z.array(z.string()).optional().describe("Only tickets containing all of these tags"),
     query: z.string().optional().describe("Search by subject, email, or workspace name"),
     created_after: z.string().optional().describe("Only tickets created after this date/time (YYYY-MM-DD or RFC3339)"),
     created_before: z.string().optional().describe("Only tickets created before this date/time (YYYY-MM-DD or RFC3339)"),
@@ -1571,9 +1598,9 @@ server.tool(
     limit: z.number().optional().describe("Max results (default 50, max 200)"),
     offset: z.number().optional().describe("Pagination offset"),
   },
-  async ({ status, category, priority, query, created_after, created_before, sort_by, sort_order, limit, offset }) => {
+  async ({ status, category, priority, component, tags, query, created_after, created_before, sort_by, sort_order, limit, offset }) => {
     try {
-      return text(await client.searchOpsTickets({ status, category, priority, query, created_after, created_before, sort_by, sort_order, limit, offset }));
+      return text(await client.searchOpsTickets({ status, category, priority, component, tags, query, created_after, created_before, sort_by, sort_order, limit, offset }));
     }
     catch (e) { return err(e); }
   },
@@ -1596,16 +1623,20 @@ server.tool(
     ticket_id: z.string().describe("Ticket ID"),
     status: z.enum(["open", "pending", "solved", "closed"]).optional().describe("New status"),
     priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("New priority"),
-    category: z.enum(["support", "feature_request", "bug_report"]).optional().describe("New category"),
+    category: z.enum(["support", "feature_request", "bug", "bug_report", "security", "billing", "how_to", "incident", "feedback"]).optional().describe("New category"),
+    component: z.enum(["services", "databases", "key-value", "deployments", "env-vars", "domains", "mcp-api", "billing", "auth", "builds", "dashboard"]).optional().describe("New component"),
+    tags: z.array(z.string()).optional().describe("Replace ticket tags"),
     assigned_to: z.string().optional().describe("User ID to assign the ticket to"),
   },
-  async ({ ticket_id, status, priority, category, assigned_to }) => {
+  async ({ ticket_id, status, priority, category, component, tags, assigned_to }) => {
     const data: Record<string, string> = {};
     if (status) data.status = status;
     if (priority) data.priority = priority;
     if (category) data.category = category;
+    if (component !== undefined) data.component = component;
     if (assigned_to) data.assigned_to = assigned_to;
-    try { return text(await client.updateOpsTicket(ticket_id, data)); }
+    const payload = tags ? { ...data, tags } : data;
+    try { return text(await client.updateOpsTicket(ticket_id, payload)); }
     catch (e) { return err(e); }
   },
 );
@@ -1617,11 +1648,13 @@ server.tool(
     ticket_ids: z.array(z.string()).min(1).describe("Ticket IDs to update (max 200)"),
     status: z.enum(["open", "pending", "solved", "closed"]).optional().describe("New status for all selected tickets"),
     priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("New priority for all selected tickets"),
-    category: z.enum(["support", "feature_request", "bug_report"]).optional().describe("New category for all selected tickets"),
+    category: z.enum(["support", "feature_request", "bug", "bug_report", "security", "billing", "how_to", "incident", "feedback"]).optional().describe("New category for all selected tickets"),
+    component: z.enum(["services", "databases", "key-value", "deployments", "env-vars", "domains", "mcp-api", "billing", "auth", "builds", "dashboard"]).optional().describe("New component for all selected tickets"),
+    tags: z.array(z.string()).optional().describe("Replace tags for all selected tickets"),
     reason: z.string().optional().describe("Optional customer-visible message posted to each updated ticket"),
   },
-  async ({ ticket_ids, status, priority, category, reason }) => {
-    try { return text(await client.bulkUpdateOpsTickets({ ticket_ids, status, priority, category, reason })); }
+  async ({ ticket_ids, status, priority, category, component, tags, reason }) => {
+    try { return text(await client.bulkUpdateOpsTickets({ ticket_ids, status, priority, category, component, tags, reason })); }
     catch (e) { return err(e); }
   },
 );

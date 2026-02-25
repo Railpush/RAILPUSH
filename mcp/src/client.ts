@@ -451,11 +451,28 @@ export class RailPushClient {
 
   // ── Support Tickets ─────────────────────────────────────────────────
 
-  async listSupportTickets() {
-    return this.request("GET", "/support/tickets");
+  async listSupportTickets(params?: {
+    status?: string;
+    category?: string;
+    component?: string;
+    tags?: string[];
+    query?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    const qs = new URLSearchParams();
+    if (params?.status) qs.set("status", params.status);
+    if (params?.category) qs.set("category", params.category);
+    if (params?.component) qs.set("component", params.component);
+    if (params?.tags?.length) qs.set("tags", params.tags.join(","));
+    if (params?.query) qs.set("query", params.query);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    if (params?.offset) qs.set("offset", String(params.offset));
+    const q = qs.toString();
+    return this.request("GET", `/support/tickets${q ? `?${q}` : ""}`);
   }
 
-  async createSupportTicket(data: { subject: string; message: string; priority?: string; category?: string }) {
+  async createSupportTicket(data: { subject: string; message: string; priority?: string; category?: string; component?: string; tags?: string[] }) {
     return this.request("POST", "/support/tickets", data);
   }
 
@@ -467,13 +484,19 @@ export class RailPushClient {
     return this.request("POST", `/support/tickets/${ticketId}/messages`, { message });
   }
 
+  async updateSupportTicketTags(ticketId: string, tags: string[]) {
+    return this.request("PATCH", `/support/tickets/${ticketId}/tags`, { tags });
+  }
+
   // ── Ops: Support Tickets (admin/ops role required) ─────────────────
 
-  async listOpsTickets(params?: { status?: string; category?: string; priority?: string; query?: string; limit?: number; offset?: number }) {
+  async listOpsTickets(params?: { status?: string; category?: string; priority?: string; component?: string; tags?: string[]; query?: string; limit?: number; offset?: number }) {
     const qs = new URLSearchParams();
     if (params?.status) qs.set("status", params.status);
     if (params?.category) qs.set("category", params.category);
     if (params?.priority) qs.set("priority", params.priority);
+    if (params?.component) qs.set("component", params.component);
+    if (params?.tags?.length) qs.set("tags", params.tags.join(","));
     if (params?.query) qs.set("query", params.query);
     if (params?.limit) qs.set("limit", String(params.limit));
     if (params?.offset) qs.set("offset", String(params.offset));
@@ -485,6 +508,8 @@ export class RailPushClient {
     status?: string;
     category?: string;
     priority?: string;
+    component?: string;
+    tags?: string[];
     query?: string;
     created_after?: string;
     created_before?: string;
@@ -498,6 +523,8 @@ export class RailPushClient {
     if (params?.status) qs.set("status", params.status);
     if (params?.category) qs.set("category", params.category);
     if (params?.priority) qs.set("priority", params.priority);
+    if (params?.component) qs.set("component", params.component);
+    if (params?.tags?.length) qs.set("tags", params.tags.join(","));
     if (params?.query) qs.set("query", params.query);
     if (params?.created_after) qs.set("created_after", params.created_after);
     if (params?.created_before) qs.set("created_before", params.created_before);
@@ -512,11 +539,11 @@ export class RailPushClient {
     return this.request("GET", `/ops/tickets/${id}`);
   }
 
-  async updateOpsTicket(id: string, data: { status?: string; priority?: string; assigned_to?: string; category?: string }) {
+  async updateOpsTicket(id: string, data: { status?: string; priority?: string; assigned_to?: string; category?: string; component?: string; tags?: string[] }) {
     return this.request("PATCH", `/ops/tickets/${id}`, data);
   }
 
-  async bulkUpdateOpsTickets(data: { ticket_ids: string[]; status?: string; priority?: string; category?: string; reason?: string }) {
+  async bulkUpdateOpsTickets(data: { ticket_ids: string[]; status?: string; priority?: string; category?: string; component?: string; tags?: string[]; reason?: string }) {
     return this.request("POST", "/ops/tickets/bulk", data);
   }
 

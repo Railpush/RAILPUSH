@@ -361,11 +361,14 @@ export const ops = {
   getBillingCustomer: (id: string) => request<OpsBillingCustomerDetail>(`/ops/billing/customers/${encodeURIComponent(id)}`),
 
   // Tickets
-  listTickets: (params?: { query?: string; status?: string; category?: string; limit?: number; offset?: number }) => {
+  listTickets: (params?: { query?: string; status?: string; category?: string; priority?: string; component?: string; tags?: string[]; limit?: number; offset?: number }) => {
     const qs = new URLSearchParams();
     if (params?.query) qs.set('query', params.query);
     if (params?.status) qs.set('status', params.status);
     if (params?.category) qs.set('category', params.category);
+    if (params?.priority) qs.set('priority', params.priority);
+    if (params?.component) qs.set('component', params.component);
+    if (params?.tags?.length) qs.set('tags', params.tags.join(','));
     if (params?.limit) qs.set('limit', String(params.limit));
     if (params?.offset) qs.set('offset', String(params.offset));
     const suffix = qs.toString() ? `?${qs}` : '';
@@ -376,6 +379,8 @@ export const ops = {
     status?: string;
     category?: string;
     priority?: string;
+    component?: string;
+    tags?: string[];
     created_after?: string;
     created_before?: string;
     sort_by?: 'priority' | 'created_at' | 'updated_at';
@@ -389,6 +394,8 @@ export const ops = {
     if (params?.status) qs.set('status', params.status);
     if (params?.category) qs.set('category', params.category);
     if (params?.priority) qs.set('priority', params.priority);
+    if (params?.component) qs.set('component', params.component);
+    if (params?.tags?.length) qs.set('tags', params.tags.join(','));
     if (params?.created_after) qs.set('created_after', params.created_after);
     if (params?.created_before) qs.set('created_before', params.created_before);
     if (params?.sort_by) qs.set('sort_by', params.sort_by);
@@ -398,9 +405,9 @@ export const ops = {
     return request<OpsTicketSearchResult>(`/ops/tickets?${qs.toString()}`);
   },
   getTicket: (id: string) => request<OpsTicketDetail>(`/ops/tickets/${encodeURIComponent(id)}`),
-  updateTicket: (id: string, data: { status?: string; priority?: string; assigned_to?: string; category?: string }) =>
+  updateTicket: (id: string, data: { status?: string; priority?: string; assigned_to?: string; category?: string; component?: string; tags?: string[] }) =>
     request<{ status: string }>(`/ops/tickets/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  bulkUpdateTickets: (data: { ticket_ids: string[]; status?: string; priority?: string; category?: string; reason?: string }) =>
+  bulkUpdateTickets: (data: { ticket_ids: string[]; status?: string; priority?: string; category?: string; component?: string; tags?: string[]; reason?: string }) =>
     request<{ status: string; updated: number }>('/ops/tickets/bulk', { method: 'POST', body: JSON.stringify(data) }),
   createTicketMessage: (id: string, data: { message: string; is_internal?: boolean }) =>
     request<SupportTicketMessage>(`/ops/tickets/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify(data) }),
@@ -539,16 +546,31 @@ export const ops = {
 
 // Support (customer-facing)
 export const support = {
-  listTickets: (params?: { limit?: number; offset?: number }) => {
+  listTickets: (params?: {
+    status?: string;
+    category?: string;
+    component?: string;
+    tags?: string[];
+    query?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
     const qs = new URLSearchParams();
+    if (params?.status) qs.set('status', params.status);
+    if (params?.category) qs.set('category', params.category);
+    if (params?.component) qs.set('component', params.component);
+    if (params?.tags?.length) qs.set('tags', params.tags.join(','));
+    if (params?.query) qs.set('query', params.query);
     if (params?.limit) qs.set('limit', String(params.limit));
     if (params?.offset) qs.set('offset', String(params.offset));
     const suffix = qs.toString() ? `?${qs}` : '';
     return request<SupportTicket[]>(`/support/tickets${suffix}`);
   },
-  createTicket: (data: { subject: string; message: string; priority?: string; category?: string }) =>
+  createTicket: (data: { subject: string; message: string; priority?: string; category?: string; component?: string; tags?: string[] }) =>
     request<{ ticket: SupportTicket; messages: SupportTicketMessage[] }>('/support/tickets', { method: 'POST', body: JSON.stringify(data) }),
   getTicket: (id: string) => request<{ ticket: SupportTicket; messages: SupportTicketMessage[] }>(`/support/tickets/${encodeURIComponent(id)}`),
+  updateTicketTags: (id: string, data: { tags: string[] }) =>
+    request<SupportTicket>(`/support/tickets/${encodeURIComponent(id)}/tags`, { method: 'PATCH', body: JSON.stringify(data) }),
   createMessage: (id: string, data: { message: string }) =>
     request<SupportTicketMessage>(`/support/tickets/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify(data) }),
 };

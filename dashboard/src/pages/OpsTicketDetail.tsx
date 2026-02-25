@@ -26,7 +26,27 @@ const priorityOptions = [
 const categoryOptions = [
   { value: 'support', label: 'Support' },
   { value: 'feature_request', label: 'Feature Request' },
-  { value: 'bug_report', label: 'Bug Report' },
+  { value: 'bug', label: 'Bug' },
+  { value: 'security', label: 'Security' },
+  { value: 'billing', label: 'Billing' },
+  { value: 'how_to', label: 'How-to' },
+  { value: 'incident', label: 'Incident' },
+  { value: 'feedback', label: 'Feedback' },
+];
+
+const componentOptions = [
+  { value: '', label: 'Unspecified' },
+  { value: 'services', label: 'Services' },
+  { value: 'databases', label: 'Databases' },
+  { value: 'key-value', label: 'Key-Value' },
+  { value: 'deployments', label: 'Deployments' },
+  { value: 'env-vars', label: 'Env Vars' },
+  { value: 'domains', label: 'Domains' },
+  { value: 'mcp-api', label: 'MCP / API' },
+  { value: 'billing', label: 'Billing' },
+  { value: 'auth', label: 'Auth' },
+  { value: 'builds', label: 'Builds' },
+  { value: 'dashboard', label: 'Dashboard' },
 ];
 
 export function OpsTicketDetailPage() {
@@ -43,6 +63,8 @@ export function OpsTicketDetailPage() {
   const [priority, setPriority] = useState('normal');
   const [ticketCategory, setTicketCategory] = useState('support');
   const [assignedTo, setAssignedTo] = useState('');
+  const [ticketComponent, setTicketComponent] = useState('');
+  const [ticketTags, setTicketTags] = useState('');
 
   const [message, setMessage] = useState('');
   const [internal, setInternal] = useState(false);
@@ -62,6 +84,8 @@ export function OpsTicketDetailPage() {
         setPriority(d.ticket.priority || 'normal');
         setTicketCategory(d.ticket.category || 'support');
         setAssignedTo(d.ticket.assigned_to || '');
+        setTicketComponent(d.ticket.component || '');
+        setTicketTags((d.ticket.tags || []).join(', '));
       })
       .catch((e) => {
         if (e instanceof ApiError && e.status === 403) {
@@ -80,14 +104,28 @@ export function OpsTicketDetailPage() {
 
   const changed = useMemo(() => {
     if (!data) return false;
-    return (data.ticket.status || '') !== status || (data.ticket.priority || '') !== priority || (data.ticket.category || 'support') !== ticketCategory || (data.ticket.assigned_to || '') !== assignedTo;
-  }, [assignedTo, data, priority, status, ticketCategory]);
+    const currentTags = (data.ticket.tags || []).join(',');
+    const nextTags = ticketTags.split(',').map((v) => v.trim()).filter(Boolean).join(',');
+    return (data.ticket.status || '') !== status
+      || (data.ticket.priority || '') !== priority
+      || (data.ticket.category || 'support') !== ticketCategory
+      || (data.ticket.assigned_to || '') !== assignedTo
+      || (data.ticket.component || '') !== ticketComponent
+      || currentTags !== nextTags;
+  }, [assignedTo, data, priority, status, ticketCategory, ticketComponent, ticketTags]);
 
   const save = async () => {
     if (!ticketId) return;
     setSaving(true);
     try {
-      await ops.updateTicket(ticketId, { status, priority, category: ticketCategory, assigned_to: assignedTo || '' });
+      await ops.updateTicket(ticketId, {
+        status,
+        priority,
+        category: ticketCategory,
+        assigned_to: assignedTo || '',
+        component: ticketComponent,
+        tags: ticketTags.split(',').map((v) => v.trim()).filter(Boolean),
+      });
       load();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to update ticket');
@@ -208,6 +246,21 @@ export function OpsTicketDetailPage() {
                       ))}
                     </select>
                   </label>
+
+                  <label className="text-sm text-content-secondary">
+                    Component
+                    <select
+                      value={ticketComponent}
+                      onChange={(e) => setTicketComponent(e.target.value)}
+                      className="ml-2 h-9 px-2 rounded-md bg-surface-secondary border border-border-default text-sm"
+                    >
+                      {componentOptions.map((o) => (
+                        <option key={o.value || 'none'} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -224,6 +277,16 @@ export function OpsTicketDetailPage() {
                     </button>
                   )}
                 </div>
+
+                <label className="block">
+                  <div className="text-xs text-content-tertiary mb-1">Tags (comma-separated)</div>
+                  <input
+                    value={ticketTags}
+                    onChange={(e) => setTicketTags(e.target.value)}
+                    placeholder="mcp, api"
+                    className="w-full h-9 px-3 rounded-md bg-surface-secondary border border-border-default text-sm"
+                  />
+                </label>
 
                 <div className="flex items-center gap-2">
                   <Button variant="secondary" onClick={save} loading={saving} disabled={!changed}>
@@ -289,4 +352,3 @@ export function OpsTicketDetailPage() {
     </div>
   );
 }
-

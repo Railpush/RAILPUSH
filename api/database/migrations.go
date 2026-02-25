@@ -388,6 +388,12 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 	// Support ticket category (support, feature_request, bug_report).
 	`ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'support'`,
 	`CREATE INDEX IF NOT EXISTS idx_support_tickets_category ON support_tickets(category)`,
+	// Expanded support ticket triage metadata: canonical categories, component, and tags.
+	`UPDATE support_tickets SET category='bug' WHERE category IN ('bug_report', 'bug-report')`,
+	`ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS component TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}'`,
+	`CREATE INDEX IF NOT EXISTS idx_support_tickets_component ON support_tickets(component)`,
+	`CREATE INDEX IF NOT EXISTS idx_support_tickets_tags_gin ON support_tickets USING GIN(tags)`,
 
 	// Nested project folders: a folder can contain sub-folders (self-referencing FK).
 	`ALTER TABLE project_folders ADD COLUMN IF NOT EXISTS parent_id UUID`,
