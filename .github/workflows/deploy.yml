@@ -126,6 +126,61 @@ jobs:
             done
           fi
           if [ ! -f "${ENV_FILE}" ]; then
+            kctl() {
+              if command -v k3s >/dev/null 2>&1; then
+                ${SUDO} k3s kubectl "$@"
+              elif command -v kubectl >/dev/null 2>&1; then
+                ${SUDO} kubectl "$@"
+              else
+                return 127
+              fi
+            }
+            cm_key() {
+              local key="$1"
+              kctl -n railpush get configmap railpush-config -o "jsonpath={.data.${key}}" 2>/dev/null || true
+            }
+            secret_key() {
+              local key="$1"
+              local encoded
+              encoded="$(kctl -n railpush get secret railpush-secrets -o "jsonpath={.data.${key}}" 2>/dev/null || true)"
+              if [ -z "${encoded}" ]; then
+                return 0
+              fi
+              printf '%s' "${encoded}" | base64 -d 2>/dev/null || true
+            }
+            write_env_line() {
+              local key="$1"
+              local value="$2"
+              local escaped
+              if [ -z "${value}" ]; then
+                return 0
+              fi
+              escaped="${value//\\/\\\\}"
+              escaped="${escaped//\"/\\\"}"
+              printf '%s="%s"\n' "${key}" "${escaped}" >> "${TMP_ENV}"
+            }
+
+            if kctl -n railpush get configmap railpush-config >/dev/null 2>&1 && kctl -n railpush get secret railpush-secrets >/dev/null 2>&1; then
+              TMP_ENV="$(mktemp)"
+
+              write_env_line "DATABASE_URL" "$(secret_key DATABASE_URL)"
+              write_env_line "DB_HOST" "$(cm_key DB_HOST)"
+              write_env_line "DB_PORT" "$(cm_key DB_PORT)"
+              write_env_line "DB_NAME" "$(cm_key DB_NAME)"
+              write_env_line "DB_USER" "$(cm_key DB_USER)"
+              write_env_line "DB_SSLMODE" "$(cm_key DB_SSLMODE)"
+              write_env_line "DB_PASSWORD" "$(secret_key DB_PASSWORD)"
+              write_env_line "JWT_SECRET" "$(secret_key JWT_SECRET)"
+              write_env_line "ENCRYPTION_KEY" "$(secret_key ENCRYPTION_KEY)"
+
+              if grep -Eq '^(DATABASE_URL|DB_PASSWORD)=.+' "${TMP_ENV}" && grep -Eq '^JWT_SECRET=.+' "${TMP_ENV}" && grep -Eq '^ENCRYPTION_KEY=.+' "${TMP_ENV}"; then
+                ${SUDO} install -m 0600 -o root -g root "${TMP_ENV}" "${ENV_FILE}"
+                echo "Seeded ${ENV_FILE} from Kubernetes config + secret."
+              fi
+              rm -f "${TMP_ENV}"
+            fi
+          fi
+          if [ ! -f "${ENV_FILE}" ]; then
             echo "Missing ${ENV_FILE}. Create it with DB/JWT/crypto secrets before deploy."
             exit 1
           fi
