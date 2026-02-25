@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,6 +60,53 @@ func (h *DatabaseHandler) ListDatabases(w http.ResponseWriter, r *http.Request) 
 		active = append(active, item)
 	}
 	dbs = active
+
+	filterPlan := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("plan")))
+	filterStatus := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
+	filterName := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("name")))
+	filterQuery := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("query")))
+	filterPGVersionRaw := strings.TrimSpace(r.URL.Query().Get("pg_version"))
+	filterPGVersion := 0
+	if filterPGVersionRaw != "" {
+		parsed, err := strconv.Atoi(filterPGVersionRaw)
+		if err != nil {
+			utils.RespondError(w, http.StatusBadRequest, "invalid pg_version")
+			return
+		}
+		filterPGVersion = parsed
+	}
+
+	if filterPlan != "" || filterStatus != "" || filterName != "" || filterQuery != "" || filterPGVersionRaw != "" {
+		filtered := dbs[:0]
+		for _, item := range dbs {
+			if filterPlan != "" && strings.ToLower(strings.TrimSpace(item.Plan)) != filterPlan {
+				continue
+			}
+			if filterStatus != "" && strings.ToLower(strings.TrimSpace(item.Status)) != filterStatus {
+				continue
+			}
+			if filterPGVersionRaw != "" && item.PGVersion != filterPGVersion {
+				continue
+			}
+			if filterName != "" && !strings.Contains(strings.ToLower(item.Name), filterName) {
+				continue
+			}
+			if filterQuery != "" {
+				haystack := strings.ToLower(strings.Join([]string{
+					item.Name,
+					item.DBName,
+					item.Host,
+					item.Plan,
+					item.Status,
+				}, " "))
+				if !strings.Contains(haystack, filterQuery) {
+					continue
+				}
+			}
+			filtered = append(filtered, item)
+		}
+		dbs = filtered
+	}
 	utils.RespondJSON(w, http.StatusOK, dbs)
 }
 
@@ -266,23 +314,23 @@ func (h *DatabaseHandler) databaseResponse(db *models.ManagedDatabase, password 
 	psqlCommand := "PGPASSWORD=" + passwordForURL + " psql -h " + db.Host + " -p " + intToStr(db.Port) + " -U " + db.Username + " " + db.DBName
 
 	resp := map[string]interface{}{
-		"id":                 db.ID,
-		"workspace_id":       db.WorkspaceID,
-		"name":               db.Name,
-		"plan":               db.Plan,
-		"pg_version":         db.PGVersion,
-		"container_id":       db.ContainerID,
-		"host":               db.Host,
-		"port":               db.Port,
-		"external_port":      0,
-		"db_name":            db.DBName,
-		"username":           db.Username,
-		"status":             db.Status,
-		"ha_enabled":         db.HAEnabled,
-		"ha_strategy":        db.HAStrategy,
-		"standby_replica_id": db.StandbyReplicaID,
-		"init_script":        db.InitScript,
-		"created_at":         db.CreatedAt,
+		"id":                    db.ID,
+		"workspace_id":          db.WorkspaceID,
+		"name":                  db.Name,
+		"plan":                  db.Plan,
+		"pg_version":            db.PGVersion,
+		"container_id":          db.ContainerID,
+		"host":                  db.Host,
+		"port":                  db.Port,
+		"external_port":         0,
+		"db_name":               db.DBName,
+		"username":              db.Username,
+		"status":                db.Status,
+		"ha_enabled":            db.HAEnabled,
+		"ha_strategy":           db.HAStrategy,
+		"standby_replica_id":    db.StandbyReplicaID,
+		"init_script":           db.InitScript,
+		"created_at":            db.CreatedAt,
 		"internal_url":          internalURL,
 		"external_url":          "",
 		"external_psql_command": "",
@@ -532,7 +580,7 @@ func (h *DatabaseHandler) DeleteDatabase(w http.ResponseWriter, r *http.Request)
 	_ = models.UpdateManagedDatabaseStatus(db.ID, "soft_deleted", db.ContainerID)
 
 	services.Audit(db.WorkspaceID, userID, "database.soft_deleted", "database", id, map[string]interface{}{
-		"name":       db.Name,
+		"name":        db.Name,
 		"purge_after": purgeAfter,
 	})
 	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{

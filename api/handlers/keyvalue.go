@@ -55,6 +55,40 @@ func (h *KeyValueHandler) ListKeyValues(w http.ResponseWriter, r *http.Request) 
 		active = append(active, item)
 	}
 	kvs = active
+
+	filterPlan := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("plan")))
+	filterStatus := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
+	filterName := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("name")))
+	filterQuery := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("query")))
+
+	if filterPlan != "" || filterStatus != "" || filterName != "" || filterQuery != "" {
+		filtered := kvs[:0]
+		for _, item := range kvs {
+			if filterPlan != "" && strings.ToLower(strings.TrimSpace(item.Plan)) != filterPlan {
+				continue
+			}
+			if filterStatus != "" && strings.ToLower(strings.TrimSpace(item.Status)) != filterStatus {
+				continue
+			}
+			if filterName != "" && !strings.Contains(strings.ToLower(item.Name), filterName) {
+				continue
+			}
+			if filterQuery != "" {
+				haystack := strings.ToLower(strings.Join([]string{
+					item.Name,
+					item.Host,
+					item.Plan,
+					item.Status,
+					item.MaxmemoryPolicy,
+				}, " "))
+				if !strings.Contains(haystack, filterQuery) {
+					continue
+				}
+			}
+			filtered = append(filtered, item)
+		}
+		kvs = filtered
+	}
 	utils.RespondJSON(w, http.StatusOK, kvs)
 }
 
@@ -550,7 +584,7 @@ func (h *KeyValueHandler) DeleteKeyValue(w http.ResponseWriter, r *http.Request)
 	}
 	_ = models.UpdateManagedKeyValueStatus(kv.ID, "soft_deleted", kv.ContainerID)
 	services.Audit(kv.WorkspaceID, userID, "keyvalue.soft_deleted", "keyvalue", id, map[string]interface{}{
-		"name":       kv.Name,
+		"name":        kv.Name,
 		"purge_after": purgeAfter,
 	})
 	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{

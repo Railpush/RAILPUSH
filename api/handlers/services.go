@@ -43,10 +43,10 @@ const (
 	serviceEventWebhookEventsKey = "RAILPUSH_EVENT_WEBHOOK_EVENTS"
 	serviceEventWebhookSecretKey = "RAILPUSH_EVENT_WEBHOOK_SECRET"
 
-	legacyDeployWebhookURLKey     = "DEPLOY_WEBHOOK_URL"
-	legacyAltDeployWebhookURLKey  = "RAILPUSH_DEPLOY_WEBHOOK_URL"
-	legacyDeployWebhookEventsKey  = "DEPLOY_WEBHOOK_EVENTS"
-	legacyDeployWebhookSecretKey  = "DEPLOY_WEBHOOK_SECRET"
+	legacyDeployWebhookURLKey       = "DEPLOY_WEBHOOK_URL"
+	legacyAltDeployWebhookURLKey    = "RAILPUSH_DEPLOY_WEBHOOK_URL"
+	legacyDeployWebhookEventsKey    = "DEPLOY_WEBHOOK_EVENTS"
+	legacyDeployWebhookSecretKey    = "DEPLOY_WEBHOOK_SECRET"
 	legacyAltDeployWebhookSecretKey = "RAILPUSH_DEPLOY_WEBHOOK_SECRET"
 )
 
@@ -411,10 +411,14 @@ func (h *ServiceHandler) ListServices(w http.ResponseWriter, r *http.Request) {
 	filterType := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
 	filterStatus := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
 	filterRuntime := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("runtime")))
+	filterPlan := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("plan")))
 	filterName := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("name")))
+	filterRepoURL := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("repo_url")))
+	filterProjectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	filterQuery := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("query")))
 	filterSuspended := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("suspended")))
 
-	if filterType != "" || filterStatus != "" || filterRuntime != "" || filterName != "" || filterSuspended != "" {
+	if filterType != "" || filterStatus != "" || filterRuntime != "" || filterPlan != "" || filterName != "" || filterRepoURL != "" || filterProjectID != "" || filterQuery != "" || filterSuspended != "" {
 		filtered := svcs[:0]
 		for _, s := range svcs {
 			if filterType != "" && strings.ToLower(s.Type) != filterType {
@@ -426,8 +430,31 @@ func (h *ServiceHandler) ListServices(w http.ResponseWriter, r *http.Request) {
 			if filterRuntime != "" && strings.ToLower(s.Runtime) != filterRuntime {
 				continue
 			}
+			if filterPlan != "" && strings.ToLower(strings.TrimSpace(s.Plan)) != filterPlan {
+				continue
+			}
 			if filterName != "" && !strings.Contains(strings.ToLower(s.Name), filterName) {
 				continue
+			}
+			if filterRepoURL != "" && !strings.Contains(strings.ToLower(strings.TrimSpace(s.RepoURL)), filterRepoURL) {
+				continue
+			}
+			if filterProjectID != "" {
+				if s.ProjectID == nil || strings.TrimSpace(*s.ProjectID) != filterProjectID {
+					continue
+				}
+			}
+			if filterQuery != "" {
+				haystack := strings.ToLower(strings.Join([]string{
+					s.Name,
+					s.RepoURL,
+					s.Runtime,
+					s.Type,
+					s.Branch,
+				}, " "))
+				if !strings.Contains(haystack, filterQuery) {
+					continue
+				}
 			}
 			if filterSuspended == "true" && !s.IsSuspended {
 				continue
@@ -960,9 +987,9 @@ func (h *ServiceHandler) TestServiceEventWebhook(w http.ResponseWriter, r *http.
 	}
 
 	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
-		"status":           "sent",
+		"status":            "sent",
 		"webhook_http_code": resp.StatusCode,
-		"response_preview": preview,
+		"response_preview":  preview,
 	})
 }
 
@@ -1324,7 +1351,7 @@ func (h *ServiceHandler) DeleteService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	services.Audit(svc.WorkspaceID, userID, "service.soft_deleted", "service", id, map[string]interface{}{
-		"name":       svc.Name,
+		"name":        svc.Name,
 		"purge_after": purgeAfter,
 	})
 	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
