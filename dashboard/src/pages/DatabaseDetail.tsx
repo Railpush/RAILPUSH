@@ -75,6 +75,7 @@ export function DatabaseDetail() {
 /* ── Info Tab ──────────────────────────────────────────── */
 function InfoTab({ db }: { db: ManagedDatabase }) {
   const [showPassword, setShowPassword] = useState(false);
+  const externalStatus = db.external_access || (db.external_url ? 'enabled' : 'disabled');
 
   const connectionParams = [
     { label: 'Hostname', value: db.host },
@@ -113,7 +114,9 @@ function InfoTab({ db }: { db: ManagedDatabase }) {
                 </>
               ) : (
                 <div className="flex-1 text-xs text-content-tertiary bg-surface-tertiary px-3 py-2 rounded-md">
-                  External database access is disabled until IP allowlisting support is available.
+                  {externalStatus === 'provisioning'
+                    ? 'External endpoint is being provisioned. Refresh in a few seconds.'
+                    : 'External database access is disabled for this cluster.'}
                 </div>
               )}
             </div>
@@ -283,6 +286,10 @@ function MetricCard({ icon, title, value, subtitle, data, color }: {
 
 /* ── Access Control Tab ───────────────────────────────── */
 function AccessControlTab({ db }: { db: ManagedDatabase }) {
+  const externalStatus = db.external_access || (db.external_url ? 'enabled' : 'disabled');
+  const externalEnabled = externalStatus === 'enabled' && Boolean(db.external_url);
+  const externalProvisioning = externalStatus === 'provisioning' && !externalEnabled;
+
   return (
     <div className="space-y-6">
       <Card>
@@ -301,20 +308,38 @@ function AccessControlTab({ db }: { db: ManagedDatabase }) {
           <div className="flex items-center justify-between p-3 bg-surface-tertiary rounded-lg">
             <div>
               <div className="text-sm font-medium text-content-primary">External Access</div>
-              <div className="text-xs text-content-tertiary mt-0.5">Disabled pending IP allowlisting support</div>
+              <div className="text-xs text-content-tertiary mt-0.5">
+                {externalEnabled
+                  ? 'Reachable from outside the cluster with TLS required (sslmode=require)'
+                  : externalProvisioning
+                    ? 'External endpoint is being provisioned'
+                    : 'Disabled for this cluster'}
+              </div>
             </div>
-            <StatusBadge status="created" pulse={false} />
+            <StatusBadge status={externalEnabled ? 'live' : 'created'} pulse={externalProvisioning} />
           </div>
         </div>
       </Card>
 
       <Card>
         <h3 className="text-sm font-semibold text-content-primary mb-3">Allowed IP Addresses</h3>
-        <p className="text-xs text-content-tertiary mb-4">External access is currently disabled platform-wide while per-database IP allowlisting is being rolled out.</p>
+        <p className="text-xs text-content-tertiary mb-4">
+          {externalEnabled
+            ? 'Per-database IP allowlisting is not yet available. Use network/firewall controls and rotate credentials regularly.'
+            : externalProvisioning
+              ? 'External endpoint provisioning is in progress. IP allowlisting controls will be added in a future release.'
+              : 'External access is disabled for this cluster.'}
+        </p>
         <div className="p-8 text-center border border-dashed border-border-default rounded-lg">
           <Shield className="w-8 h-8 text-content-tertiary mx-auto mb-2" />
-          <div className="text-sm text-content-secondary">External access disabled</div>
-          <div className="text-xs text-content-tertiary mt-1">IP allowlisting controls will appear here when available</div>
+          <div className="text-sm text-content-secondary">
+            {externalEnabled ? 'IP allowlisting coming soon' : externalProvisioning ? 'External access provisioning' : 'External access disabled'}
+          </div>
+          <div className="text-xs text-content-tertiary mt-1">
+            {externalEnabled
+              ? 'For now, restrict access using host/network firewall rules.'
+              : 'IP allowlisting controls will appear here when available'}
+          </div>
         </div>
       </Card>
 

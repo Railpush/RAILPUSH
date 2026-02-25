@@ -58,8 +58,9 @@ type ServerConfig struct {
 }
 
 type ControlPlaneConfig struct {
-	Domain         string
-	DBExternalHost string // DNS-only (no Cloudflare proxy) hostname for external DB connections
+	Domain                  string
+	DBExternalHost          string // DNS-only (no Cloudflare proxy) hostname for external DB connections
+	DBExternalAccessEnabled bool   // Controls whether external managed-database endpoints are exposed.
 }
 
 type DatabaseConfig struct {
@@ -217,8 +218,9 @@ func Load() *Config {
 			Port: getEnvInt("SERVER_PORT", 8080),
 		},
 		ControlPlane: ControlPlaneConfig{
-			Domain:         controlPlaneDomain,
-			DBExternalHost: getEnv("DB_EXTERNAL_HOST", ""),
+			Domain:                  controlPlaneDomain,
+			DBExternalHost:          getEnv("DB_EXTERNAL_HOST", ""),
+			DBExternalAccessEnabled: getEnvBool("DB_EXTERNAL_ACCESS_ENABLED", false),
 		},
 		Database: DatabaseConfig{
 			Host:     getEnv("DB_HOST", "localhost"),

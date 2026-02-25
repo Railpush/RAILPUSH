@@ -832,6 +832,109 @@ func (w *Worker) GetEmailer() (Emailer, error) {
 	}
 }
 
+func (w *Worker) ExternalDatabaseAccessEnabled() bool {
+	return w != nil && w.Config != nil && w.Config.Kubernetes.Enabled && w.Config.ControlPlane.DBExternalAccessEnabled
+}
+
+func (w *Worker) ExternalDatabaseHost() string {
+	if w == nil || w.Config == nil {
+		return ""
+	}
+	host := strings.TrimSpace(w.Config.ControlPlane.DBExternalHost)
+	if host != "" {
+		return host
+	}
+	return strings.TrimSpace(w.Config.ControlPlane.Domain)
+}
+
+func (w *Worker) EnsureDatabaseExternalEndpoint(ctx context.Context, db *models.ManagedDatabase) (int, error) {
+	if !w.ExternalDatabaseAccessEnabled() {
+		return 0, fmt.Errorf("external database access is disabled")
+	}
+	if db == nil || strings.TrimSpace(db.ID) == "" {
+		return 0, fmt.Errorf("missing database")
+	}
+	if strings.EqualFold(strings.TrimSpace(db.Status), "soft_deleted") {
+		return 0, fmt.Errorf("database is soft-deleted")
+	}
+	if strings.TrimSpace(db.Host) == "" || db.Port <= 0 {
+		return 0, fmt.Errorf("database endpoint is not ready yet")
+	}
+
+	kd, err := w.GetKubeDeployer()
+	if err != nil {
+		return 0, fmt.Errorf("kube deployer unavailable: %w", err)
+	}
+
+	externalPort := db.ExternalPort
+	allocatedNow := false
+	if externalPort <= 0 {
+		port, allocErr := models.AllocateExternalPort(db.ID)
+		if allocErr != nil {
+			latest, latestErr := models.GetManagedDatabase(db.ID)
+			if latestErr == nil && latest != nil && latest.ExternalPort > 0 {
+				externalPort = latest.ExternalPort
+			} else {
+				return 0, fmt.Errorf("allocate external port: %w", allocErr)
+			}
+		} else {
+			externalPort = port
+			allocatedNow = true
+		}
+	}
+
+	if ctx == nil {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		ctx = cctx
+	} else if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		ctx = cctx
+	}
+
+	if err := kd.SetTCPServiceEntry(ctx, externalPort, strings.TrimSpace(db.Host), db.Port); err != nil {
+		if allocatedNow {
+			_ = models.ClearExternalPort(db.ID)
+		}
+		return 0, fmt.Errorf("configure tcp proxy: %w", err)
+	}
+
+	db.ExternalPort = externalPort
+	return externalPort, nil
+}
+
+func (w *Worker) reconcileDatabaseExternalEndpoints() {
+	if !w.ExternalDatabaseAccessEnabled() {
+		return
+	}
+	dbs, err := models.ListManagedDatabases()
+	if err != nil {
+		log.Printf("worker: reconcile external database endpoints: list failed: %v", err)
+		return
+	}
+	var ensured int
+	for _, item := range dbs {
+		if !strings.EqualFold(strings.TrimSpace(item.Status), "available") {
+			continue
+		}
+		full, err := models.GetManagedDatabase(item.ID)
+		if err != nil || full == nil {
+			continue
+		}
+		if strings.TrimSpace(full.Host) == "" || full.Port <= 0 {
+			continue
+		}
+		if _, err := w.EnsureDatabaseExternalEndpoint(context.Background(), full); err != nil {
+			log.Printf("worker: reconcile external database endpoint %s failed: %v", full.ID, err)
+			continue
+		}
+		w.syncDatabaseServiceLinks(full.ID)
+		ensured++
+	}
+	log.Printf("worker: reconcile external database endpoints ensured=%d", ensured)
+}
+
 func (w *Worker) Start(numWorkers int) {
 	if w == nil {
 		return
@@ -849,8 +952,12 @@ func (w *Worker) Start(numWorkers int) {
 	if w.Config != nil && w.Config.Kubernetes.Enabled {
 		w.wg.Add(1)
 		go w.tenantNetpolLoop()
-		// One-time hardening: remove legacy external database TCP proxy exposure.
-		go w.revokeDatabaseExternalPorts()
+		if w.ExternalDatabaseAccessEnabled() {
+			go w.reconcileDatabaseExternalEndpoints()
+		} else {
+			// One-time hardening: remove legacy external database TCP proxy exposure.
+			go w.revokeDatabaseExternalPorts()
+		}
 	}
 	// Transactional email outbox sender (runs only in worker pods).
 	if w.Config != nil && w.Config.Email.Enabled() {
@@ -1662,6 +1769,13 @@ func (w *Worker) reconcileManagedDatabases() {
 			continue
 		}
 		_ = models.UpdateManagedDatabaseConnection(full.ID, 5432, name)
+		full.Host = name
+		full.Port = 5432
+		if w.ExternalDatabaseAccessEnabled() {
+			if _, err := w.EnsureDatabaseExternalEndpoint(context.Background(), full); err != nil {
+				log.Printf("worker: reconcile databases: external endpoint ensure %s failed: %v", full.ID, err)
+			}
+		}
 		w.syncDatabaseServiceLinks(full.ID)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -2328,6 +2442,13 @@ func (w *Worker) ProvisionDatabase(db *models.ManagedDatabase, password string) 
 			}
 			_ = models.UpdateManagedDatabaseStatus(db.ID, "available", "k8s:"+name)
 			_ = models.UpdateManagedDatabaseConnection(db.ID, 5432, name)
+			db.Host = name
+			db.Port = 5432
+			if w.ExternalDatabaseAccessEnabled() {
+				if _, err := w.EnsureDatabaseExternalEndpoint(context.Background(), db); err != nil {
+					log.Printf("Database %s external endpoint setup failed: %v", db.Name, err)
+				}
+			}
 			w.syncDatabaseServiceLinks(db.ID)
 			log.Printf("Database %s provisioned successfully in k8s (%s)", db.Name, name)
 

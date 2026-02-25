@@ -161,11 +161,14 @@ export interface ManagedDatabase {
   container_id: string;
   host: string;
   port: number;
+  external_port?: number;
   db_name: string;
   username: string;
   password?: string;
   internal_url: string;
   external_url: string;
+  external_psql_command?: string;
+  external_access?: 'enabled' | 'provisioning' | 'disabled';
   status: string;
   ha_enabled?: boolean;
   ha_strategy?: string;

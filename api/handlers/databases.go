@@ -268,6 +268,11 @@ func (h *DatabaseHandler) GetDatabase(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
+	if h.externalDatabaseAccessEnabled() && strings.EqualFold(strings.TrimSpace(db.Status), "available") {
+		if err := h.ensureExternalDatabaseEndpoint(r.Context(), db); err != nil {
+			log.Printf("database %s external endpoint ensure failed: %v", db.ID, err)
+		}
+	}
 
 	pw := ""
 	if db.EncryptedPassword != "" {
@@ -307,6 +312,11 @@ func (h *DatabaseHandler) RevealDatabaseCredentials(w http.ResponseWriter, r *ht
 	if !req.AcknowledgeSensitiveOutput {
 		utils.RespondError(w, http.StatusBadRequest, "acknowledge_sensitive_output must be true")
 		return
+	}
+	if h.externalDatabaseAccessEnabled() && strings.EqualFold(strings.TrimSpace(db.Status), "available") {
+		if err := h.ensureExternalDatabaseEndpoint(r.Context(), db); err != nil {
+			log.Printf("database %s external endpoint ensure failed: %v", db.ID, err)
+		}
 	}
 
 	if strings.TrimSpace(db.EncryptedPassword) == "" {
@@ -446,6 +456,11 @@ func (h *DatabaseHandler) RotateDatabasePassword(w http.ResponseWriter, r *http.
 		linkedServicesUpdated = len(links)
 	}
 	h.syncDatabaseLinks(db.ID)
+	if h.externalDatabaseAccessEnabled() && strings.EqualFold(strings.TrimSpace(db.Status), "available") {
+		if err := h.ensureExternalDatabaseEndpoint(r.Context(), db); err != nil {
+			log.Printf("database %s external endpoint ensure failed: %v", db.ID, err)
+		}
+	}
 
 	services.Audit(db.WorkspaceID, userID, "database.password_rotated", "database", db.ID, map[string]interface{}{
 		"api_key_id":              apiKeyID,
@@ -766,8 +781,41 @@ func (h *DatabaseHandler) databaseResponse(db *models.ManagedDatabase, password 
 		passwordForURL = password
 	}
 
-	internalURL := "postgresql://" + db.Username + ":" + passwordForURL + "@" + db.Host + ":" + intToStr(db.Port) + "/" + db.DBName
-	psqlCommand := "PGPASSWORD=" + passwordForURL + " psql -h " + db.Host + " -p " + intToStr(db.Port) + " -U " + db.Username + " " + db.DBName
+	internalHost, internalPort, dbName, username := h.linkedDatabaseConnectionParts(db, true)
+	if dbName == "" {
+		dbName = strings.TrimSpace(db.DBName)
+		if dbName == "" {
+			dbName = strings.TrimSpace(db.Name)
+		}
+	}
+	if username == "" {
+		username = strings.TrimSpace(db.Username)
+		if username == "" {
+			username = strings.TrimSpace(db.Name)
+		}
+	}
+
+	internalURL := ""
+	psqlCommand := ""
+	if internalHost != "" && internalPort > 0 && dbName != "" && username != "" {
+		internalURL = fmt.Sprintf("postgresql://%s:%s@%s:%d/%s", username, passwordForURL, internalHost, internalPort, dbName)
+		psqlCommand = fmt.Sprintf("PGPASSWORD=%s psql -h %s -p %d -U %s %s", passwordForURL, internalHost, internalPort, username, dbName)
+	}
+
+	externalPort := 0
+	externalURL := ""
+	externalPSQL := ""
+	externalAccess := "disabled"
+	if h.externalDatabaseAccessEnabled() {
+		externalAccess = "provisioning"
+		externalHost, externalConnPort, externalDBName, externalUser := h.linkedDatabaseConnectionParts(db, false)
+		if externalHost != "" && externalConnPort > 0 && externalDBName != "" && externalUser != "" {
+			externalPort = externalConnPort
+			externalURL = fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=require", externalUser, passwordForURL, externalHost, externalConnPort, externalDBName)
+			externalPSQL = fmt.Sprintf("PGPASSWORD=%s PGSSLMODE=require psql -h %s -p %d -U %s %s", passwordForURL, externalHost, externalConnPort, externalUser, externalDBName)
+			externalAccess = "enabled"
+		}
+	}
 
 	resp := map[string]interface{}{
 		"id":                    db.ID,
@@ -778,9 +826,9 @@ func (h *DatabaseHandler) databaseResponse(db *models.ManagedDatabase, password 
 		"container_id":          db.ContainerID,
 		"host":                  db.Host,
 		"port":                  db.Port,
-		"external_port":         0,
-		"db_name":               db.DBName,
-		"username":              db.Username,
+		"external_port":         externalPort,
+		"db_name":               dbName,
+		"username":              username,
 		"status":                db.Status,
 		"ha_enabled":            db.HAEnabled,
 		"ha_strategy":           db.HAStrategy,
@@ -789,9 +837,9 @@ func (h *DatabaseHandler) databaseResponse(db *models.ManagedDatabase, password 
 		"password_rotated_at":   db.PasswordRotatedAt,
 		"created_at":            db.CreatedAt,
 		"internal_url":          internalURL,
-		"external_url":          "",
-		"external_psql_command": "",
-		"external_access":       "disabled",
+		"external_url":          externalURL,
+		"external_psql_command": externalPSQL,
+		"external_access":       externalAccess,
 		"psql_command":          psqlCommand,
 		"credentials_exposed":   revealCredentials,
 	}
@@ -1725,24 +1773,72 @@ func (h *DatabaseHandler) linkedDatabaseURL(db *models.ManagedDatabase, password
 	if db == nil {
 		return ""
 	}
-	host, port, dbName, username := linkedDatabaseConnectionParts(db, useInternal)
+	host, port, dbName, username := h.linkedDatabaseConnectionParts(db, useInternal)
 	if host == "" || port <= 0 || dbName == "" || username == "" {
 		return ""
 	}
 	url := "postgresql://" + username + ":" + password + "@" + host + ":" + intToStr(port) + "/" + dbName
+	if !useInternal {
+		url += "?sslmode=require"
+	}
 	return url
 }
 
-func linkedDatabaseConnectionParts(db *models.ManagedDatabase, useInternal bool) (host string, port int, dbName string, username string) {
+func (h *DatabaseHandler) externalDatabaseAccessEnabled() bool {
+	if h == nil {
+		return false
+	}
+	if h.Worker != nil {
+		return h.Worker.ExternalDatabaseAccessEnabled()
+	}
+	return h.Config != nil && h.Config.Kubernetes.Enabled && h.Config.ControlPlane.DBExternalAccessEnabled
+}
+
+func (h *DatabaseHandler) externalDatabaseHost() string {
+	if h == nil {
+		return ""
+	}
+	if h.Worker != nil {
+		return h.Worker.ExternalDatabaseHost()
+	}
+	if h.Config == nil {
+		return ""
+	}
+	host := strings.TrimSpace(h.Config.ControlPlane.DBExternalHost)
+	if host != "" {
+		return host
+	}
+	return strings.TrimSpace(h.Config.ControlPlane.Domain)
+}
+
+func (h *DatabaseHandler) ensureExternalDatabaseEndpoint(ctx context.Context, db *models.ManagedDatabase) error {
+	if !h.externalDatabaseAccessEnabled() {
+		return nil
+	}
+	if h.Worker == nil {
+		return fmt.Errorf("worker unavailable")
+	}
+	if _, err := h.Worker.EnsureDatabaseExternalEndpoint(ctx, db); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (h *DatabaseHandler) linkedDatabaseConnectionParts(db *models.ManagedDatabase, useInternal bool) (host string, port int, dbName string, username string) {
 	if db == nil {
 		return "", 0, "", ""
 	}
-	host = strings.TrimSpace(db.Host)
-	port = db.Port
+	if useInternal {
+		host = strings.TrimSpace(db.Host)
+		port = db.Port
+	} else {
+		host = strings.TrimSpace(h.externalDatabaseHost())
+		port = db.ExternalPort
+	}
 	if !useInternal {
-		// External managed database endpoints are currently disabled platform-wide
-		// until IP allowlisting is available.
-		useInternal = true
+		if host == "" || port <= 0 {
+			return "", 0, "", ""
+		}
 	}
 	dbName = strings.TrimSpace(db.DBName)
 	if dbName == "" {
@@ -1767,9 +1863,14 @@ func (h *DatabaseHandler) linkedDatabaseEnvVars(db *models.ManagedDatabase, pass
 	if envVar == "" {
 		envVar = "DATABASE_URL"
 	}
-	host, port, dbName, username := linkedDatabaseConnectionParts(db, useInternal)
+	host, port, dbName, username := h.linkedDatabaseConnectionParts(db, useInternal)
 	if host == "" || port <= 0 || dbName == "" || username == "" {
 		return nil, fmt.Errorf("database endpoint is not ready yet")
+	}
+
+	connectionURL := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s", username, password, host, port, dbName)
+	if !useInternal {
+		connectionURL += "?sslmode=require"
 	}
 
 	items := []struct {
@@ -1777,7 +1878,7 @@ func (h *DatabaseHandler) linkedDatabaseEnvVars(db *models.ManagedDatabase, pass
 		value  string
 		secret bool
 	}{
-		{key: envVar, value: fmt.Sprintf("postgresql://%s:%s@%s:%d/%s", username, password, host, port, dbName), secret: true},
+		{key: envVar, value: connectionURL, secret: true},
 	}
 
 	if strings.EqualFold(envVar, "DATABASE_URL") {
@@ -1843,6 +1944,9 @@ func (h *DatabaseHandler) syncDatabaseLinks(dbID string) {
 		if svc.WorkspaceID != db.WorkspaceID {
 			continue
 		}
+		if !l.UseInternalURL {
+			_ = h.ensureExternalDatabaseEndpoint(context.Background(), db)
+		}
 		vars, err := h.linkedDatabaseEnvVars(db, pw, l.EnvVarName, l.UseInternalURL)
 		if err != nil {
 			continue
@@ -1887,11 +1991,24 @@ func (h *DatabaseHandler) LinkDatabaseToService(w http.ResponseWriter, r *http.R
 	if envVar == "" {
 		envVar = "DATABASE_URL"
 	}
-	if req.UseInternalURL != nil && !*req.UseInternalURL {
-		utils.RespondError(w, http.StatusBadRequest, "external database URLs are disabled pending IP allowlisting support")
-		return
-	}
 	useInternal := true
+	if req.UseInternalURL != nil {
+		useInternal = *req.UseInternalURL
+	}
+	if !useInternal {
+		if !h.externalDatabaseAccessEnabled() {
+			utils.RespondError(w, http.StatusBadRequest, "external database URLs are currently disabled")
+			return
+		}
+		if !strings.EqualFold(strings.TrimSpace(db.Status), "available") {
+			utils.RespondError(w, http.StatusConflict, "database endpoint is not ready yet")
+			return
+		}
+		if err := h.ensureExternalDatabaseEndpoint(r.Context(), db); err != nil {
+			utils.RespondError(w, http.StatusServiceUnavailable, "external database endpoint is not ready yet")
+			return
+		}
+	}
 
 	if strings.TrimSpace(db.EncryptedPassword) == "" {
 		utils.RespondError(w, http.StatusBadRequest, "database credentials are not ready yet")
