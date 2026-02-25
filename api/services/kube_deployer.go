@@ -147,6 +147,59 @@ func ingressPolicyAnnotationsFromEnv(env map[string]string) map[string]string {
 	return out
 }
 
+func parseTruthyEnv(raw string) bool {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	switch raw {
+	case "1", "true", "yes", "on", "enabled":
+		return true
+	default:
+		return false
+	}
+}
+
+func serviceIngressDisabledFromEnv(env map[string]string) bool {
+	if len(env) == 0 {
+		return false
+	}
+
+	for _, key := range []string{"RAILPUSH_INTERNAL_ONLY", "RAILPUSH_DISABLE_PUBLIC_INGRESS", "DISABLE_PUBLIC_INGRESS"} {
+		if parseTruthyEnv(env[key]) {
+			return true
+		}
+	}
+
+	visibility := strings.TrimSpace(strings.ToLower(env["RAILPUSH_NETWORK_VISIBILITY"]))
+	switch visibility {
+	case "internal", "private", "cluster", "cluster-local":
+		return true
+	}
+
+	return false
+}
+
+func (k *KubeDeployer) deleteIngressesByComponent(ctx context.Context, ns, serviceID, component string) error {
+	if k == nil || k.Client == nil {
+		return fmt.Errorf("kube deployer not initialized")
+	}
+	serviceID = strings.TrimSpace(serviceID)
+	component = strings.TrimSpace(component)
+	if serviceID == "" || component == "" {
+		return nil
+	}
+
+	selector := fmt.Sprintf("railpush.com/service-id=%s,app.kubernetes.io/component=%s", serviceID, component)
+	list, err := k.Client.NetworkingV1().Ingresses(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return err
+	}
+	for _, ing := range list.Items {
+		if err := k.Client.NetworkingV1().Ingresses(ns).Delete(ctx, ing.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 type probeTuning struct {
 	readinessPeriodSeconds   int32
 	readinessTimeoutSeconds  int32
@@ -681,6 +734,9 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 	case "web", "static":
 		needsIngress = true
 	}
+	if needsIngress && serviceIngressDisabledFromEnv(cleanEnv) {
+		needsIngress = false
+	}
 
 	port := int32(svc.Port)
 	if port <= 0 {
@@ -1061,14 +1117,23 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 		}
 	}
 
-	// Best-effort: keep any custom-domain ingresses in sync with the Service port.
-	if err := k.ReconcileCustomDomainIngresses(svc); err != nil {
-		log.Printf("WARNING: reconcile custom domains service_id=%s: %v", svc.ID, err)
-	}
+	if !wantIngress {
+		if err := k.deleteIngressesByComponent(ctx, ns, svc.ID, "custom-domain"); err != nil {
+			log.Printf("WARNING: delete custom-domain ingresses service_id=%s: %v", svc.ID, err)
+		}
+		if err := k.deleteIngressesByComponent(ctx, ns, svc.ID, "rewrite-rule"); err != nil {
+			log.Printf("WARNING: delete rewrite-rule ingresses service_id=%s: %v", svc.ID, err)
+		}
+	} else {
+		// Best-effort: keep any custom-domain ingresses in sync with the Service port.
+		if err := k.ReconcileCustomDomainIngresses(svc); err != nil {
+			log.Printf("WARNING: reconcile custom domains service_id=%s: %v", svc.ID, err)
+		}
 
-	// Best-effort: keep rewrite-rule ingresses in sync.
-	if err := k.ReconcileRewriteRuleIngresses(svc); err != nil {
-		log.Printf("WARNING: reconcile rewrite rules service_id=%s: %v", svc.ID, err)
+		// Best-effort: keep rewrite-rule ingresses in sync.
+		if err := k.ReconcileRewriteRuleIngresses(svc); err != nil {
+			log.Printf("WARNING: reconcile rewrite rules service_id=%s: %v", svc.ID, err)
+		}
 	}
 
 	return name, nil

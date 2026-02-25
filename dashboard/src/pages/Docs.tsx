@@ -1279,6 +1279,20 @@ RAILPUSH_SERVICE_ID_<SERVICE_ID_TOKEN>_URL=http://<peer-host>:<peer-port>`} />
                 </div>
               </div>
 
+              <h4 className="text-base font-semibold mt-6 mb-2">Disable public ingress for web/static</h4>
+              <p className="text-sm text-content-secondary mb-3">
+                You can keep a <code className="text-xs bg-surface-tertiary px-1 rounded">web</code> or <code className="text-xs bg-surface-tertiary px-1 rounded">static</code> service internal-only by setting one of these env vars, then redeploying:
+              </p>
+              <CodeBlock language="bash" filename="internal-only ingress toggle" code={`# Any one of these disables public ingress for this service
+RAILPUSH_INTERNAL_ONLY=true
+# or
+RAILPUSH_DISABLE_PUBLIC_INGRESS=true
+# or
+RAILPUSH_NETWORK_VISIBILITY=internal`} />
+              <p className="text-xs text-content-tertiary mt-2 mb-4">
+                When public ingress is disabled, default/public hosts, custom-domain ingresses, and rewrite-rule ingresses are removed for that service while internal DNS discovery remains available.
+              </p>
+
               <h3 className="text-lg font-semibold mt-8 mb-3">Service Types &amp; Network Exposure</h3>
               <div className="overflow-x-auto mb-6">
                 <table className="w-full text-sm border border-border-default rounded-lg overflow-hidden">
