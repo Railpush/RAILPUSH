@@ -231,7 +231,18 @@ jobs:
             exit 1
           fi
 
-          ${SUDO} systemctl --no-pager --lines=20 status "${SERVICE_UNIT}"
+          if ! ${SUDO} systemctl is-active --quiet "${SERVICE_UNIT}"; then
+            echo "Service is not active after deploy, rolling back API binary..."
+            if [ -f "${PREV_BIN}" ]; then
+              cp -f "${PREV_BIN}" /opt/railpush/railpush-api-bin
+              ${SUDO} systemctl restart "${SERVICE_UNIT}" || true
+            fi
+            ${SUDO} systemctl --no-pager --lines=60 status "${SERVICE_UNIT}" || true
+            ${SUDO} journalctl -u "${SERVICE_UNIT}" --no-pager -n 80 || true
+            exit 1
+          fi
+
+          ${SUDO} systemctl --no-pager --lines=20 status "${SERVICE_UNIT}" || true
           SSH
 
       - name: Notify Slack
