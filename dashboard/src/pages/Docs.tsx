@@ -1628,7 +1628,7 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'PATCH', path: '/services/:id/log-alerts/:alertId', desc: 'Update a log-based alert rule' },
                   { method: 'DELETE', path: '/services/:id/log-alerts/:alertId', desc: 'Delete a log-based alert rule' },
                   { method: 'GET', path: '/services/:id/metrics', desc: 'Get current resource usage' },
-                  { method: 'GET', path: '/services/:id/metrics/history', desc: 'Get usage history' },
+                  { method: 'GET', path: '/services/:id/metrics/history', desc: 'Get Prometheus-backed usage history (period=1h|6h|24h|7d|30d) for CPU/memory/network' },
                 ]},
                 { group: 'Autoscaling & Jobs', endpoints: [
                   { method: 'GET', path: '/services/:id/autoscaling', desc: 'Get autoscaling policy' },
@@ -1919,7 +1919,7 @@ npm run build`} />
                       ['Autoscaling', 'get policy, set policy'],
                       ['Blueprints', 'list, create, get, update (move to folder), sync, delete'],
                       ['Env Groups', 'list, create, get, update, delete, list vars, set vars, link, unlink, list linked services (optional usage detail)'],
-                      ['Metrics', 'get resource usage, get usage history'],
+                      ['Metrics', 'get current resource usage and Prometheus-backed usage history (CPU/memory/network time-series)'],
                       ['Projects', 'list, create, get, update (name + move to folder), delete'],
                       ['Environments', 'list, create, update, delete'],
                       ['Workspaces', 'list members, invite/update/remove members, list audit logs (limit/cursor), get/set retention policy, get/set compliance policy (phase 1), generate compliance report (soc2/hipaa/gdpr)'],

@@ -147,6 +147,10 @@ type LoggingConfig struct {
 	// LokiURL is the base URL for Loki queries (server-side log retrieval).
 	// Example (in-cluster): http://loki-gateway.logging.svc.cluster.local
 	LokiURL string
+
+	// PrometheusURL is the base URL for Prometheus queries (metrics history).
+	// Example (in-cluster): http://monitoring-kube-prometheus-prometheus.monitoring.svc:9090
+	PrometheusURL string
 }
 
 type EmailOutboxConfig struct {
@@ -279,9 +283,10 @@ func Load() *Config {
 			MaxAttempts:    getEnvInt("WORKER_MAX_ATTEMPTS", 3),
 		},
 		Logging: LoggingConfig{
-			Level:   getEnv("LOG_LEVEL", "info"),
-			Format:  getEnv("LOG_FORMAT", "json"),
-			LokiURL: strings.TrimSuffix(strings.TrimSpace(getEnv("LOKI_URL", "")), "/"),
+			Level:         getEnv("LOG_LEVEL", "info"),
+			Format:        getEnv("LOG_FORMAT", "json"),
+			LokiURL:       strings.TrimSuffix(strings.TrimSpace(getEnv("LOKI_URL", "")), "/"),
+			PrometheusURL: strings.TrimSuffix(strings.TrimSpace(getEnv("PROMETHEUS_URL", "")), "/"),
 		},
 		Email: EmailConfig{
 			Provider: strings.ToLower(strings.TrimSpace(getEnv("EMAIL_PROVIDER", ""))),

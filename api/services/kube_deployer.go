@@ -451,6 +451,10 @@ func kubeServiceName(serviceID string) string {
 	return "rp-svc-" + id
 }
 
+func KubeServiceName(serviceID string) string {
+	return kubeServiceName(serviceID)
+}
+
 func kubeServiceLabels(svc *models.Service) map[string]string {
 	labels := map[string]string{
 		"app.kubernetes.io/managed-by": "railpush",

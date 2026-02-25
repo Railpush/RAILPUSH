@@ -46,6 +46,8 @@ data:
   LOG_FORMAT: "json"
   # Loki query base URL (deploy/build log hydration).
   LOKI_URL: "http://loki-gateway.logging.svc.cluster.local"
+  # Prometheus query base URL (service metrics history / charts).
+  PROMETHEUS_URL: "http://monitoring-kube-prometheus-prometheus.monitoring.svc:9090"
 
   # Add more origins as you introduce additional console hostnames.
   CORS_ALLOWED_ORIGINS: "https://apps.railpush.com,https://railpush.com,https://www.railpush.com,https://flightatom-client-tasks.apps.railpush.com"
