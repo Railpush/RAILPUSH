@@ -1142,6 +1142,10 @@ func (h *DatabaseHandler) RestoreDatabase(w http.ResponseWriter, r *http.Request
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if pitrReq.hasBackupRestoreFields() {
+		h.queueBackupRestore(w, r, db, userID, pitrReq)
+		return
+	}
 	if pitrReq.hasPointInTimeFields() {
 		h.queuePointInTimeRestore(w, r, db, userID, pitrReq)
 		return

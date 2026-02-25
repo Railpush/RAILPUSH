@@ -79,3 +79,13 @@ func TestPointInTimeRequestDetection(t *testing.T) {
 		t.Fatalf("target_time should trigger point-in-time restore mode")
 	}
 }
+
+func TestBackupRestoreRequestDetection(t *testing.T) {
+	if (pointInTimeRestoreRequest{}).hasBackupRestoreFields() {
+		t.Fatalf("empty request should not be treated as backup restore")
+	}
+	req := pointInTimeRestoreRequest{BackupID: "backup-123"}
+	if !req.hasBackupRestoreFields() {
+		t.Fatalf("backup_id should trigger backup restore mode")
+	}
+}

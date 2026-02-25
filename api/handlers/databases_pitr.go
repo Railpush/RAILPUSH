@@ -27,6 +27,7 @@ const (
 )
 
 type pointInTimeRestoreRequest struct {
+	BackupID           string `json:"backup_id"`
 	TargetTime         string `json:"target_time"`
 	RestoreTo          string `json:"restore_to"`
 	NewDatabaseName    string `json:"new_database_name"`
@@ -43,6 +44,10 @@ type databaseBackupSnapshot struct {
 
 func (req pointInTimeRestoreRequest) hasPointInTimeFields() bool {
 	return strings.TrimSpace(req.TargetTime) != "" || strings.TrimSpace(req.RestoreTo) != "" || strings.TrimSpace(req.NewDatabaseName) != "" || req.ConfirmDestructive
+}
+
+func (req pointInTimeRestoreRequest) hasBackupRestoreFields() bool {
+	return strings.TrimSpace(req.BackupID) != ""
 }
 
 func normalizeDatabaseRestoreTarget(raw string) (string, bool) {
@@ -271,6 +276,154 @@ func latestBackupAtOrBefore(databaseID string, targetTime time.Time) (*databaseB
 		return nil, err
 	}
 	return &b, nil
+}
+
+func backupByIDForDatabase(databaseID string, backupID string) (*databaseBackupSnapshot, error) {
+	var b databaseBackupSnapshot
+	err := database.DB.QueryRow(
+		`SELECT
+			id::text,
+			COALESCE(file_path, ''),
+			COALESCE(finished_at, started_at, NOW()),
+			COALESCE(NULLIF(trigger_type, ''), 'manual'),
+			COALESCE(size_bytes, 0)
+		 FROM backups
+		 WHERE id = $1
+		   AND resource_type='database'
+		   AND resource_id=$2
+		   AND status='completed'
+		 LIMIT 1`,
+		strings.TrimSpace(backupID),
+		strings.TrimSpace(databaseID),
+	).Scan(&b.ID, &b.FilePath, &b.RestorePoint, &b.TriggerType, &b.SizeBytes)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+func (h *DatabaseHandler) queueBackupRestore(w http.ResponseWriter, r *http.Request, source *models.ManagedDatabase, userID string, req pointInTimeRestoreRequest) {
+	if source == nil {
+		utils.RespondError(w, http.StatusBadRequest, "missing database")
+		return
+	}
+
+	if strings.TrimSpace(req.TargetTime) != "" {
+		utils.RespondError(w, http.StatusBadRequest, "target_time cannot be combined with backup_id")
+		return
+	}
+
+	backupID := strings.TrimSpace(req.BackupID)
+	if backupID == "" {
+		utils.RespondError(w, http.StatusBadRequest, "backup_id is required")
+		return
+	}
+
+	restoreTo, ok := normalizeDatabaseRestoreTarget(req.RestoreTo)
+	if !ok {
+		utils.RespondError(w, http.StatusBadRequest, "restore_to must be new_database or in_place")
+		return
+	}
+	if restoreTo == databaseRestoreTargetInPlace && !req.ConfirmDestructive {
+		utils.RespondError(w, http.StatusBadRequest, "in_place restore requires confirm_destructive=true")
+		return
+	}
+	if restoreTo == databaseRestoreTargetInPlace && strings.EqualFold(strings.TrimSpace(source.Status), "soft_deleted") {
+		utils.RespondError(w, http.StatusConflict, "in_place restore is unavailable for soft-deleted databases")
+		return
+	}
+
+	backup, err := backupByIDForDatabase(source.ID, backupID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to load backup")
+		return
+	}
+	if backup == nil {
+		utils.RespondError(w, http.StatusNotFound, "backup not found")
+		return
+	}
+	if strings.TrimSpace(backup.FilePath) == "" {
+		utils.RespondJSON(w, http.StatusConflict, map[string]interface{}{
+			"error":     "selected backup file is not available",
+			"backup_id": backup.ID,
+		})
+		return
+	}
+	if _, err := os.Stat(backup.FilePath); err != nil {
+		utils.RespondJSON(w, http.StatusConflict, map[string]interface{}{
+			"error":       "selected backup file is not available on disk",
+			"backup_id":   backup.ID,
+			"backup_path": backup.FilePath,
+		})
+		return
+	}
+
+	target := source
+	targetPassword := ""
+	if restoreTo == databaseRestoreTargetNewDatabase {
+		newName := strings.TrimSpace(req.NewDatabaseName)
+		if newName == "" {
+			newName = defaultRestoredDatabaseName(source.Name, backup.RestorePoint)
+		}
+		restoredDB, restoredPassword, err := h.createRestoredDatabase(source, userID, newName)
+		if err != nil {
+			utils.RespondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		target = restoredDB
+		targetPassword = restoredPassword
+	}
+
+	targetID := target.ID
+	reqBy := strings.TrimSpace(userID)
+	targetTime := backup.RestorePoint.UTC()
+	effectivePoint := backup.RestorePoint.UTC()
+	job := &models.DatabaseRestoreJob{
+		SourceDatabaseID:      source.ID,
+		TargetDatabaseID:      &targetID,
+		WorkspaceID:           source.WorkspaceID,
+		BackupID:              &backupID,
+		TargetTime:            targetTime,
+		EffectiveRestorePoint: &effectivePoint,
+		RestoreTo:             restoreTo,
+		Status:                "queued",
+		RequestedBy:           &reqBy,
+	}
+	if err := models.CreateDatabaseRestoreJob(job); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to create restore job")
+		return
+	}
+
+	go h.executePointInTimeRestoreJob(job.ID, source.ID, target.ID, targetPassword, backup, restoreTo, userID)
+
+	services.Audit(source.WorkspaceID, userID, "database.backup_restore.queued", "database", source.ID, map[string]interface{}{
+		"restore_job_id":          job.ID,
+		"restore_to":              restoreTo,
+		"target_database_id":      target.ID,
+		"target_time":             targetTime,
+		"effective_restore_point": backup.RestorePoint.UTC(),
+		"backup_id":               backup.ID,
+	})
+
+	response := map[string]interface{}{
+		"id":                      job.ID,
+		"status":                  "queued",
+		"restore_mode":            "backup_id",
+		"restore_to":              restoreTo,
+		"source_database_id":      source.ID,
+		"target_database_id":      target.ID,
+		"target_time":             targetTime.Format(time.RFC3339),
+		"effective_restore_point": backup.RestorePoint.UTC().Format(time.RFC3339),
+		"backup_id":               backup.ID,
+		"restore_precision":       "backup_snapshot",
+	}
+	if restoreTo == databaseRestoreTargetNewDatabase {
+		response["target_database_name"] = target.Name
+	}
+	utils.RespondJSON(w, http.StatusAccepted, response)
 }
 
 func (h *DatabaseHandler) queuePointInTimeRestore(w http.ResponseWriter, r *http.Request, source *models.ManagedDatabase, userID string, req pointInTimeRestoreRequest) {

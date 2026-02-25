@@ -479,6 +479,7 @@ export class RailPushClient {
   }
 
   async restoreDatabase(id: string, data?: {
+    backup_id?: string;
     target_time?: string;
     restore_to?: "new_database" | "in_place";
     new_database_name?: string;

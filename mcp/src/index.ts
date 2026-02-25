@@ -1394,16 +1394,17 @@ server.tool(
 
 server.tool(
   "restore_database",
-  "Restore a database. With no extra fields, restores a soft-deleted database. With target_time, performs time-targeted restore (to a new database by default, or in_place with confirm_destructive=true).",
+  "Restore a database. With no extra fields, restores a soft-deleted database. With backup_id, restores from a specific backup. With target_time, performs time-targeted restore.",
   {
     database_id: z.string().describe("Database ID"),
+    backup_id: z.string().optional().describe("Backup ID for explicit backup restore mode"),
     target_time: z.string().optional().describe("RFC3339 timestamp for time-targeted restore (e.g. 2026-02-24T14:46:00Z)"),
-    restore_to: z.enum(["new_database", "in_place"]).optional().describe("Restore target mode for point-in-time restore"),
+    restore_to: z.enum(["new_database", "in_place"]).optional().describe("Restore target mode for backup/time-targeted restore"),
     new_database_name: z.string().optional().describe("Required/used when restore_to=new_database (defaults if omitted)"),
     confirm_destructive: z.boolean().optional().describe("Required when restore_to=in_place"),
   },
-  async ({ database_id, target_time, restore_to, new_database_name, confirm_destructive }) => {
-    const payload = Object.fromEntries(Object.entries({ target_time, restore_to, new_database_name, confirm_destructive }).filter(([, v]) => v !== undefined));
+  async ({ database_id, backup_id, target_time, restore_to, new_database_name, confirm_destructive }) => {
+    const payload = Object.fromEntries(Object.entries({ backup_id, target_time, restore_to, new_database_name, confirm_destructive }).filter(([, v]) => v !== undefined));
     try {
       if (Object.keys(payload).length === 0) {
         return text(await client.restoreDatabase(database_id));
