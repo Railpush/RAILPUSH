@@ -206,6 +206,20 @@ export class RailPushClient {
     return this.request("PUT", `/services/${id}/retention`, data);
   }
 
+  async getServiceAccessControl(id: string) {
+    return this.request("GET", `/services/${id}/access-control`);
+  }
+
+  async setServiceAccessControl(id: string, data: Record<string, unknown>) {
+    return this.request("PUT", `/services/${id}/access-control`, data);
+  }
+
+  async listServiceAccessControlLog(id: string, limit?: number) {
+    const query: Record<string, string> = {};
+    if (typeof limit === "number" && limit > 0) query.limit = String(limit);
+    return this.request("GET", `/services/${id}/access-control/log`, undefined, query);
+  }
+
   async deleteService(id: string, hardDelete?: boolean) {
     return this.performConfirmedDelete(`/services/${id}`, hardDelete);
   }

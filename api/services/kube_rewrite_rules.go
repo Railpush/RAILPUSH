@@ -102,6 +102,9 @@ func (k *KubeDeployer) UpsertRewriteRuleIngress(svc *models.Service, rule *model
 		"railpush.com/source-path":                       rule.SourcePath,
 		"railpush.com/dest-service":                      destSvc.Name,
 	}
+	for key, value := range k.serviceIngressPolicyAnnotations(svc) {
+		annotations[key] = value
+	}
 
 	ing := &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{

@@ -59,16 +59,19 @@ func normalizeIngressWhitelist(raw string) string {
 }
 
 func ingressWhitelistFromEnv(env map[string]string) string {
-	if len(env) == 0 {
+	allow, _ := ResolveServiceAccessControlRangesFromEnv(env, time.Now().UTC())
+	if len(allow) == 0 {
 		return ""
 	}
-	keys := []string{"INGRESS_WHITELIST_SOURCE_RANGE", "RAILPUSH_IP_ALLOWLIST", "ALLOWED_IP_CIDRS"}
-	for _, k := range keys {
-		if v := normalizeIngressWhitelist(env[k]); v != "" {
-			return v
-		}
+	return strings.Join(allow, ",")
+}
+
+func ingressDenylistFromEnv(env map[string]string) string {
+	_, deny := ResolveServiceAccessControlRangesFromEnv(env, time.Now().UTC())
+	if len(deny) == 0 {
+		return ""
 	}
-	return ""
+	return strings.Join(deny, ",")
 }
 
 func ingressRateLimitAnnotationsFromEnv(env map[string]string) map[string]string {
@@ -112,6 +115,10 @@ func ingressPolicyAnnotationsFromEnv(env map[string]string) map[string]string {
 	out := map[string]string{}
 	if wl := ingressWhitelistFromEnv(env); wl != "" {
 		out["nginx.ingress.kubernetes.io/whitelist-source-range"] = wl
+	}
+	if dl := ingressDenylistFromEnv(env); dl != "" {
+		out["nginx.ingress.kubernetes.io/denylist-source-range"] = dl
+		out["nginx.ingress.kubernetes.io/blacklist-source-range"] = dl
 	}
 	for k, v := range ingressRateLimitAnnotationsFromEnv(env) {
 		out[k] = v

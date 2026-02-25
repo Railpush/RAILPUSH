@@ -358,6 +358,68 @@ server.tool(
 );
 
 server.tool(
+  "get_service_access_control",
+  "Get ingress access-control policy for a service (IP allowlist/blocklist mode, rules, and active CIDRs).",
+  {
+    service_id: z.string().describe("Service ID"),
+  },
+  async ({ service_id }) => {
+    try { return text(await client.getServiceAccessControl(service_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "set_service_access_control",
+  "Configure ingress IP access control for a service. Supports allowlist/blocklist modes, CIDR rules, optional expiry, and custom deny response.",
+  {
+    service_id: z.string().describe("Service ID"),
+    enabled: z.boolean().describe("Enable or disable service IP access control"),
+    mode: z.enum(["allowlist", "blocklist"]).optional().describe("allowlist (default deny) or blocklist (default allow)"),
+    rules: z.array(z.object({
+      cidr: z.string().describe("CIDR or single IP (single IP is normalized to /32 or /128)"),
+      name: z.string().optional().describe("Rule name"),
+      description: z.string().optional().describe("Rule description"),
+      expires_at: z.string().optional().describe("Optional RFC3339 expiration time for temporary rules"),
+    })).max(200).optional().describe("IP rules"),
+    deny_response_status: z.number().int().min(400).max(599).optional().describe("Optional HTTP status for denied requests"),
+    deny_response_body: z.string().optional().describe("Optional custom body for denied requests"),
+  },
+  async ({ service_id, enabled, mode, rules, deny_response_status, deny_response_body }) => {
+    try {
+      const payload: Record<string, unknown> = {
+        ip_allowlist: {
+          enabled,
+          mode,
+          rules,
+          deny_response: (deny_response_status !== undefined || (deny_response_body ?? "").trim() !== "")
+            ? {
+              status: deny_response_status,
+              body: deny_response_body,
+            }
+            : undefined,
+        },
+      };
+      return text(await client.setServiceAccessControl(service_id, payload));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "list_service_access_control_log",
+  "List recent access-control policy change events for a service.",
+  {
+    service_id: z.string().describe("Service ID"),
+    limit: z.number().int().positive().max(200).optional().describe("Max events (default: 50)"),
+  },
+  async ({ service_id, limit }) => {
+    try { return text(await client.listServiceAccessControlLog(service_id, limit)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
   "delete_service",
   "Delete a service using a safeguarded flow. First confirmation soft-deletes the service into a 72-hour recovery window. Optional hard_delete=true is only for permanent deletion after that window.",
   {

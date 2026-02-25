@@ -172,12 +172,23 @@ jobs:
             if kctl -n railpush get configmap railpush-config >/dev/null 2>&1 && kctl -n railpush get secret railpush-secrets >/dev/null 2>&1; then
               TMP_ENV="$(mktemp)"
 
+              DB_HOST_VALUE="$(cm_key DB_HOST)"
+              DB_EXTERNAL_HOST_VALUE="$(cm_key DB_EXTERNAL_HOST)"
+              DB_SSLMODE_VALUE="$(cm_key DB_SSLMODE)"
+              if [ -n "${DB_EXTERNAL_HOST_VALUE}" ]; then
+                DB_HOST_VALUE="${DB_EXTERNAL_HOST_VALUE}"
+                if [ -z "${DB_SSLMODE_VALUE}" ] || [ "${DB_SSLMODE_VALUE}" = "disable" ]; then
+                  DB_SSLMODE_VALUE="require"
+                fi
+              fi
+
               write_env_line "DATABASE_URL" "$(secret_key DATABASE_URL)"
-              write_env_line "DB_HOST" "$(cm_key DB_HOST)"
+              write_env_line "DB_EXTERNAL_HOST" "${DB_EXTERNAL_HOST_VALUE}"
+              write_env_line "DB_HOST" "${DB_HOST_VALUE}"
               write_env_line "DB_PORT" "$(cm_key DB_PORT)"
               write_env_line "DB_NAME" "$(cm_key DB_NAME)"
               write_env_line "DB_USER" "$(cm_key DB_USER)"
-              write_env_line "DB_SSLMODE" "$(cm_key DB_SSLMODE)"
+              write_env_line "DB_SSLMODE" "${DB_SSLMODE_VALUE}"
               write_env_line "DB_PASSWORD" "$(secret_key DB_PASSWORD)"
               write_env_line "JWT_SECRET" "$(secret_key JWT_SECRET)"
               write_env_line "ENCRYPTION_KEY" "$(secret_key ENCRYPTION_KEY)"
@@ -292,6 +303,25 @@ jobs:
           # shellcheck disable=SC1090
           . "${TMP_PARSED_ENV}"
           rm -f "${TMP_PARSED_ENV}"
+
+          DB_HOST_OVERRIDE="${DB_EXTERNAL_HOST:-}"
+          if [ -z "${DB_HOST_OVERRIDE}" ]; then
+            DB_HOST_OVERRIDE="db.railpush.com"
+          fi
+          case "${DB_HOST:-}" in
+            railpush-postgres*|*.svc|*.svc.cluster.local)
+              {
+                printf 'DB_HOST="%s"\n' "${DB_HOST_OVERRIDE}"
+                if [ -z "${DB_SSLMODE:-}" ] || [ "${DB_SSLMODE}" = "disable" ]; then
+                  printf '%s\n' 'DB_SSLMODE="require"'
+                fi
+              } | ${SUDO} tee -a "${ENV_FILE}" >/dev/null
+              DB_HOST="${DB_HOST_OVERRIDE}"
+              if [ -z "${DB_SSLMODE:-}" ] || [ "${DB_SSLMODE}" = "disable" ]; then
+                DB_SSLMODE="require"
+              fi
+              ;;
+          esac
 
           if [ -z "${DATABASE_URL:-}" ] && [ -z "${DB_PASSWORD:-}" ]; then
             echo "${ENV_FILE} must define DATABASE_URL or DB_PASSWORD."
