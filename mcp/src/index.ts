@@ -1526,6 +1526,67 @@ server.tool(
 );
 
 // ════════════════════════════════════════════════════════════════════════
+//  TEMPLATES
+// ════════════════════════════════════════════════════════════════════════
+
+server.tool(
+  "list_templates",
+  "List available verified service templates with optional category/query filters.",
+  {
+    category: z.string().optional().describe("Filter by template category (for example: full-stack, agent)"),
+    query: z.string().optional().describe("Search template name/description/tags"),
+  },
+  async ({ category, query }) => {
+    try { return text(await client.listTemplates({ category, query })); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_template",
+  "Get full template details including resource topology.",
+  {
+    template_id: z.string().describe("Template ID (for example: django-postgres-redis)"),
+  },
+  async ({ template_id }) => {
+    try { return text(await client.getTemplate(template_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "deploy_template",
+  "Deploy a template stack (services and optional managed datastores) into a workspace.",
+  {
+    template_id: z.string().describe("Template ID"),
+    workspace_id: z.string().optional().describe("Target workspace ID (defaults to caller's workspace)"),
+    project_id: z.string().optional().describe("Optional project ID to associate created services"),
+    environment_id: z.string().optional().describe("Optional environment ID for created services"),
+    name_prefix: z.string().optional().describe("Resource naming prefix"),
+    repo_url: z.string().optional().describe("Repository URL used for template services"),
+    branch: z.string().optional().describe("Repository branch for template services (default: main)"),
+    plan: z.enum(["free", "starter", "pro", "business", "enterprise"]).optional().describe("Plan for created resources (default: starter)"),
+    customizations: z.record(z.any()).optional().describe("Optional customization bag reserved for future template overrides"),
+  },
+  async ({ template_id, workspace_id, project_id, environment_id, name_prefix, repo_url, branch, plan, customizations }) => {
+    try {
+      return text(await client.deployTemplate(template_id, {
+        workspace_id,
+        project_id,
+        environment_id,
+        name_prefix,
+        repo_url,
+        branch,
+        plan,
+        customizations,
+      }));
+    } catch (e) {
+      return err(e);
+    }
+  },
+);
+
+// ════════════════════════════════════════════════════════════════════════
 //  SUPPORT TICKETS
 // ════════════════════════════════════════════════════════════════════════
 

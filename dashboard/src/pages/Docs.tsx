@@ -1685,7 +1685,7 @@ curl https://railpush.com/api/v1/services \\
                   <div>
                     <div className="text-sm font-semibold mb-1">AI-native infrastructure</div>
                     <div className="text-sm text-content-secondary">
-                      With 126 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
+                      With 129 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
                     </div>
                   </div>
                 </div>
@@ -1776,7 +1776,7 @@ npm run build`} />
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Available Tools</h3>
               <p className="text-content-secondary text-sm leading-relaxed mb-4">
-                The MCP server exposes 126 tools organized by category. Agents discover these automatically.
+                The MCP server exposes 129 tools organized by category. Agents discover these automatically.
               </p>
 
               <div className="overflow-x-auto mb-8">
@@ -1818,6 +1818,7 @@ npm run build`} />
                       ['Audit Logs', 'list events'],
                       ['GitHub', 'list repos, list branches, list workflows, list service workflows, webhook status/repair'],
                       ['Event Webhooks', 'get/set/test service deploy event webhooks'],
+                      ['Templates', 'list, get details, deploy stack'],
                     ].map(([cat, tools]) => (
                       <tr key={cat} className="border-b border-border-subtle">
                         <td className="py-2 pr-4 font-semibold text-content-primary text-xs">{cat}</td>

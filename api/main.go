@@ -190,6 +190,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	egH := handlers.NewEnvGroupHandler(cfg)
 	samlH := handlers.NewSamlSSOHandler(cfg)
 	aiFixH := handlers.NewAIFixHandler(cfg, worker)
+	tplH := handlers.NewTemplateHandler(cfg, worker)
 	regRouter := registrar.NewProviderRouter(cfg.Registrar)
 	rdH := handlers.NewRegisteredDomainHandler(cfg, regRouter)
 
@@ -284,6 +285,9 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/support/tickets/{id}", supportH.GetTicket).Methods("GET")
 	authed.HandleFunc("/support/tickets/{id}/tags", supportH.UpdateTicketTags).Methods("PATCH")
 	authed.HandleFunc("/support/tickets/{id}/messages", supportH.CreateMessage).Methods("POST")
+	authed.HandleFunc("/templates", tplH.ListTemplates).Methods("GET")
+	authed.HandleFunc("/templates/{id}", tplH.GetTemplate).Methods("GET")
+	authed.HandleFunc("/templates/{id}/deploy", tplH.DeployTemplate).Methods("POST")
 
 	authed.HandleFunc("/services", svcH.ListServices).Methods("GET")
 	authed.HandleFunc("/services", svcH.CreateService).Methods("POST")

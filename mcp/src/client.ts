@@ -679,4 +679,27 @@ export class RailPushClient {
   async testServiceEventWebhook(serviceId: string) {
     return this.request("POST", `/services/${serviceId}/event-webhook/test`);
   }
+
+  // ── Templates ────────────────────────────────────────────────────────
+
+  async listTemplates(params?: { category?: string; query?: string }) {
+    return this.request("GET", "/templates", undefined, params);
+  }
+
+  async getTemplate(templateId: string) {
+    return this.request("GET", `/templates/${templateId}`);
+  }
+
+  async deployTemplate(templateId: string, data: {
+    workspace_id?: string;
+    project_id?: string;
+    environment_id?: string;
+    name_prefix?: string;
+    repo_url?: string;
+    branch?: string;
+    plan?: string;
+    customizations?: Record<string, unknown>;
+  }) {
+    return this.request("POST", `/templates/${templateId}/deploy`, data);
+  }
 }
