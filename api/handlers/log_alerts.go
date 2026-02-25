@@ -255,7 +255,11 @@ func (h *LogHandler) CreateLogAlert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := middleware.GetUserID(r)
+	userID := strings.TrimSpace(middleware.GetUserID(r))
+	var createdBy *string
+	if userID != "" {
+		createdBy = &userID
+	}
 	alert := &models.ServiceLogAlert{
 		ServiceID:       svc.ID,
 		WorkspaceID:     svc.WorkspaceID,
@@ -270,7 +274,7 @@ func (h *LogHandler) CreateLogAlert(w http.ResponseWriter, r *http.Request) {
 		Channels:        channels,
 		WebhookURL:      webhookURL,
 		Priority:        priority,
-		CreatedBy:       &userID,
+		CreatedBy:       createdBy,
 	}
 	if err := models.CreateServiceLogAlert(alert); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to create log alert")
