@@ -117,9 +117,20 @@ jobs:
           ENV_FILE="/etc/railpush/railpush-api.env"
           ${SUDO} mkdir -p /etc/railpush
           if [ ! -f "${ENV_FILE}" ]; then
+            for LEGACY_ENV in /opt/railpush/.env /opt/railpush/railpush-api/.env; do
+              if [ -f "${LEGACY_ENV}" ]; then
+                echo "Migrating legacy env file from ${LEGACY_ENV} to ${ENV_FILE}"
+                ${SUDO} install -m 0600 -o root -g root "${LEGACY_ENV}" "${ENV_FILE}"
+                break
+              fi
+            done
+          fi
+          if [ ! -f "${ENV_FILE}" ]; then
             echo "Missing ${ENV_FILE}. Create it with DB/JWT/crypto secrets before deploy."
             exit 1
           fi
+          ${SUDO} chown root:root "${ENV_FILE}"
+          ${SUDO} chmod 0600 "${ENV_FILE}"
 
           cd /opt/railpush/dashboard
           npm ci
