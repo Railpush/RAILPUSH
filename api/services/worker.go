@@ -962,6 +962,7 @@ func (w *Worker) processJob(job DeployJob) {
 	}
 
 	// 6. Update deploy with image tag
+	deploy.ImageTag = imageTag
 	models.UpdateDeployStarted(deploy.ID, imageTag)
 	models.UpdateDeployStatus(deploy.ID, "deploying")
 	models.UpdateServiceStatus(svc.ID, "deploying", svc.ContainerID, svc.HostPort)
@@ -1143,6 +1144,7 @@ func (w *Worker) processJobKubernetes(job DeployJob, appendLog func(string)) {
 	}
 
 	// 2. Update deploy with image tag (and started_at)
+	deploy.ImageTag = imageTag
 	_ = models.UpdateDeployStarted(deploy.ID, imageTag)
 	w.notifyDeployWebhook(svc, deploy, "started", true)
 	w.postGitHubCommitStatus(svc, deploy, "pending", "RailPush deploy started")
@@ -1684,7 +1686,17 @@ func (w *Worker) maybeAutoRollback(svc *models.Service, failed *models.Deploy, r
 	if strings.EqualFold(strings.TrimSpace(failed.Trigger), "rollback") {
 		return
 	}
-	if strings.TrimSpace(failed.ImageTag) == "" {
+	failedImage := strings.TrimSpace(failed.ImageTag)
+	if failedImage == "" {
+		if fresh, err := models.GetDeploy(failed.ID); err == nil && fresh != nil {
+			failedImage = strings.TrimSpace(fresh.ImageTag)
+			failed.ImageTag = failedImage
+			if failed.CreatedBy == nil {
+				failed.CreatedBy = fresh.CreatedBy
+			}
+		}
+	}
+	if failedImage == "" {
 		return
 	}
 
@@ -1704,7 +1716,11 @@ func (w *Worker) maybeAutoRollback(svc *models.Service, failed *models.Deploy, r
 		CommitMessage: candidate.CommitMessage,
 		Branch:        candidate.Branch,
 		ImageTag:      candidate.ImageTag,
-		CreatedBy:     failed.CreatedBy,
+	}
+	if failed.CreatedBy != nil {
+		if createdBy := strings.TrimSpace(*failed.CreatedBy); createdBy != "" {
+			rollback.CreatedBy = &createdBy
+		}
 	}
 	if err := models.CreateDeploy(rollback); err != nil {
 		log.Printf("worker: auto rollback create deploy failed service=%s failed_deploy=%s err=%v", svc.ID, failed.ID, err)
@@ -1719,7 +1735,7 @@ func (w *Worker) maybeAutoRollback(svc *models.Service, failed *models.Deploy, r
 	}
 	Audit(svc.WorkspaceID, actorID, "deploy.auto_rollback_triggered", "deploy", rollback.ID, map[string]interface{}{
 		"failed_deploy_id": failed.ID,
-		"failed_image":     failed.ImageTag,
+		"failed_image":     failedImage,
 		"rollback_to":      candidate.ID,
 		"rollback_image":   candidate.ImageTag,
 		"reason":           strings.TrimSpace(reason),
