@@ -398,6 +398,14 @@ func (h *ServiceHandler) ListServices(w http.ResponseWriter, r *http.Request) {
 	if svcs == nil {
 		svcs = []models.Service{}
 	}
+	active := svcs[:0]
+	for _, s := range svcs {
+		if strings.EqualFold(strings.TrimSpace(s.Status), "soft_deleted") {
+			continue
+		}
+		active = append(active, s)
+	}
+	svcs = active
 
 	// Optional query-param filters (all optional, combine with AND).
 	filterType := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
@@ -602,6 +610,10 @@ func (h *ServiceHandler) GetService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if svc == nil {
+		utils.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(svc.Status), "soft_deleted") {
 		utils.RespondError(w, http.StatusNotFound, "service not found")
 		return
 	}
@@ -976,10 +988,14 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	}
 	planProvided := false
 	desiredPlan := oldPlanEffective
+	var deletionProtection *bool
 	var updates map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+	if v, ok := updates["deletion_protection"].(bool); ok {
+		deletionProtection = &v
 	}
 	if v, ok := updates["name"].(string); ok {
 		v = strings.TrimSpace(v)
@@ -1138,6 +1154,12 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to update service")
 		return
 	}
+	if deletionProtection != nil {
+		if err := models.SetResourceDeletionProtection("service", svc.ID, svc.WorkspaceID, svc.Name, *deletionProtection); err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to update deletion protection")
+			return
+		}
+	}
 
 	// Best-effort: apply scaling/resource changes immediately for Kubernetes runtimes.
 	// This improves UX for the Scaling page without requiring a full "deploy".
@@ -1164,18 +1186,26 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var deletionProtectionAudit interface{}
+	if deletionProtection != nil {
+		deletionProtectionAudit = *deletionProtection
+	}
 	services.Audit(svc.WorkspaceID, userID, "service.updated", "service", svc.ID, map[string]interface{}{
-		"name":           svc.Name,
-		"plan":           svc.Plan,
-		"instances":      svc.Instances,
-		"project_id":     svc.ProjectID,
-		"environment_id": svc.EnvironmentID,
+		"name":                svc.Name,
+		"plan":                svc.Plan,
+		"instances":           svc.Instances,
+		"project_id":          svc.ProjectID,
+		"environment_id":      svc.EnvironmentID,
+		"deletion_protection": deletionProtectionAudit,
 	})
 	h.decorateServicePublicURL(svc)
 	utils.RespondJSON(w, http.StatusOK, svc)
 }
 
-// DeleteService stops the Docker container and removes the Caddy route before deleting
+// DeleteService enforces a two-step destructive confirmation flow.
+// First call (without confirmation_token) returns a short-lived token.
+// Second call with confirmation_token soft-deletes the service into a recoverable state.
+// After the recovery window, callers may pass hard_delete=true with a fresh token to permanently purge.
 func (h *ServiceHandler) DeleteService(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r)
 	id := mux.Vars(r)["id"]
@@ -1194,6 +1224,156 @@ func (h *ServiceHandler) DeleteService(w http.ResponseWriter, r *http.Request) {
 	if h.isProtectedEnvironment(svc.EnvironmentID) && !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleAdmin) {
 		return
 	}
+	state, err := models.GetResourceDeletionState("service", svc.ID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to read deletion state")
+		return
+	}
+	if state != nil && state.DeletionProtection {
+		utils.RespondError(w, http.StatusForbidden, "deletion protection is enabled for this service")
+		return
+	}
+
+	var req destructiveDeleteRequest
+	if err := decodeOptionalJSONBody(w, r, &req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	token := strings.TrimSpace(req.ConfirmationToken)
+	if token == "" {
+		confirmationToken, expiresAt, err := models.IssueResourceDeletionToken("service", svc.ID, svc.WorkspaceID, svc.Name, deleteConfirmationTTL)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to issue confirmation token")
+			return
+		}
+		utils.RespondJSON(w, http.StatusAccepted, map[string]interface{}{
+			"status":                     "confirmation_required",
+			"confirmation_token":         confirmationToken,
+			"confirmation_token_expires": expiresAt,
+			"hard_delete":                false,
+			"recovery_window_hours":      int(softDeleteRecoveryWindow / time.Hour),
+		})
+		return
+	}
+	if err := models.VerifyResourceDeletionToken("service", svc.ID, token); err != nil {
+		switch {
+		case errors.Is(err, models.ErrDeleteConfirmationExpired):
+			utils.RespondError(w, http.StatusBadRequest, "confirmation token expired; request a new token")
+		case errors.Is(err, models.ErrDeleteConfirmationInvalid):
+			utils.RespondError(w, http.StatusBadRequest, "invalid confirmation token")
+		default:
+			utils.RespondError(w, http.StatusBadRequest, "confirmation token required")
+		}
+		return
+	}
+
+	if req.HardDelete {
+		if state == nil || state.DeletedAt == nil {
+			utils.RespondError(w, http.StatusConflict, "service must be soft-deleted before hard delete")
+			return
+		}
+		if state.PurgeAfter != nil && time.Now().Before(*state.PurgeAfter) {
+			utils.RespondError(w, http.StatusConflict, "service is in recovery window; hard delete available after "+state.PurgeAfter.Format(time.RFC3339))
+			return
+		}
+		if err := h.hardDeleteService(svc); err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to delete service")
+			return
+		}
+		_ = models.DeleteResourceDeletionState("service", svc.ID)
+		services.Audit(svc.WorkspaceID, userID, "service.deleted", "service", id, map[string]interface{}{
+			"name": svc.Name,
+		})
+		utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+		return
+	}
+	if state != nil && state.DeletedAt != nil {
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":      "soft_deleted",
+			"purge_after": state.PurgeAfter,
+		})
+		return
+	}
+
+	purgeAfter, err := models.MarkResourceSoftDeleted("service", svc.ID, svc.WorkspaceID, svc.Name, softDeleteRecoveryWindow)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to soft-delete service")
+		return
+	}
+
+	if h.Config.Kubernetes.Enabled {
+		if kd, err := h.Worker.GetKubeDeployer(); err == nil && kd != nil {
+			_ = kd.ScaleService(svc, 0)
+		}
+	} else {
+		if svc.ContainerID != "" {
+			h.Worker.Deployer.StopContainer(svc.ContainerID)
+		}
+		if instances, err := models.ListServiceInstances(id); err == nil {
+			for _, inst := range instances {
+				if inst.ContainerID != "" {
+					_ = h.Worker.Deployer.StopContainer(inst.ContainerID)
+				}
+			}
+		}
+	}
+	_ = models.SetServiceSuspended(id, true)
+	_ = models.UpdateServiceStatus(id, "soft_deleted", svc.ContainerID, svc.HostPort)
+	if models.IsBillingItemMetered("service", id) {
+		_ = models.RecordUsageEvent("service", id, "stop")
+	}
+
+	services.Audit(svc.WorkspaceID, userID, "service.soft_deleted", "service", id, map[string]interface{}{
+		"name":       svc.Name,
+		"purge_after": purgeAfter,
+	})
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"status":                "soft_deleted",
+		"purge_after":           purgeAfter,
+		"recovery_window_hours": int(softDeleteRecoveryWindow / time.Hour),
+	})
+}
+
+func (h *ServiceHandler) RestoreService(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	id := mux.Vars(r)["id"]
+	svc, err := models.GetService(id)
+	if err != nil || svc == nil {
+		utils.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleDeveloper) {
+		return
+	}
+	if h.isProtectedEnvironment(svc.EnvironmentID) && !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleAdmin) {
+		return
+	}
+	state, err := models.GetResourceDeletionState("service", svc.ID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to read deletion state")
+		return
+	}
+	if state == nil || state.DeletedAt == nil {
+		utils.RespondError(w, http.StatusBadRequest, "service is not soft-deleted")
+		return
+	}
+	if err := models.RestoreSoftDeletedResource("service", svc.ID); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to restore service")
+		return
+	}
+	_ = models.UpdateServiceStatus(id, "suspended", svc.ContainerID, svc.HostPort)
+	_ = models.SetServiceSuspended(id, true)
+	services.Audit(svc.WorkspaceID, userID, "service.restored", "service", id, map[string]interface{}{
+		"name": svc.Name,
+	})
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "restored",
+		"message": "service restored in suspended state; call resume to run it again",
+	})
+}
+
+func (h *ServiceHandler) hardDeleteService(svc *models.Service) error {
+	id := svc.ID
 
 	// Remove from Stripe subscription before deleting
 	if svc.Plan != "free" && h.Stripe.Enabled() {
@@ -1228,13 +1408,9 @@ func (h *ServiceHandler) DeleteService(w http.ResponseWriter, r *http.Request) {
 	// Remove any blueprint links to this service to avoid stale resources in blueprint UIs.
 	_ = models.DeleteBlueprintResourcesByResource("service", id)
 	if err := models.DeleteService(id); err != nil {
-		utils.RespondError(w, http.StatusInternalServerError, "failed to delete service")
-		return
+		return err
 	}
-	services.Audit(svc.WorkspaceID, userID, "service.deleted", "service", id, map[string]interface{}{
-		"name": svc.Name,
-	})
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	return nil
 }
 
 // RestartService does docker restart on the container

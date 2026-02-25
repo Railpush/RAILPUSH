@@ -1532,6 +1532,9 @@ curl https://railpush.com/api/v1/services \\
               <p className="text-sm text-content-secondary mb-4">
                 All endpoints are under <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-content-primary text-xs font-mono">/api/v1</code> and require a Bearer token unless noted.
               </p>
+              <p className="text-xs text-content-tertiary mb-4">
+                Destructive deletes use a confirmation-token flow and default to soft-delete with a 72-hour recovery window before hard delete is allowed.
+              </p>
 
               {[
                 { group: 'Services', endpoints: [
@@ -1541,8 +1544,9 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'GET', path: '/services/:id/event-webhook', desc: 'Get deploy event webhook config' },
                   { method: 'PUT', path: '/services/:id/event-webhook', desc: 'Set deploy event webhook config' },
                   { method: 'POST', path: '/services/:id/event-webhook/test', desc: 'Send deploy.test webhook payload' },
-                  { method: 'PATCH', path: '/services/:id', desc: 'Update a service' },
-                  { method: 'DELETE', path: '/services/:id', desc: 'Delete a service' },
+                  { method: 'PATCH', path: '/services/:id', desc: 'Update a service (supports deletion_protection)' },
+                  { method: 'DELETE', path: '/services/:id', desc: 'Delete flow (token challenge -> soft-delete; optional hard_delete after recovery window)' },
+                  { method: 'POST', path: '/services/:id/restore', desc: 'Restore a soft-deleted service' },
                   { method: 'POST', path: '/services/:id/restart', desc: 'Restart a service' },
                   { method: 'POST', path: '/services/:id/suspend', desc: 'Suspend a service' },
                   { method: 'POST', path: '/services/:id/resume', desc: 'Resume a suspended service' },
@@ -1581,8 +1585,9 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'POST', path: '/databases', desc: 'Create a database' },
                   { method: 'GET', path: '/databases/:id', desc: 'Get database details (credentials redacted by default)' },
                   { method: 'POST', path: '/databases/:id/credentials/reveal', desc: 'Reveal plaintext credentials (explicit acknowledgement required)' },
-                  { method: 'PATCH', path: '/databases/:id', desc: 'Update a database' },
-                  { method: 'DELETE', path: '/databases/:id', desc: 'Delete a database' },
+                  { method: 'PATCH', path: '/databases/:id', desc: 'Update a database (supports deletion_protection)' },
+                  { method: 'DELETE', path: '/databases/:id', desc: 'Delete flow (token challenge -> soft-delete; optional hard_delete after recovery window)' },
+                  { method: 'POST', path: '/databases/:id/restore', desc: 'Restore a soft-deleted database' },
                   { method: 'GET', path: '/databases/:id/backups', desc: 'List backups' },
                   { method: 'POST', path: '/databases/:id/backups', desc: 'Trigger a backup' },
                   { method: 'GET', path: '/databases/:id/replicas', desc: 'List read replicas' },
@@ -1595,8 +1600,9 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'POST', path: '/keyvalue', desc: 'Create a key-value store' },
                   { method: 'GET', path: '/keyvalue/:id', desc: 'Get key-value details (credentials redacted by default)' },
                   { method: 'POST', path: '/keyvalue/:id/credentials/reveal', desc: 'Reveal plaintext credentials (explicit acknowledgement required)' },
-                  { method: 'PATCH', path: '/keyvalue/:id', desc: 'Update plan or eviction policy' },
-                  { method: 'DELETE', path: '/keyvalue/:id', desc: 'Delete a key-value store' },
+                  { method: 'PATCH', path: '/keyvalue/:id', desc: 'Update plan, eviction policy, or deletion_protection' },
+                  { method: 'DELETE', path: '/keyvalue/:id', desc: 'Delete flow (token challenge -> soft-delete; optional hard_delete after recovery window)' },
+                  { method: 'POST', path: '/keyvalue/:id/restore', desc: 'Restore a soft-deleted key-value store' },
                 ]},
                 { group: 'Blueprints', endpoints: [
                   { method: 'GET', path: '/blueprints', desc: 'List blueprints' },
@@ -1702,7 +1708,7 @@ curl https://railpush.com/api/v1/services \\
                   <div>
                     <div className="text-sm font-semibold mb-1">AI-native infrastructure</div>
                     <div className="text-sm text-content-secondary">
-                      With 131 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
+                      With 130+ tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
                     </div>
                   </div>
                 </div>
@@ -1796,7 +1802,7 @@ npm run build`} />
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Available Tools</h3>
               <p className="text-content-secondary text-sm leading-relaxed mb-4">
-                The MCP server exposes 131 tools organized by category. Agents discover these automatically.
+                The MCP server exposes 130+ tools organized by category. Agents discover these automatically.
               </p>
 
               <div className="overflow-x-auto mb-8">
@@ -1810,13 +1816,13 @@ npm run build`} />
                   <tbody className="text-content-secondary">
                     {[
                       ['Auth', 'whoami'],
-                      ['Services', 'list, get, create, update, delete, restart, suspend, resume, search/filter'],
+                      ['Services', 'list, get, create, update, delete (token-confirmed soft delete), restore, restart, suspend, resume, search/filter'],
                       ['Bulk Operations', 'bulk deploy, bulk restart, bulk suspend, bulk resume'],
                       ['Deploys', 'trigger, list, get, rollback, queue position'],
                       ['Env Vars', 'list, set (bulk replace), upsert (additive), get/set/enable/disable GitHub Actions deploy gate, set workflow allowlist'],
                       ['Custom Domains', 'list, add, delete'],
-                      ['Databases', 'list, create, get (redacted), reveal credentials, update, delete, backup, list backups, replicas, create replica, promote replica, enable HA'],
-                      ['Key-Value (Redis)', 'list, create, get (redacted), reveal credentials, update, delete'],
+                      ['Databases', 'list, create, get (redacted), reveal credentials, update, delete (token-confirmed soft delete), restore, backup, list backups, replicas, create replica, promote replica, enable HA'],
+                      ['Key-Value (Redis)', 'list, create, get (redacted), reveal credentials, update, delete (token-confirmed soft delete), restore'],
                       ['Logs', 'get runtime logs, get deploy logs'],
                       ['AI Fix', 'start fix session, get fix status'],
                       ['One-Off Jobs', 'run, list, get'],

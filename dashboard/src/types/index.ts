@@ -1,5 +1,5 @@
 export type ServiceType = 'web' | 'pserv' | 'worker' | 'cron' | 'static' | 'keyvalue';
-export type ServiceStatus = 'created' | 'building' | 'deploying' | 'live' | 'failed' | 'suspended' | 'deactivated';
+export type ServiceStatus = 'created' | 'building' | 'deploying' | 'live' | 'failed' | 'suspended' | 'deactivated' | 'soft_deleted';
 export type DeployStatus = 'pending' | 'building' | 'deploying' | 'live' | 'failed' | 'cancelled';
 export type DeployTrigger = 'git_push' | 'manual' | 'blueprint' | 'rollback' | 'preview' | 'autoscale' | 'github_push' | 'ai_fix';
 export type Runtime = 'docker' | 'image' | 'node' | 'python' | 'go' | 'ruby' | 'rust' | 'elixir';

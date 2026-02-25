@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/railpush/api/config"
@@ -46,6 +47,14 @@ func (h *KeyValueHandler) ListKeyValues(w http.ResponseWriter, r *http.Request) 
 	if kvs == nil {
 		kvs = []models.ManagedKeyValue{}
 	}
+	active := kvs[:0]
+	for _, item := range kvs {
+		if strings.EqualFold(strings.TrimSpace(item.Status), "soft_deleted") {
+			continue
+		}
+		active = append(active, item)
+	}
+	kvs = active
 	utils.RespondJSON(w, http.StatusOK, kvs)
 }
 
@@ -173,6 +182,10 @@ func (h *KeyValueHandler) GetKeyValue(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusNotFound, "key-value store not found")
 		return
 	}
+	if strings.EqualFold(strings.TrimSpace(kv.Status), "soft_deleted") {
+		utils.RespondError(w, http.StatusNotFound, "key-value store not found")
+		return
+	}
 	userID := middleware.GetUserID(r)
 	if err := services.EnsureWorkspaceAccess(userID, kv.WorkspaceID, models.RoleViewer); err != nil {
 		utils.RespondError(w, http.StatusForbidden, "forbidden")
@@ -292,6 +305,8 @@ func (h *KeyValueHandler) UpdateKeyValue(w http.ResponseWriter, r *http.Request)
 	desiredPlan := oldPlan
 	policyProvided := false
 	desiredPolicy := kv.MaxmemoryPolicy
+	deletionProtectionProvided := false
+	deletionProtection := false
 	var updates map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
@@ -315,6 +330,10 @@ func (h *KeyValueHandler) UpdateKeyValue(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
+	if v, ok := updates["deletion_protection"].(bool); ok {
+		deletionProtectionProvided = true
+		deletionProtection = v
+	}
 
 	// Apply maxmemory_policy change (independent of plan change).
 	policyChanged := policyProvided && desiredPolicy != kv.MaxmemoryPolicy
@@ -327,12 +346,15 @@ func (h *KeyValueHandler) UpdateKeyValue(w http.ResponseWriter, r *http.Request)
 	}
 
 	planChanged := planProvided && desiredPlan != oldPlan
-	if !planChanged && !policyChanged {
+	if !planChanged && !policyChanged && !deletionProtectionProvided {
 		utils.RespondJSON(w, http.StatusOK, kv)
 		return
 	}
 	if !planChanged {
 		// Only policy changed — still need to re-apply K8s resources, skip billing section.
+		if !policyChanged {
+			goto applyProtection
+		}
 		goto applyKube
 	}
 
@@ -406,9 +428,32 @@ applyKube:
 		}
 	}
 
+	if deletionProtectionProvided {
+		if err := models.SetResourceDeletionProtection("keyvalue", kv.ID, kv.WorkspaceID, kv.Name, deletionProtection); err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to update deletion protection")
+			return
+		}
+	}
+
+	goto audit
+
+applyProtection:
+	if deletionProtectionProvided {
+		if err := models.SetResourceDeletionProtection("keyvalue", kv.ID, kv.WorkspaceID, kv.Name, deletionProtection); err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to update deletion protection")
+			return
+		}
+	}
+
+audit:
+	var deletionProtectionAudit interface{}
+	if deletionProtectionProvided {
+		deletionProtectionAudit = deletionProtection
+	}
 	services.Audit(kv.WorkspaceID, userID, "keyvalue.updated", "keyvalue", kv.ID, map[string]interface{}{
-		"plan":              kv.Plan,
-		"maxmemory_policy":  kv.MaxmemoryPolicy,
+		"plan":                kv.Plan,
+		"maxmemory_policy":    kv.MaxmemoryPolicy,
+		"deletion_protection": deletionProtectionAudit,
 	})
 
 	utils.RespondJSON(w, http.StatusOK, kv)
@@ -418,7 +463,6 @@ func (h *KeyValueHandler) DeleteKeyValue(w http.ResponseWriter, r *http.Request)
 	id := mux.Vars(r)["id"]
 	userID := middleware.GetUserID(r)
 
-	// Get KV to find container and plan
 	kv, err := models.GetManagedKeyValue(id)
 	if err != nil || kv == nil {
 		utils.RespondError(w, http.StatusNotFound, "key-value store not found")
@@ -428,6 +472,128 @@ func (h *KeyValueHandler) DeleteKeyValue(w http.ResponseWriter, r *http.Request)
 		utils.RespondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
+	state, err := models.GetResourceDeletionState("keyvalue", kv.ID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to read deletion state")
+		return
+	}
+	if state != nil && state.DeletionProtection {
+		utils.RespondError(w, http.StatusForbidden, "deletion protection is enabled for this key-value store")
+		return
+	}
+
+	var req destructiveDeleteRequest
+	if err := decodeOptionalJSONBody(w, r, &req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	token := strings.TrimSpace(req.ConfirmationToken)
+	if token == "" {
+		confirmationToken, expiresAt, err := models.IssueResourceDeletionToken("keyvalue", kv.ID, kv.WorkspaceID, kv.Name, deleteConfirmationTTL)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to issue confirmation token")
+			return
+		}
+		utils.RespondJSON(w, http.StatusAccepted, map[string]interface{}{
+			"status":                     "confirmation_required",
+			"confirmation_token":         confirmationToken,
+			"confirmation_token_expires": expiresAt,
+			"hard_delete":                false,
+			"recovery_window_hours":      int(softDeleteRecoveryWindow / time.Hour),
+		})
+		return
+	}
+	if err := models.VerifyResourceDeletionToken("keyvalue", kv.ID, token); err != nil {
+		switch {
+		case errors.Is(err, models.ErrDeleteConfirmationExpired):
+			utils.RespondError(w, http.StatusBadRequest, "confirmation token expired; request a new token")
+		case errors.Is(err, models.ErrDeleteConfirmationInvalid):
+			utils.RespondError(w, http.StatusBadRequest, "invalid confirmation token")
+		default:
+			utils.RespondError(w, http.StatusBadRequest, "confirmation token required")
+		}
+		return
+	}
+
+	if req.HardDelete {
+		if state == nil || state.DeletedAt == nil {
+			utils.RespondError(w, http.StatusConflict, "key-value store must be soft-deleted before hard delete")
+			return
+		}
+		if state.PurgeAfter != nil && time.Now().Before(*state.PurgeAfter) {
+			utils.RespondError(w, http.StatusConflict, "key-value store is in recovery window; hard delete available after "+state.PurgeAfter.Format(time.RFC3339))
+			return
+		}
+		if err := h.hardDeleteKeyValue(kv); err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to delete key-value store")
+			return
+		}
+		_ = models.DeleteResourceDeletionState("keyvalue", kv.ID)
+		services.Audit(kv.WorkspaceID, userID, "keyvalue.deleted", "keyvalue", id, map[string]interface{}{
+			"name": kv.Name,
+		})
+		utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+		return
+	}
+	if state != nil && state.DeletedAt != nil {
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":      "soft_deleted",
+			"purge_after": state.PurgeAfter,
+		})
+		return
+	}
+
+	purgeAfter, err := models.MarkResourceSoftDeleted("keyvalue", kv.ID, kv.WorkspaceID, kv.Name, softDeleteRecoveryWindow)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to soft-delete key-value store")
+		return
+	}
+	_ = models.UpdateManagedKeyValueStatus(kv.ID, "soft_deleted", kv.ContainerID)
+	services.Audit(kv.WorkspaceID, userID, "keyvalue.soft_deleted", "keyvalue", id, map[string]interface{}{
+		"name":       kv.Name,
+		"purge_after": purgeAfter,
+	})
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"status":                "soft_deleted",
+		"purge_after":           purgeAfter,
+		"recovery_window_hours": int(softDeleteRecoveryWindow / time.Hour),
+	})
+}
+
+func (h *KeyValueHandler) RestoreKeyValue(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	userID := middleware.GetUserID(r)
+	kv, err := models.GetManagedKeyValue(id)
+	if err != nil || kv == nil {
+		utils.RespondError(w, http.StatusNotFound, "key-value store not found")
+		return
+	}
+	if err := services.EnsureWorkspaceAccess(userID, kv.WorkspaceID, models.RoleDeveloper); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	state, err := models.GetResourceDeletionState("keyvalue", kv.ID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to read deletion state")
+		return
+	}
+	if state == nil || state.DeletedAt == nil {
+		utils.RespondError(w, http.StatusBadRequest, "key-value store is not soft-deleted")
+		return
+	}
+	if err := models.RestoreSoftDeletedResource("keyvalue", kv.ID); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to restore key-value store")
+		return
+	}
+	_ = models.UpdateManagedKeyValueStatus(kv.ID, "available", kv.ContainerID)
+	services.Audit(kv.WorkspaceID, userID, "keyvalue.restored", "keyvalue", id, map[string]interface{}{
+		"name": kv.Name,
+	})
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{"status": "restored"})
+}
+
+func (h *KeyValueHandler) hardDeleteKeyValue(kv *models.ManagedKeyValue) error {
+	id := kv.ID
 
 	// Remove from Stripe subscription before deleting
 	if kv.Plan != "free" && h.Stripe.Enabled() {
@@ -450,11 +616,7 @@ func (h *KeyValueHandler) DeleteKeyValue(w http.ResponseWriter, r *http.Request)
 	// Remove any blueprint links to this key-value store to avoid stale resources in blueprint UIs.
 	_ = models.DeleteBlueprintResourcesByResource("keyvalue", id)
 	if err := models.DeleteManagedKeyValue(id); err != nil {
-		utils.RespondError(w, http.StatusInternalServerError, "failed to delete key-value store")
-		return
+		return err
 	}
-	services.Audit(kv.WorkspaceID, userID, "keyvalue.deleted", "keyvalue", id, map[string]interface{}{
-		"name": kv.Name,
-	})
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	return nil
 }

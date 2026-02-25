@@ -78,6 +78,20 @@ export class RailPushClient {
     }
   }
 
+  private async performConfirmedDelete(path: string, hardDelete?: boolean): Promise<unknown> {
+    const initiated = await this.request("DELETE", path, {});
+    const token = (typeof initiated === "object" && initiated !== null && typeof (initiated as { confirmation_token?: unknown }).confirmation_token === "string")
+      ? (initiated as { confirmation_token: string }).confirmation_token
+      : "";
+    if (!token) {
+      return initiated;
+    }
+    return this.request("DELETE", path, {
+      confirmation_token: token,
+      hard_delete: Boolean(hardDelete),
+    });
+  }
+
   // ── Services ─────────────────────────────────────────────────────────
 
   async listServices(workspaceId?: string) {
@@ -106,8 +120,12 @@ export class RailPushClient {
     return this.request("PATCH", `/services/${id}`, data);
   }
 
-  async deleteService(id: string) {
-    return this.request("DELETE", `/services/${id}`);
+  async deleteService(id: string, hardDelete?: boolean) {
+    return this.performConfirmedDelete(`/services/${id}`, hardDelete);
+  }
+
+  async restoreService(id: string) {
+    return this.request("POST", `/services/${id}/restore`);
   }
 
   async restartService(id: string) {
@@ -120,6 +138,28 @@ export class RailPushClient {
 
   async resumeService(id: string) {
     return this.request("POST", `/services/${id}/resume`);
+  }
+
+  async bulkUpdateServices(data: { ids: string[]; changes: Record<string, unknown> }) {
+    return this.request("POST", "/services/bulk-update", data);
+  }
+
+  async bulkDeployServices(data: { ids: string[]; commit_sha?: string; branch?: string }) {
+    return this.request("POST", "/services/bulk-deploy", data);
+  }
+
+  async bulkRestartServices(data: { ids: string[] }) {
+    return this.request("POST", "/services/bulk-restart", data);
+  }
+
+  async bulkSetServiceEnvVars(data: {
+    ids: string[];
+    env_vars: Array<{ key: string; value: string; is_secret?: boolean }>;
+    mode?: "merge" | "replace";
+    delete?: string[];
+    confirm_destructive?: boolean;
+  }) {
+    return this.request("POST", "/services/bulk-set-env", data);
   }
 
   // ── Deploys ──────────────────────────────────────────────────────────
@@ -167,6 +207,20 @@ export class RailPushClient {
       env_vars: envVars,
       delete: deleteKeys ?? [],
     });
+  }
+
+  // ── Persistent Disks ────────────────────────────────────────────────
+
+  async listServiceDisks(serviceId: string) {
+    return this.request("GET", `/services/${serviceId}/disks`);
+  }
+
+  async upsertServiceDisk(serviceId: string, data: { name: string; mount_path: string; size_gb?: number }) {
+    return this.request("PUT", `/services/${serviceId}/disks`, data);
+  }
+
+  async deleteServiceDisk(serviceId: string) {
+    return this.request("DELETE", `/services/${serviceId}/disks`);
   }
 
   // ── Custom Domains ───────────────────────────────────────────────────
@@ -228,8 +282,16 @@ export class RailPushClient {
     return this.request("PATCH", `/databases/${id}`, data);
   }
 
-  async deleteDatabase(id: string) {
-    return this.request("DELETE", `/databases/${id}`);
+  async bulkUpdateDatabases(data: { ids: string[]; changes: Record<string, unknown> }) {
+    return this.request("POST", "/databases/bulk-update", data);
+  }
+
+  async deleteDatabase(id: string, hardDelete?: boolean) {
+    return this.performConfirmedDelete(`/databases/${id}`, hardDelete);
+  }
+
+  async restoreDatabase(id: string) {
+    return this.request("POST", `/databases/${id}/restore`);
   }
 
   async triggerBackup(dbId: string) {
@@ -280,16 +342,33 @@ export class RailPushClient {
     return this.request("PATCH", `/keyvalue/${id}`, data);
   }
 
-  async deleteKeyValue(id: string) {
-    return this.request("DELETE", `/keyvalue/${id}`);
+  async deleteKeyValue(id: string, hardDelete?: boolean) {
+    return this.performConfirmedDelete(`/keyvalue/${id}`, hardDelete);
+  }
+
+  async restoreKeyValue(id: string) {
+    return this.request("POST", `/keyvalue/${id}/restore`);
   }
 
   // ── Logs ─────────────────────────────────────────────────────────────
 
-  async queryLogs(serviceId: string, opts?: { limit?: number; type?: string }) {
+  async queryLogs(serviceId: string, opts?: {
+    limit?: number;
+    type?: string;
+    since?: string;
+    until?: string;
+    search?: string;
+    regex?: boolean;
+    level?: string;
+  }) {
     const query: Record<string, string> = {};
     if (opts?.limit) query.limit = String(opts.limit);
     if (opts?.type) query.type = opts.type;
+    if (opts?.since) query.since = opts.since;
+    if (opts?.until) query.until = opts.until;
+    if (opts?.search) query.search = opts.search;
+    if (opts?.regex) query.regex = "true";
+    if (opts?.level) query.level = opts.level;
     return this.request("GET", `/services/${serviceId}/logs`, undefined, query);
   }
 

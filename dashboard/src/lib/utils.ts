@@ -68,6 +68,7 @@ export function statusConfig(status: ServiceStatus | DeployStatus): { color: str
     failed: { color: 'var(--color-status-error)', bg: 'var(--color-status-error-bg)', label: 'Failed', pulse: false },
     suspended: { color: 'var(--color-status-warning)', bg: 'var(--color-status-warning-bg)', label: 'Suspended', pulse: false },
     deactivated: { color: 'var(--color-content-tertiary)', bg: 'var(--color-surface-tertiary)', label: 'Deactivated', pulse: false },
+    soft_deleted: { color: 'var(--color-status-warning)', bg: 'var(--color-status-warning-bg)', label: 'Soft Deleted', pulse: false },
     pending: { color: 'var(--color-content-secondary)', bg: 'var(--color-surface-tertiary)', label: 'Pending', pulse: false },
     cancelled: { color: 'var(--color-content-tertiary)', bg: 'var(--color-surface-tertiary)', label: 'Cancelled', pulse: false },
   };

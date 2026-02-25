@@ -35,6 +35,22 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+async function confirmedDelete(path: string, options?: { hardDelete?: boolean }) {
+  const init = await request<{ confirmation_token?: string }>(path, {
+    method: 'DELETE',
+    body: JSON.stringify({}),
+  });
+  const token = typeof init?.confirmation_token === 'string' ? init.confirmation_token : '';
+  if (!token) return init;
+  return request<{ status: string; purge_after?: string }>(path, {
+    method: 'DELETE',
+    body: JSON.stringify({
+      confirmation_token: token,
+      hard_delete: Boolean(options?.hardDelete),
+    }),
+  });
+}
+
 // Auth
 export const auth = {
   register: (data: { email: string; password: string; name: string }) =>
@@ -82,7 +98,8 @@ export const services = {
   repairGitHubWebhook: (id: string) => request<ServiceGitHubWebhookStatus>(`/services/${id}/github/webhook/repair`, { method: 'POST' }),
   create: (data: Partial<Service>) => request<Service>('/services', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: string, data: Partial<Service>) => request<Service>(`/services/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  delete: (id: string) => request<void>(`/services/${id}`, { method: 'DELETE' }),
+  delete: (id: string, options?: { hardDelete?: boolean }) => confirmedDelete(`/services/${id}`, options),
+  restore: (id: string) => request<{ status: string }>(`/services/${id}/restore`, { method: 'POST' }),
   restart: (id: string) => request<void>(`/services/${id}/restart`, { method: 'POST' }),
   suspend: (id: string) => request<void>(`/services/${id}/suspend`, { method: 'POST' }),
   resume: (id: string) => request<void>(`/services/${id}/resume`, { method: 'POST' }),
@@ -168,7 +185,8 @@ export const databases = {
   get: (id: string) => request<ManagedDatabase>(`/databases/${id}`),
   create: (data: Partial<ManagedDatabase>) => request<ManagedDatabase>('/databases', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: string, data: Partial<ManagedDatabase>) => request<ManagedDatabase>(`/databases/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  delete: (id: string) => request<void>(`/databases/${id}`, { method: 'DELETE' }),
+  delete: (id: string, options?: { hardDelete?: boolean }) => confirmedDelete(`/databases/${id}`, options),
+  restore: (id: string) => request<{ status: string }>(`/databases/${id}/restore`, { method: 'POST' }),
   listBackups: (id: string) => request<Backup[]>(`/databases/${id}/backups`),
   triggerBackup: (id: string) => request<Backup>(`/databases/${id}/backups`, { method: 'POST' }),
 };
@@ -189,7 +207,8 @@ export const keyvalue = {
   get: (id: string) => request<ManagedKeyValue>(`/keyvalue/${id}`),
   create: (data: Partial<ManagedKeyValue>) => request<ManagedKeyValue>('/keyvalue', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: string, data: Partial<ManagedKeyValue>) => request<ManagedKeyValue>(`/keyvalue/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  delete: (id: string) => request<void>(`/keyvalue/${id}`, { method: 'DELETE' }),
+  delete: (id: string, options?: { hardDelete?: boolean }) => confirmedDelete(`/keyvalue/${id}`, options),
+  restore: (id: string) => request<{ status: string }>(`/keyvalue/${id}/restore`, { method: 'POST' }),
 };
 
 // Blueprints

@@ -5,7 +5,6 @@ import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { services as servicesApi, envVars as envVarsApi } from '../lib/api';
 import { deriveDeployAutomationState, parseWorkflowNames, type DeployAutomationMode } from '../lib/deployAutomation';
-import { buildDefaultServiceHostname, hostnameFromUrl } from '../lib/serviceUrl';
 import type { Service } from '../types';
 import { toast } from 'sonner';
 
@@ -65,8 +64,8 @@ function TerminalDeleteModal({ open, onClose, service, onConfirm }: {
           setLines((prev) => [
             ...prev,
             { text: '', delay: 100 },
-            { text: '  All resources cleaned up.', color: 'text-green-400', delay: 200 },
-            { text: '  Service permanently destroyed.', color: 'text-green-400', delay: 300 },
+            { text: '  Service moved to trash (soft-deleted).', color: 'text-green-400', delay: 200 },
+            { text: '  Recovery window: 72 hours.', color: 'text-green-400', delay: 300 },
             { text: '', delay: 100 },
             { text: '  Redirecting...', color: 'text-content-tertiary', delay: 800 },
           ]);
@@ -100,30 +99,25 @@ function TerminalDeleteModal({ open, onClose, service, onConfirm }: {
 
     const svcName = service?.name || 'unknown';
     const svcId = service?.id?.slice(0, 8) || '--------';
-    const routeHost = service?.public_url ? hostnameFromUrl(service.public_url) : buildDefaultServiceHostname(svcName);
-    const routeDisplay = routeHost || '<service-domain>';
+    const svcIDFull = service?.id || svcId;
 
     setPhase('deleting');
     setLines([
       { text: `  railpush delete --service "${svcName}" --confirm`, color: 'text-content-primary', delay: 0 },
       { text: '', delay: 200 },
-      { text: `  Destroying service ${svcName} (${svcId})...`, color: 'text-status-warning', delay: 400 },
+      { text: `  Soft-deleting service ${svcName} (${svcId})...`, color: 'text-status-warning', delay: 400 },
       { text: '', delay: 100 },
-      { text: '  [1/4] Stopping container...', color: 'text-content-secondary', delay: 600 },
-      { text: '        docker stop sr-' + svcId, color: 'text-content-tertiary', delay: 300 },
-      { text: '        Container stopped.', color: 'text-green-400', delay: 500 },
+      { text: '  [1/3] Suspending running instances...', color: 'text-content-secondary', delay: 600 },
+      { text: '        Scaling service to zero', color: 'text-content-tertiary', delay: 300 },
+      { text: '        Instances suspended.', color: 'text-green-400', delay: 500 },
       { text: '', delay: 100 },
-      { text: '  [2/4] Removing container...', color: 'text-content-secondary', delay: 400 },
-      { text: '        docker rm -f sr-' + svcId, color: 'text-content-tertiary', delay: 300 },
-      { text: '        Container removed.', color: 'text-green-400', delay: 500 },
+      { text: '  [2/3] Writing deletion safety record...', color: 'text-content-secondary', delay: 400 },
+      { text: '        status = soft_deleted', color: 'text-content-tertiary', delay: 300 },
+      { text: '        Recovery window set to 72h.', color: 'text-green-400', delay: 500 },
       { text: '', delay: 100 },
-      { text: '  [3/4] Removing routes...', color: 'text-content-secondary', delay: 400 },
-      { text: `        DELETE /${routeDisplay}`, color: 'text-content-tertiary', delay: 300 },
-      { text: '        Route removed.', color: 'text-green-400', delay: 500 },
-      { text: '', delay: 100 },
-      { text: '  [4/4] Deleting from database...', color: 'text-content-secondary', delay: 400 },
-      { text: `        DELETE FROM services WHERE id = '${svcId}...'`, color: 'text-content-tertiary', delay: 300 },
-      { text: '        Record deleted.', color: 'text-green-400', delay: 500 },
+      { text: '  [3/3] Service moved to trash.', color: 'text-content-secondary', delay: 400 },
+      { text: `        restore endpoint: /services/${svcIDFull}/restore`, color: 'text-content-tertiary', delay: 300 },
+      { text: '        You can restore during recovery window.', color: 'text-green-400', delay: 500 },
     ]);
     setVisibleLines(0);
     setInput('');
@@ -160,12 +154,11 @@ function TerminalDeleteModal({ open, onClose, service, onConfirm }: {
             <div>  *** WARNING: DESTRUCTIVE ACTION ***</div>
           </div>
           <div className="mb-3 text-content-secondary text-xs leading-relaxed">
-            <div>  This will permanently destroy the service</div>
+            <div>  This will soft-delete the service for 72 hours before hard delete is allowed.</div>
             <div>  <span className="text-content-primary font-semibold">{service?.name}</span> and all associated resources:</div>
-            <div className="text-content-tertiary mt-1">    - Docker container &amp; image</div>
-            <div className="text-content-tertiary">    - Caddy routes &amp; TLS certificates</div>
-            <div className="text-content-tertiary">    - Deploy history &amp; logs</div>
-            <div className="text-content-tertiary">    - Environment variables</div>
+            <div className="text-content-tertiary mt-1">    - Service status set to soft_deleted</div>
+            <div className="text-content-tertiary">    - Running instances are suspended</div>
+            <div className="text-content-tertiary">    - Service can be restored during recovery window</div>
           </div>
 
           {/* Animated output lines */}
@@ -596,7 +589,7 @@ export function ServiceSettings() {
             <div>
               <p className="text-sm font-medium text-content-primary">Delete this service</p>
               <p className="text-xs text-content-secondary mt-0.5">
-                Once deleted, this service and all its data will be permanently removed.
+                Deleting now moves the service to trash with a 72-hour recovery window before hard delete is allowed.
               </p>
             </div>
             <Button variant="danger" size="sm" onClick={() => setDeleteModal(true)}>

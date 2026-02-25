@@ -548,7 +548,7 @@ function SettingsTab({ db, navigate }: { db: ManagedDatabase; navigate: (path: s
             <div>
               <div className="text-sm font-medium text-content-primary">Delete this database</div>
               <div className="text-xs text-content-tertiary mt-0.5">
-                This will permanently destroy the database container, all data, backups, and connection URLs. This action cannot be undone.
+                Deleting now soft-deletes this database with a 72-hour recovery window before hard delete is allowed.
               </div>
             </div>
             <Button
@@ -580,7 +580,7 @@ function SettingsTab({ db, navigate }: { db: ManagedDatabase; navigate: (path: s
                   disabled={confirmName !== db.name || deleting}
                   onClick={handleDelete}
                 >
-                  {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Permanently Delete'}
+                  {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Move to Trash'}
                 </Button>
                 <Button size="sm" variant="secondary" onClick={() => { setShowDelete(false); setConfirmName(''); }}>
                   Cancel

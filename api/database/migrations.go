@@ -442,4 +442,23 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_service_database_links_unique ON service_database_links(service_id, database_id, env_var_name)`,
 	`CREATE INDEX IF NOT EXISTS idx_service_database_links_service ON service_database_links(service_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_service_database_links_database ON service_database_links(database_id)`,
+
+	// Destructive-operation safety state: confirmation tokens, deletion protection,
+	// and soft-delete metadata for high-risk resources.
+	`CREATE TABLE IF NOT EXISTS resource_deletion_states (
+		resource_type VARCHAR(50) NOT NULL,
+		resource_id UUID NOT NULL,
+		workspace_id UUID,
+		resource_name TEXT NOT NULL DEFAULT '',
+		deletion_protection BOOLEAN NOT NULL DEFAULT FALSE,
+		deleted_at TIMESTAMPTZ,
+		purge_after TIMESTAMPTZ,
+		token_hash TEXT NOT NULL DEFAULT '',
+		token_expires_at TIMESTAMPTZ,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		PRIMARY KEY(resource_type, resource_id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_resource_deletion_states_workspace ON resource_deletion_states(workspace_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_resource_deletion_states_deleted ON resource_deletion_states(resource_type, deleted_at)`,
 }

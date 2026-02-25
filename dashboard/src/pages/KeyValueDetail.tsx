@@ -39,12 +39,12 @@ export function KeyValueDetail() {
 
   const handleDelete = async () => {
     if (!kv || deleting) return;
-    if (!window.confirm(`Delete key value store "${kv.name}"? This action cannot be undone.`)) return;
+    if (!window.confirm(`Delete key value store "${kv.name}"? It will be soft-deleted with a 72-hour recovery window.`)) return;
 
     setDeleting(true);
     try {
       await keyValueApi.delete(kv.id);
-      toast.success('Key value store deleted');
+      toast.success('Key value store moved to trash (72h recovery window)');
       navigate('/keyvalue');
     } catch {
       toast.error('Failed to delete key value store');

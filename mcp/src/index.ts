@@ -30,6 +30,97 @@ function err(e: unknown): { content: Array<{ type: "text"; text: string }>; isEr
   return { content: [{ type: "text" as const, text: String(e) }], isError: true };
 }
 
+type LogFilterOptions = {
+  search?: string;
+  regex?: boolean;
+  since?: string;
+  until?: string;
+  level?: string;
+};
+
+function parseFilterTime(raw?: string): Date | null {
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Invalid timestamp '${raw}'. Use RFC3339 format (example: 2026-02-24T10:00:00Z).`);
+  }
+  return parsed;
+}
+
+function getLogTimestamp(entry: Record<string, unknown>): Date | null {
+  const candidates = [entry.timestamp, entry.started_at, entry.created_at, entry.updated_at];
+  for (const value of candidates) {
+    if (typeof value === "string" || typeof value === "number") {
+      const parsed = new Date(value);
+      if (!Number.isNaN(parsed.getTime())) return parsed;
+    }
+  }
+  return null;
+}
+
+function getLogText(entry: Record<string, unknown>): string {
+  if (typeof entry.message === "string") return entry.message;
+  if (typeof entry.log === "string") return entry.log;
+  return JSON.stringify(entry);
+}
+
+function getLogLevel(entry: Record<string, unknown>): string {
+  if (typeof entry.level === "string" && entry.level.trim() !== "") {
+    return entry.level.toLowerCase();
+  }
+  if (typeof entry.status === "string") {
+    const status = entry.status.toLowerCase();
+    if (status.includes("error") || status.includes("fail")) return "error";
+    if (status.includes("warn")) return "warn";
+  }
+  const textValue = getLogText(entry).toLowerCase();
+  if (textValue.includes("panic") || textValue.includes("fatal") || textValue.includes("error")) return "error";
+  if (textValue.includes("warn")) return "warn";
+  if (textValue.includes("debug")) return "debug";
+  return "info";
+}
+
+function filterLogEntries(logs: unknown, options: LogFilterOptions): Array<Record<string, unknown>> {
+  if (!Array.isArray(logs)) return [];
+
+  const search = options.search?.trim() ?? "";
+  const useRegex = Boolean(options.regex);
+  const searchLower = search.toLowerCase();
+  const regex = (search !== "" && useRegex) ? new RegExp(search, "i") : null;
+  const since = parseFilterTime(options.since);
+  const until = parseFilterTime(options.until);
+  const level = options.level?.trim().toLowerCase();
+
+  if (since && until && since.getTime() > until.getTime()) {
+    throw new Error("'since' must be earlier than or equal to 'until'.");
+  }
+
+  const out: Array<Record<string, unknown>> = [];
+  for (const item of logs) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const entry = item as Record<string, unknown>;
+    const textValue = getLogText(entry);
+
+    if (search !== "") {
+      const matches = regex ? regex.test(textValue) : textValue.toLowerCase().includes(searchLower);
+      if (!matches) continue;
+    }
+
+    const ts = getLogTimestamp(entry);
+    if (since && (!ts || ts.getTime() < since.getTime())) continue;
+    if (until && (!ts || ts.getTime() > until.getTime())) continue;
+
+    if (level) {
+      const entryLevel = getLogLevel(entry);
+      if (entryLevel !== level) continue;
+    }
+
+    out.push(entry);
+  }
+
+  return out;
+}
+
 // ── Bootstrap ──────────────────────────────────────────────────────────
 
 const apiUrl = process.env.RAILPUSH_API_URL ?? "https://apps.railpush.com";
@@ -142,6 +233,7 @@ server.tool(
     static_publish_path: z.string().optional().describe("Static publish path"),
     schedule: z.string().optional().describe("Cron schedule"),
     max_shutdown_delay: z.number().optional().describe("Max shutdown delay seconds"),
+    deletion_protection: z.boolean().optional().describe("Enable/disable deletion protection for this service"),
   },
   async ({ service_id, build_context, ...updates }) => {
     if (build_context && !updates.docker_context) (updates as Record<string, unknown>).docker_context = build_context;
@@ -159,10 +251,30 @@ server.tool(
 
 server.tool(
   "delete_service",
-  "Permanently delete a service. This removes all deployments, containers, and associated resources. Cannot be undone.",
+  "Delete a service using a safeguarded flow. First confirmation soft-deletes the service into a 72-hour recovery window. Optional hard_delete=true is only for permanent deletion after that window.",
+  {
+    service_id: z.string().describe("Service ID"),
+    confirm_destructive: z.boolean().describe("Must be true to proceed with delete"),
+    hard_delete: z.boolean().optional().describe("Set true only when you intend permanent deletion after recovery window"),
+  },
+  async ({ service_id, confirm_destructive, hard_delete }) => {
+    if (!confirm_destructive) {
+      return text({
+        status: "blocked",
+        reason: "confirm_destructive must be true",
+      });
+    }
+    try { return text(await client.deleteService(service_id, hard_delete)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "restore_service",
+  "Restore a soft-deleted service from the recovery window. Restored services come back suspended and must be resumed to run.",
   { service_id: z.string().describe("Service ID") },
   async ({ service_id }) => {
-    try { return text(await client.deleteService(service_id)); }
+    try { return text(await client.restoreService(service_id)); }
     catch (e) { return err(e); }
   },
 );
@@ -223,18 +335,50 @@ server.tool(
 );
 
 server.tool(
+  "bulk_update_services",
+  "Apply the same service configuration updates to multiple services in one API call. Returns per-service status and errors.",
+  {
+    service_ids: z.array(z.string()).min(1).max(200).describe("Array of service IDs to update"),
+    changes: z.object({
+      name: z.string().optional(),
+      project_id: z.string().nullable().optional(),
+      environment_id: z.string().nullable().optional(),
+      branch: z.string().optional(),
+      build_command: z.string().optional(),
+      start_command: z.string().optional(),
+      port: z.number().optional(),
+      auto_deploy: z.boolean().optional(),
+      plan: z.enum(["free", "starter", "standard", "pro"]).optional(),
+      instances: z.number().optional(),
+      dockerfile_path: z.string().optional(),
+      docker_context: z.string().optional(),
+      build_context: z.string().optional(),
+      image_url: z.string().optional(),
+      health_check_path: z.string().optional(),
+      pre_deploy_command: z.string().optional(),
+      static_publish_path: z.string().optional(),
+      schedule: z.string().optional(),
+      max_shutdown_delay: z.number().optional(),
+    }).passthrough().describe("Partial update payload applied to each service"),
+  },
+  async ({ service_ids, changes }) => {
+    const payload = { ...changes } as Record<string, unknown>;
+    if (typeof payload.build_context === "string" && !payload.docker_context) {
+      payload.docker_context = payload.build_context;
+    }
+    return text(await client.bulkUpdateServices({ ids: service_ids, changes: payload }));
+  },
+);
+
+server.tool(
   "bulk_restart",
   "Restart multiple services at once. Returns results for each service.",
   {
     service_ids: z.array(z.string()).describe("Array of service IDs to restart"),
   },
   async ({ service_ids }) => {
-    const results: Array<{ id: string; status: string; error?: string }> = [];
-    for (const id of service_ids) {
-      try { await client.restartService(id); results.push({ id, status: "restarted" }); }
-      catch (e) { results.push({ id, status: "failed", error: e instanceof Error ? e.message : String(e) }); }
-    }
-    return text(results);
+    try { return text(await client.bulkRestartServices({ ids: service_ids })); }
+    catch (e) { return err(e); }
   },
 );
 
@@ -243,14 +387,40 @@ server.tool(
   "Trigger deploys for multiple services at once. Returns results for each service.",
   {
     service_ids: z.array(z.string()).describe("Array of service IDs to deploy"),
+    commit_sha: z.string().optional().describe("Optional commit SHA to deploy across all selected services"),
+    branch: z.string().optional().describe("Optional branch override to deploy across all selected services"),
   },
-  async ({ service_ids }) => {
-    const results: Array<{ id: string; status: string; error?: string }> = [];
-    for (const id of service_ids) {
-      try { await client.triggerDeploy(id); results.push({ id, status: "deploy_triggered" }); }
-      catch (e) { results.push({ id, status: "failed", error: e instanceof Error ? e.message : String(e) }); }
+  async ({ service_ids, commit_sha, branch }) => {
+    try { return text(await client.bulkDeployServices({ ids: service_ids, commit_sha, branch })); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "bulk_set_env_vars",
+  "Update environment variables for multiple services in one API call. Supports merge mode (upsert/delete) and replace mode.",
+  {
+    service_ids: z.array(z.string()).min(1).max(200).describe("Array of service IDs"),
+    env_vars: z.array(z.object({
+      key: z.string().describe("Variable name"),
+      value: z.string().describe("Variable value"),
+      is_secret: z.boolean().optional().describe("Mark as secret"),
+    })).describe("Environment variables payload"),
+    mode: z.enum(["merge", "replace"]).optional().describe("merge (default) or replace"),
+    delete: z.array(z.string()).optional().describe("In merge mode, keys to delete"),
+    confirm_destructive: z.boolean().optional().describe("Required for replace mode when existing keys would be removed"),
+  },
+  async ({ service_ids, env_vars, mode, delete: deleteKeys, confirm_destructive }) => {
+    try {
+      return text(await client.bulkSetServiceEnvVars({
+        ids: service_ids,
+        env_vars,
+        mode,
+        delete: deleteKeys,
+        confirm_destructive,
+      }));
     }
-    return text(results);
+    catch (e) { return err(e); }
   },
 );
 
@@ -618,6 +788,45 @@ server.tool(
 );
 
 // ════════════════════════════════════════════════════════════════════════
+//  PERSISTENT DISKS
+// ════════════════════════════════════════════════════════════════════════
+
+server.tool(
+  "list_service_disks",
+  "List persistent disks attached to a service. Services may have at most one attached disk.",
+  { service_id: z.string().describe("Service ID") },
+  async ({ service_id }) => {
+    try { return text(await client.listServiceDisks(service_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "set_service_disk",
+  "Create or replace a service disk attachment. Requires a single-instance service; redeploy is required after changes.",
+  {
+    service_id: z.string().describe("Service ID"),
+    name: z.string().describe("Disk name"),
+    mount_path: z.string().describe("Absolute mount path inside the container (e.g. /data)"),
+    size_gb: z.number().optional().describe("Disk size in GiB (default: 1)"),
+  },
+  async ({ service_id, name, mount_path, size_gb }) => {
+    try { return text(await client.upsertServiceDisk(service_id, { name, mount_path, size_gb })); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "delete_service_disk",
+  "Delete the persistent disk attachment from a service. Redeploy is required after deletion.",
+  { service_id: z.string().describe("Service ID") },
+  async ({ service_id }) => {
+    try { return text(await client.deleteServiceDisk(service_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+// ════════════════════════════════════════════════════════════════════════
 //  CUSTOM DOMAINS
 // ════════════════════════════════════════════════════════════════════════
 
@@ -761,23 +970,60 @@ server.tool(
 
 server.tool(
   "update_database",
-  "Update a database configuration (currently supports plan changes).",
+  "Update a database configuration (plan and deletion protection).",
   {
     database_id: z.string().describe("Database ID"),
-    plan: z.enum(["free", "starter", "standard", "pro"]).describe("New plan tier"),
+    plan: z.enum(["free", "starter", "standard", "pro"]).optional().describe("New plan tier"),
+    deletion_protection: z.boolean().optional().describe("Enable/disable deletion protection for this database"),
   },
-  async ({ database_id, plan }) => {
-    try { return text(await client.updateDatabase(database_id, { plan })); }
+  async ({ database_id, plan, deletion_protection }) => {
+    const payload = Object.fromEntries(Object.entries({ plan, deletion_protection }).filter(([, v]) => v !== undefined));
+    try { return text(await client.updateDatabase(database_id, payload)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "bulk_update_databases",
+  "Apply the same database updates to multiple databases in one API call. Returns per-database status and errors.",
+  {
+    database_ids: z.array(z.string()).min(1).max(200).describe("Array of database IDs to update"),
+    changes: z.object({
+      plan: z.enum(["free", "starter", "standard", "pro"]).optional(),
+    }).passthrough().describe("Partial database update payload applied to each database"),
+  },
+  async ({ database_ids, changes }) => {
+    try { return text(await client.bulkUpdateDatabases({ ids: database_ids, changes })); }
     catch (e) { return err(e); }
   },
 );
 
 server.tool(
   "delete_database",
-  "Permanently delete a managed database and all its data. Cannot be undone.",
+  "Delete a managed database using a safeguarded flow. First confirmation soft-deletes it into a 72-hour recovery window. Optional hard_delete=true is only for permanent deletion after that window.",
+  {
+    database_id: z.string().describe("Database ID"),
+    confirm_destructive: z.boolean().describe("Must be true to proceed with delete"),
+    hard_delete: z.boolean().optional().describe("Set true only when you intend permanent deletion after recovery window"),
+  },
+  async ({ database_id, confirm_destructive, hard_delete }) => {
+    if (!confirm_destructive) {
+      return text({
+        status: "blocked",
+        reason: "confirm_destructive must be true",
+      });
+    }
+    try { return text(await client.deleteDatabase(database_id, hard_delete)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "restore_database",
+  "Restore a soft-deleted managed database from the recovery window.",
   { database_id: z.string().describe("Database ID") },
   async ({ database_id }) => {
-    try { return text(await client.deleteDatabase(database_id)); }
+    try { return text(await client.restoreDatabase(database_id)); }
     catch (e) { return err(e); }
   },
 );
@@ -909,11 +1155,12 @@ server.tool(
 
 server.tool(
   "update_key_value_store",
-  "Update a Redis/key-value store configuration (plan, maxmemory_policy).",
+  "Update a Redis/key-value store configuration (plan, maxmemory_policy, deletion protection).",
   {
     store_id: z.string().describe("Key-value store ID"),
     plan: z.enum(["free", "starter", "standard", "pro"]).optional().describe("New plan tier"),
     maxmemory_policy: z.string().optional().describe("Redis maxmemory policy"),
+    deletion_protection: z.boolean().optional().describe("Enable/disable deletion protection for this key-value store"),
   },
   async ({ store_id, ...updates }) => {
     try {
@@ -926,10 +1173,30 @@ server.tool(
 
 server.tool(
   "delete_key_value_store",
-  "Delete a Redis/key-value store. Cannot be undone.",
+  "Delete a Redis/key-value store using a safeguarded flow. First confirmation soft-deletes it into a 72-hour recovery window. Optional hard_delete=true is only for permanent deletion after that window.",
+  {
+    store_id: z.string().describe("Key-value store ID"),
+    confirm_destructive: z.boolean().describe("Must be true to proceed with delete"),
+    hard_delete: z.boolean().optional().describe("Set true only when you intend permanent deletion after recovery window"),
+  },
+  async ({ store_id, confirm_destructive, hard_delete }) => {
+    if (!confirm_destructive) {
+      return text({
+        status: "blocked",
+        reason: "confirm_destructive must be true",
+      });
+    }
+    try { return text(await client.deleteKeyValue(store_id, hard_delete)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "restore_key_value_store",
+  "Restore a soft-deleted Redis/key-value store from the recovery window.",
   { store_id: z.string().describe("Key-value store ID") },
   async ({ store_id }) => {
-    try { return text(await client.deleteKeyValue(store_id)); }
+    try { return text(await client.restoreKeyValue(store_id)); }
     catch (e) { return err(e); }
   },
 );
@@ -940,14 +1207,31 @@ server.tool(
 
 server.tool(
   "get_logs",
-  "Get runtime or deploy logs for a service. Runtime logs show application stdout/stderr. Deploy logs show build + rollout output.",
+  "Get runtime or deploy logs for a service. Supports optional text/regex search, time-window filtering, and level filtering.",
   {
     service_id: z.string().describe("Service ID"),
     log_type: z.enum(["runtime", "deploy"]).optional().describe("Log type (default: runtime)"),
     limit: z.number().optional().describe("Max log lines to return (default: 100)"),
+    search: z.string().optional().describe("Filter logs containing this text"),
+    regex: z.boolean().optional().describe("Interpret search as regex (case-insensitive)") ,
+    since: z.string().optional().describe("Only include logs at/after this RFC3339 timestamp"),
+    until: z.string().optional().describe("Only include logs at/before this RFC3339 timestamp"),
+    level: z.enum(["debug", "info", "warn", "error", "warning"]).optional().describe("Filter by log level"),
   },
-  async ({ service_id, log_type, limit }) => {
-    try { return text(await client.queryLogs(service_id, { type: log_type, limit })); }
+  async ({ service_id, log_type, limit, search, regex, since, until, level }) => {
+    try {
+      const normalizedLevel = level === "warning" ? "warn" : level;
+      const logs = await client.queryLogs(service_id, {
+        type: log_type,
+        limit,
+        search,
+        regex,
+        since,
+        until,
+        level: normalizedLevel,
+      });
+      return text(filterLogEntries(logs, { search, regex, since, until, level: normalizedLevel }));
+    }
     catch (e) { return err(e); }
   },
 );

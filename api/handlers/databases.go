@@ -51,6 +51,14 @@ func (h *DatabaseHandler) ListDatabases(w http.ResponseWriter, r *http.Request) 
 	if dbs == nil {
 		dbs = []models.ManagedDatabase{}
 	}
+	active := dbs[:0]
+	for _, item := range dbs {
+		if strings.EqualFold(strings.TrimSpace(item.Status), "soft_deleted") {
+			continue
+		}
+		active = append(active, item)
+	}
+	dbs = active
 	utils.RespondJSON(w, http.StatusOK, dbs)
 }
 
@@ -176,6 +184,10 @@ func (h *DatabaseHandler) GetDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if db == nil {
+		utils.RespondError(w, http.StatusNotFound, "database not found")
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(db.Status), "soft_deleted") {
 		utils.RespondError(w, http.StatusNotFound, "database not found")
 		return
 	}
@@ -311,6 +323,8 @@ func (h *DatabaseHandler) UpdateDatabase(w http.ResponseWriter, r *http.Request)
 
 	planProvided := false
 	desiredPlan := oldPlan
+	deletionProtectionProvided := false
+	deletionProtection := false
 	var updates map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
@@ -325,82 +339,102 @@ func (h *DatabaseHandler) UpdateDatabase(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	if !planProvided || desiredPlan == oldPlan {
+	if v, ok := updates["deletion_protection"].(bool); ok {
+		deletionProtectionProvided = true
+		deletionProtection = v
+	}
+
+	planChanged := planProvided && desiredPlan != oldPlan
+	if !planChanged && !deletionProtectionProvided {
 		utils.RespondJSON(w, http.StatusOK, db)
 		return
 	}
 
-	// Free tier: limit 1 free database per workspace
-	if desiredPlan == services.PlanFree {
-		count, err := models.CountResourcesByWorkspaceAndPlan(db.WorkspaceID, "database", "free")
-		if err == nil && count >= 1 {
-			utils.RespondError(w, http.StatusBadRequest, "free tier limit reached: 1 free database per workspace")
+	if planChanged {
+		// Free tier: limit 1 free database per workspace
+		if desiredPlan == services.PlanFree {
+			count, err := models.CountResourcesByWorkspaceAndPlan(db.WorkspaceID, "database", "free")
+			if err == nil && count >= 1 {
+				utils.RespondError(w, http.StatusBadRequest, "free tier limit reached: 1 free database per workspace")
+				return
+			}
+		}
+
+		// Gate plan changes on Stripe success so users cannot upgrade resources without billing.
+		if h.Stripe != nil && h.Stripe.Enabled() {
+			if desiredPlan == services.PlanFree {
+				if err := h.Stripe.RemoveSubscriptionItem("database", db.ID); err != nil {
+					utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
+					return
+				}
+			} else {
+				user, err := models.GetUserByID(userID)
+				if err != nil || user == nil {
+					utils.RespondError(w, http.StatusInternalServerError, "failed to get user")
+					return
+				}
+				bc, err := h.Stripe.EnsureCustomer(userID, user.Email)
+				if err != nil || bc == nil {
+					if err == nil {
+						err = fmt.Errorf("billing customer not found")
+					}
+					utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
+					return
+				}
+				if err := h.Stripe.AddSubscriptionItem(bc, db.WorkspaceID, "database", db.ID, db.Name, desiredPlan); err != nil {
+					if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
+						utils.RespondError(w, http.StatusPaymentRequired, "payment method required. Please add a default payment method in billing settings.")
+						return
+					}
+					utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
+					return
+				}
+			}
+		}
+
+		db.Plan = desiredPlan
+		if err := models.UpdateManagedDatabasePlan(db.ID, desiredPlan); err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to update database plan")
+			return
+		}
+
+		// Best-effort: apply Kubernetes resource updates immediately.
+		if h.Config != nil && h.Config.Kubernetes.Enabled && strings.HasPrefix(strings.TrimSpace(db.ContainerID), "k8s:") {
+			if pw, err := utils.Decrypt(db.EncryptedPassword, h.Config.Crypto.EncryptionKey); err == nil && strings.TrimSpace(pw) != "" {
+				var kd *services.KubeDeployer
+				if h.Worker != nil {
+					if k, err := h.Worker.GetKubeDeployer(); err == nil {
+						kd = k
+					}
+				}
+				if kd == nil {
+					if k, err := services.NewKubeDeployer(h.Config); err == nil {
+						kd = k
+					}
+				}
+				if kd != nil {
+					if _, err := kd.EnsureManagedDatabase(db, pw); err != nil {
+						log.Printf("WARNING: k8s managed database update failed db=%s: %v", db.ID, err)
+					}
+				}
+			}
+		}
+	}
+
+	if deletionProtectionProvided {
+		if err := models.SetResourceDeletionProtection("database", db.ID, db.WorkspaceID, db.Name, deletionProtection); err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to update deletion protection")
 			return
 		}
 	}
 
-	// Gate plan changes on Stripe success so users cannot upgrade resources without billing.
-	if h.Stripe != nil && h.Stripe.Enabled() {
-		if desiredPlan == services.PlanFree {
-			if err := h.Stripe.RemoveSubscriptionItem("database", db.ID); err != nil {
-				utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
-				return
-			}
-		} else {
-			user, err := models.GetUserByID(userID)
-			if err != nil || user == nil {
-				utils.RespondError(w, http.StatusInternalServerError, "failed to get user")
-				return
-			}
-			bc, err := h.Stripe.EnsureCustomer(userID, user.Email)
-			if err != nil || bc == nil {
-				if err == nil {
-					err = fmt.Errorf("billing customer not found")
-				}
-				utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
-				return
-			}
-			if err := h.Stripe.AddSubscriptionItem(bc, db.WorkspaceID, "database", db.ID, db.Name, desiredPlan); err != nil {
-				if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
-					utils.RespondError(w, http.StatusPaymentRequired, "payment method required. Please add a default payment method in billing settings.")
-					return
-				}
-				utils.RespondError(w, http.StatusBadGateway, "billing error: "+err.Error())
-				return
-			}
-		}
+	var deletionProtectionAudit interface{}
+	if deletionProtectionProvided {
+		deletionProtectionAudit = deletionProtection
 	}
-
-	db.Plan = desiredPlan
-	if err := models.UpdateManagedDatabasePlan(db.ID, desiredPlan); err != nil {
-		utils.RespondError(w, http.StatusInternalServerError, "failed to update database plan")
-		return
-	}
-
-	// Best-effort: apply Kubernetes resource updates immediately.
-	if h.Config != nil && h.Config.Kubernetes.Enabled && strings.HasPrefix(strings.TrimSpace(db.ContainerID), "k8s:") {
-		if pw, err := utils.Decrypt(db.EncryptedPassword, h.Config.Crypto.EncryptionKey); err == nil && strings.TrimSpace(pw) != "" {
-			var kd *services.KubeDeployer
-			if h.Worker != nil {
-				if k, err := h.Worker.GetKubeDeployer(); err == nil {
-					kd = k
-				}
-			}
-			if kd == nil {
-				if k, err := services.NewKubeDeployer(h.Config); err == nil {
-					kd = k
-				}
-			}
-			if kd != nil {
-				if _, err := kd.EnsureManagedDatabase(db, pw); err != nil {
-					log.Printf("WARNING: k8s managed database update failed db=%s: %v", db.ID, err)
-				}
-			}
-		}
-	}
-
 	services.Audit(db.WorkspaceID, userID, "database.updated", "database", db.ID, map[string]interface{}{
-		"plan": db.Plan,
+		"plan":                db.Plan,
+		"deletion_protection": deletionProtectionAudit,
 	})
 
 	utils.RespondJSON(w, http.StatusOK, db)
@@ -410,7 +444,6 @@ func (h *DatabaseHandler) DeleteDatabase(w http.ResponseWriter, r *http.Request)
 	id := mux.Vars(r)["id"]
 	userID := middleware.GetUserID(r)
 
-	// Get database to find container and plan
 	db, err := models.GetManagedDatabase(id)
 	if err != nil || db == nil {
 		utils.RespondError(w, http.StatusNotFound, "database not found")
@@ -420,6 +453,129 @@ func (h *DatabaseHandler) DeleteDatabase(w http.ResponseWriter, r *http.Request)
 		utils.RespondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
+	state, err := models.GetResourceDeletionState("database", db.ID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to read deletion state")
+		return
+	}
+	if state != nil && state.DeletionProtection {
+		utils.RespondError(w, http.StatusForbidden, "deletion protection is enabled for this database")
+		return
+	}
+
+	var req destructiveDeleteRequest
+	if err := decodeOptionalJSONBody(w, r, &req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	token := strings.TrimSpace(req.ConfirmationToken)
+	if token == "" {
+		confirmationToken, expiresAt, err := models.IssueResourceDeletionToken("database", db.ID, db.WorkspaceID, db.Name, deleteConfirmationTTL)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to issue confirmation token")
+			return
+		}
+		utils.RespondJSON(w, http.StatusAccepted, map[string]interface{}{
+			"status":                     "confirmation_required",
+			"confirmation_token":         confirmationToken,
+			"confirmation_token_expires": expiresAt,
+			"hard_delete":                false,
+			"recovery_window_hours":      int(softDeleteRecoveryWindow / time.Hour),
+		})
+		return
+	}
+	if err := models.VerifyResourceDeletionToken("database", db.ID, token); err != nil {
+		switch {
+		case errors.Is(err, models.ErrDeleteConfirmationExpired):
+			utils.RespondError(w, http.StatusBadRequest, "confirmation token expired; request a new token")
+		case errors.Is(err, models.ErrDeleteConfirmationInvalid):
+			utils.RespondError(w, http.StatusBadRequest, "invalid confirmation token")
+		default:
+			utils.RespondError(w, http.StatusBadRequest, "confirmation token required")
+		}
+		return
+	}
+
+	if req.HardDelete {
+		if state == nil || state.DeletedAt == nil {
+			utils.RespondError(w, http.StatusConflict, "database must be soft-deleted before hard delete")
+			return
+		}
+		if state.PurgeAfter != nil && time.Now().Before(*state.PurgeAfter) {
+			utils.RespondError(w, http.StatusConflict, "database is in recovery window; hard delete available after "+state.PurgeAfter.Format(time.RFC3339))
+			return
+		}
+		if err := h.hardDeleteDatabase(r, db); err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to delete database")
+			return
+		}
+		_ = models.DeleteResourceDeletionState("database", db.ID)
+		services.Audit(db.WorkspaceID, userID, "database.deleted", "database", id, map[string]interface{}{
+			"name": db.Name,
+		})
+		utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+		return
+	}
+	if state != nil && state.DeletedAt != nil {
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":      "soft_deleted",
+			"purge_after": state.PurgeAfter,
+		})
+		return
+	}
+
+	purgeAfter, err := models.MarkResourceSoftDeleted("database", db.ID, db.WorkspaceID, db.Name, softDeleteRecoveryWindow)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to soft-delete database")
+		return
+	}
+	_ = models.UpdateManagedDatabaseStatus(db.ID, "soft_deleted", db.ContainerID)
+
+	services.Audit(db.WorkspaceID, userID, "database.soft_deleted", "database", id, map[string]interface{}{
+		"name":       db.Name,
+		"purge_after": purgeAfter,
+	})
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"status":                "soft_deleted",
+		"purge_after":           purgeAfter,
+		"recovery_window_hours": int(softDeleteRecoveryWindow / time.Hour),
+	})
+}
+
+func (h *DatabaseHandler) RestoreDatabase(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	userID := middleware.GetUserID(r)
+	db, err := models.GetManagedDatabase(id)
+	if err != nil || db == nil {
+		utils.RespondError(w, http.StatusNotFound, "database not found")
+		return
+	}
+	if err := services.EnsureWorkspaceAccess(userID, db.WorkspaceID, models.RoleDeveloper); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	state, err := models.GetResourceDeletionState("database", db.ID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to read deletion state")
+		return
+	}
+	if state == nil || state.DeletedAt == nil {
+		utils.RespondError(w, http.StatusBadRequest, "database is not soft-deleted")
+		return
+	}
+	if err := models.RestoreSoftDeletedResource("database", db.ID); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to restore database")
+		return
+	}
+	_ = models.UpdateManagedDatabaseStatus(db.ID, "available", db.ContainerID)
+	services.Audit(db.WorkspaceID, userID, "database.restored", "database", id, map[string]interface{}{
+		"name": db.Name,
+	})
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{"status": "restored"})
+}
+
+func (h *DatabaseHandler) hardDeleteDatabase(r *http.Request, db *models.ManagedDatabase) error {
+	id := db.ID
 
 	// Remove from Stripe subscription before deleting
 	if db.Plan != "free" && h.Stripe.Enabled() {
@@ -448,13 +604,9 @@ func (h *DatabaseHandler) DeleteDatabase(w http.ResponseWriter, r *http.Request)
 	// Remove any blueprint links to this database to avoid stale resources in blueprint UIs.
 	_ = models.DeleteBlueprintResourcesByResource("database", id)
 	if err := models.DeleteManagedDatabase(id); err != nil {
-		utils.RespondError(w, http.StatusInternalServerError, "failed to delete database")
-		return
+		return err
 	}
-	services.Audit(db.WorkspaceID, userID, "database.deleted", "database", id, map[string]interface{}{
-		"name": db.Name,
-	})
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	return nil
 }
 
 func (h *DatabaseHandler) ListBackups(w http.ResponseWriter, r *http.Request) {
