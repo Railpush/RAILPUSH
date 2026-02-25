@@ -191,10 +191,14 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	samlH := handlers.NewSamlSSOHandler(cfg)
 	aiFixH := handlers.NewAIFixHandler(cfg, worker)
 	tplH := handlers.NewTemplateHandler(cfg, worker)
+	verH := handlers.NewAPIVersionHandler()
 	regRouter := registrar.NewProviderRouter(cfg.Registrar)
 	rdH := handlers.NewRegisteredDomainHandler(cfg, regRouter)
 
 	api := r.PathPrefix("/api/v1").Subrouter()
+	api.Use(middleware.APIVersionMiddleware())
+	api.HandleFunc("/version", verH.GetVersion).Methods("GET")
+	api.HandleFunc("/version/changelog", verH.GetVersionChangelog).Methods("GET")
 
 	api.HandleFunc("/auth/register", auth.Register).Methods("POST")
 	api.HandleFunc("/auth/login", auth.Login).Methods("POST")
@@ -291,10 +295,6 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 
 	authed.HandleFunc("/services", svcH.ListServices).Methods("GET")
 	authed.HandleFunc("/services", svcH.CreateService).Methods("POST")
-	authed.HandleFunc("/services/bulk-update", svcH.BulkUpdateServices).Methods("POST")
-	authed.HandleFunc("/services/bulk-restart", svcH.BulkRestartServices).Methods("POST")
-	authed.HandleFunc("/services/bulk-deploy", depH.BulkTriggerDeploy).Methods("POST")
-	authed.HandleFunc("/services/bulk-set-env", envH.BulkSetEnvVars).Methods("POST")
 	authed.HandleFunc("/services/{id}", svcH.GetService).Methods("GET")
 	authed.HandleFunc("/services/{id}/github/workflows", svcH.ListServiceGitHubWorkflows).Methods("GET")
 	authed.HandleFunc("/services/{id}/github/webhook/status", svcH.GetServiceGitHubWebhookStatus).Methods("GET")
@@ -346,7 +346,6 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 
 	authed.HandleFunc("/databases", dbH.ListDatabases).Methods("GET")
 	authed.HandleFunc("/databases", dbH.CreateDatabase).Methods("POST")
-	authed.HandleFunc("/databases/bulk-update", dbH.BulkUpdateDatabases).Methods("POST")
 	authed.HandleFunc("/databases/{id}", dbH.GetDatabase).Methods("GET")
 	authed.HandleFunc("/databases/{id}/credentials/reveal", dbH.RevealDatabaseCredentials).Methods("POST")
 	authed.HandleFunc("/databases/{id}", dbH.UpdateDatabase).Methods("PATCH")
