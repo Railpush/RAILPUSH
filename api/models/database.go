@@ -3,6 +3,7 @@ package models
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/railpush/api/database"
@@ -42,6 +43,20 @@ func CreateManagedDatabase(d *ManagedDatabase) error {
 }
 
 func GetManagedDatabase(id string) (*ManagedDatabase, error) {
+	lookupID := strings.TrimSpace(id)
+	db, err := getManagedDatabaseByIDExact(lookupID)
+	if err != nil || db != nil {
+		return db, err
+	}
+
+	resolvedID, err := resolveManagedDatabaseIDPrefix(lookupID)
+	if err != nil || resolvedID == "" || resolvedID == lookupID {
+		return nil, err
+	}
+	return getManagedDatabaseByIDExact(resolvedID)
+}
+
+func getManagedDatabaseByIDExact(id string) (*ManagedDatabase, error) {
 	d := &ManagedDatabase{}
 	var standbyReplicaID sql.NullString
 	var externalPort sql.NullInt64
@@ -62,6 +77,32 @@ func GetManagedDatabase(id string) (*ManagedDatabase, error) {
 		d.PasswordRotatedAt = &t
 	}
 	return d, err
+}
+
+func resolveManagedDatabaseIDPrefix(prefix string) (string, error) {
+	if !isUUIDPrefixCandidate(prefix) {
+		return "", nil
+	}
+	matches, err := listIDPrefixMatches(
+		"SELECT id::text FROM managed_databases WHERE id::text LIKE $1 ORDER BY created_at DESC LIMIT $2",
+		prefix,
+		2,
+	)
+	if err != nil {
+		return "", err
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	return "", nil
+}
+
+func SuggestManagedDatabaseIDs(raw string, limit int) ([]string, error) {
+	return suggestIDPrefixes(
+		"SELECT id::text FROM managed_databases WHERE id::text LIKE $1 ORDER BY created_at DESC LIMIT $2",
+		raw,
+		limit,
+	)
 }
 
 func ListManagedDatabases() ([]ManagedDatabase, error) {

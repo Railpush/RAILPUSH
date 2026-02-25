@@ -508,8 +508,26 @@ func (h *ServiceHandler) CreateService(w http.ResponseWriter, r *http.Request) {
 	}
 	svc.Name = strings.TrimSpace(svc.Name)
 	svc.Type = strings.TrimSpace(svc.Type)
-	if svc.Name == "" || svc.Type == "" {
-		utils.RespondError(w, http.StatusBadRequest, "name and type are required")
+	validationIssues := make([]utils.ValidationIssue, 0, 8)
+	if svc.Name == "" {
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "name", Message: "is required"})
+	}
+	if svc.Type == "" {
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "type", Message: "is required"})
+	}
+	if svc.Port < 0 || svc.Port > 65535 {
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "port", Message: "must be between 0 and 65535"})
+	}
+	if svc.Instances < 0 {
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "instances", Message: "must be >= 0"})
+	}
+	if strings.TrimSpace(svc.Plan) != "" {
+		if _, ok := services.NormalizePlan(svc.Plan); !ok {
+			validationIssues = append(validationIssues, utils.ValidationIssue{Field: "plan", Message: "must be one of free, starter, standard, pro"})
+		}
+	}
+	if len(validationIssues) > 0 {
+		utils.RespondValidationErrors(w, http.StatusBadRequest, validationIssues)
 		return
 	}
 	userID := middleware.GetUserID(r)
@@ -525,26 +543,29 @@ func (h *ServiceHandler) CreateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	relationIssues := make([]utils.ValidationIssue, 0, 3)
 	if svc.ProjectID != nil && *svc.ProjectID != "" {
 		project, err := models.GetProject(*svc.ProjectID)
 		if err != nil || project == nil || project.WorkspaceID != svc.WorkspaceID {
-			utils.RespondError(w, http.StatusBadRequest, "invalid project_id")
-			return
+			relationIssues = append(relationIssues, utils.ValidationIssue{Field: "project_id", Message: "is invalid"})
 		}
 	}
 	if svc.EnvironmentID != nil && *svc.EnvironmentID != "" {
 		env, err := models.GetEnvironment(*svc.EnvironmentID)
 		if err != nil || env == nil {
-			utils.RespondError(w, http.StatusBadRequest, "invalid environment_id")
-			return
+			relationIssues = append(relationIssues, utils.ValidationIssue{Field: "environment_id", Message: "is invalid"})
+		} else {
+			if svc.ProjectID != nil && *svc.ProjectID != "" && env.ProjectID != *svc.ProjectID {
+				relationIssues = append(relationIssues, utils.ValidationIssue{Field: "environment_id", Message: "does not belong to project_id"})
+			}
+			if len(relationIssues) == 0 && env.IsProtected && !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleAdmin) {
+				return
+			}
 		}
-		if svc.ProjectID != nil && *svc.ProjectID != "" && env.ProjectID != *svc.ProjectID {
-			utils.RespondError(w, http.StatusBadRequest, "environment does not belong to project")
-			return
-		}
-		if env.IsProtected && !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleAdmin) {
-			return
-		}
+	}
+	if len(relationIssues) > 0 {
+		utils.RespondValidationErrors(w, http.StatusBadRequest, relationIssues)
+		return
 	}
 	if svc.Port == 0 {
 		svc.Port = 10000
@@ -554,9 +575,6 @@ func (h *ServiceHandler) CreateService(w http.ResponseWriter, r *http.Request) {
 	}
 	if p, ok := services.NormalizePlan(svc.Plan); ok {
 		svc.Plan = p
-	} else {
-		utils.RespondError(w, http.StatusBadRequest, "invalid plan")
-		return
 	}
 	if svc.Instances == 0 {
 		svc.Instances = 1
@@ -650,11 +668,11 @@ func (h *ServiceHandler) GetService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if svc == nil {
-		utils.RespondError(w, http.StatusNotFound, "service not found")
+		respondServiceNotFound(w, id)
 		return
 	}
 	if strings.EqualFold(strings.TrimSpace(svc.Status), "soft_deleted") {
-		utils.RespondError(w, http.StatusNotFound, "service not found")
+		respondServiceNotFound(w, id)
 		return
 	}
 	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleViewer) {
@@ -670,7 +688,7 @@ func (h *ServiceHandler) ListServiceGitHubWorkflows(w http.ResponseWriter, r *ht
 
 	svc, err := models.GetService(id)
 	if err != nil || svc == nil {
-		utils.RespondError(w, http.StatusNotFound, "service not found")
+		respondServiceNotFound(w, id)
 		return
 	}
 	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleViewer) {
@@ -704,7 +722,7 @@ func (h *ServiceHandler) GetServiceGitHubWebhookStatus(w http.ResponseWriter, r 
 
 	svc, err := models.GetService(id)
 	if err != nil || svc == nil {
-		utils.RespondError(w, http.StatusNotFound, "service not found")
+		respondServiceNotFound(w, id)
 		return
 	}
 	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleViewer) {
@@ -721,7 +739,7 @@ func (h *ServiceHandler) RepairServiceGitHubWebhook(w http.ResponseWriter, r *ht
 
 	svc, err := models.GetService(id)
 	if err != nil || svc == nil {
-		utils.RespondError(w, http.StatusNotFound, "service not found")
+		respondServiceNotFound(w, id)
 		return
 	}
 	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleDeveloper) {
@@ -776,7 +794,7 @@ func (h *ServiceHandler) GetServiceEventWebhookConfig(w http.ResponseWriter, r *
 
 	svc, err := models.GetService(id)
 	if err != nil || svc == nil {
-		utils.RespondError(w, http.StatusNotFound, "service not found")
+		respondServiceNotFound(w, id)
 		return
 	}
 	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleViewer) {
@@ -797,7 +815,7 @@ func (h *ServiceHandler) UpdateServiceEventWebhookConfig(w http.ResponseWriter, 
 
 	svc, err := models.GetService(id)
 	if err != nil || svc == nil {
-		utils.RespondError(w, http.StatusNotFound, "service not found")
+		respondServiceNotFound(w, id)
 		return
 	}
 	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleDeveloper) {
@@ -936,7 +954,7 @@ func (h *ServiceHandler) TestServiceEventWebhook(w http.ResponseWriter, r *http.
 
 	svc, err := models.GetService(id)
 	if err != nil || svc == nil {
-		utils.RespondError(w, http.StatusNotFound, "service not found")
+		respondServiceNotFound(w, id)
 		return
 	}
 	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleDeveloper) {
@@ -1011,7 +1029,7 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 	svc, err := models.GetService(id)
 	if err != nil || svc == nil {
-		utils.RespondError(w, http.StatusNotFound, "service not found")
+		respondServiceNotFound(w, id)
 		return
 	}
 	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleDeveloper) {
@@ -1270,7 +1288,7 @@ func (h *ServiceHandler) DeleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if svc == nil {
-		utils.RespondError(w, http.StatusNotFound, "service not found")
+		respondServiceNotFound(w, id)
 		return
 	}
 	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleDeveloper) {
@@ -1394,7 +1412,7 @@ func (h *ServiceHandler) RestoreService(w http.ResponseWriter, r *http.Request) 
 	id := mux.Vars(r)["id"]
 	svc, err := models.GetService(id)
 	if err != nil || svc == nil {
-		utils.RespondError(w, http.StatusNotFound, "service not found")
+		respondServiceNotFound(w, id)
 		return
 	}
 	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleDeveloper) {
@@ -1474,7 +1492,7 @@ func (h *ServiceHandler) RestartService(w http.ResponseWriter, r *http.Request) 
 	id := mux.Vars(r)["id"]
 	svc, err := models.GetService(id)
 	if err != nil || svc == nil {
-		utils.RespondError(w, http.StatusNotFound, "service not found")
+		respondServiceNotFound(w, id)
 		return
 	}
 	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleDeveloper) {
@@ -1527,7 +1545,7 @@ func (h *ServiceHandler) SuspendService(w http.ResponseWriter, r *http.Request) 
 	id := mux.Vars(r)["id"]
 	svc, err := models.GetService(id)
 	if err != nil || svc == nil {
-		utils.RespondError(w, http.StatusNotFound, "service not found")
+		respondServiceNotFound(w, id)
 		return
 	}
 	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleDeveloper) {
@@ -1562,7 +1580,7 @@ func (h *ServiceHandler) ResumeService(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 	svc, err := models.GetService(id)
 	if err != nil || svc == nil {
-		utils.RespondError(w, http.StatusNotFound, "service not found")
+		respondServiceNotFound(w, id)
 		return
 	}
 	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleDeveloper) {

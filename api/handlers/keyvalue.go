@@ -111,9 +111,10 @@ func (h *KeyValueHandler) CreateKeyValue(w http.ResponseWriter, r *http.Request)
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	kv.Name = strings.TrimSpace(kv.Name)
+	validationIssues := make([]utils.ValidationIssue, 0, 4)
 	if kv.Name == "" {
-		utils.RespondError(w, http.StatusBadRequest, "name is required")
-		return
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "name", Message: "is required"})
 	}
 	if kv.Plan == "" {
 		kv.Plan = services.PlanStarter
@@ -121,16 +122,20 @@ func (h *KeyValueHandler) CreateKeyValue(w http.ResponseWriter, r *http.Request)
 	if p, ok := services.NormalizePlan(kv.Plan); ok {
 		kv.Plan = p
 	} else {
-		utils.RespondError(w, http.StatusBadRequest, "invalid plan")
-		return
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "plan", Message: "must be one of free, starter, standard, pro"})
 	}
 	if kv.Port == 0 {
 		kv.Port = 6379
+	} else if kv.Port < 0 || kv.Port > 65535 {
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "port", Message: "must be between 1 and 65535"})
 	}
 	if p, ok := services.NormalizeRedisMaxmemoryPolicy(kv.MaxmemoryPolicy); ok {
 		kv.MaxmemoryPolicy = p
 	} else {
-		utils.RespondError(w, http.StatusBadRequest, "invalid maxmemory_policy")
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "maxmemory_policy", Message: "is invalid"})
+	}
+	if len(validationIssues) > 0 {
+		utils.RespondValidationErrors(w, http.StatusBadRequest, validationIssues)
 		return
 	}
 	kv.Host = "localhost"
@@ -226,11 +231,11 @@ func (h *KeyValueHandler) GetKeyValue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if kv == nil {
-		utils.RespondError(w, http.StatusNotFound, "key-value store not found")
+		respondKeyValueNotFound(w, id)
 		return
 	}
 	if strings.EqualFold(strings.TrimSpace(kv.Status), "soft_deleted") {
-		utils.RespondError(w, http.StatusNotFound, "key-value store not found")
+		respondKeyValueNotFound(w, id)
 		return
 	}
 	userID := middleware.GetUserID(r)
@@ -257,7 +262,7 @@ func (h *KeyValueHandler) RevealKeyValueCredentials(w http.ResponseWriter, r *ht
 		return
 	}
 	if kv == nil {
-		utils.RespondError(w, http.StatusNotFound, "key-value store not found")
+		respondKeyValueNotFound(w, id)
 		return
 	}
 
@@ -331,7 +336,7 @@ func (h *KeyValueHandler) UpdateKeyValue(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if kv == nil {
-		utils.RespondError(w, http.StatusNotFound, "key-value store not found")
+		respondKeyValueNotFound(w, id)
 		return
 	}
 
@@ -512,7 +517,7 @@ func (h *KeyValueHandler) DeleteKeyValue(w http.ResponseWriter, r *http.Request)
 
 	kv, err := models.GetManagedKeyValue(id)
 	if err != nil || kv == nil {
-		utils.RespondError(w, http.StatusNotFound, "key-value store not found")
+		respondKeyValueNotFound(w, id)
 		return
 	}
 	if err := services.EnsureWorkspaceAccess(userID, kv.WorkspaceID, models.RoleDeveloper); err != nil {
@@ -612,7 +617,7 @@ func (h *KeyValueHandler) RestoreKeyValue(w http.ResponseWriter, r *http.Request
 	userID := middleware.GetUserID(r)
 	kv, err := models.GetManagedKeyValue(id)
 	if err != nil || kv == nil {
-		utils.RespondError(w, http.StatusNotFound, "key-value store not found")
+		respondKeyValueNotFound(w, id)
 		return
 	}
 	if err := services.EnsureWorkspaceAccess(userID, kv.WorkspaceID, models.RoleDeveloper); err != nil {

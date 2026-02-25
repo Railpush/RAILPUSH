@@ -1548,11 +1548,21 @@ curl https://railpush.com/api/v1/services \\
                 All endpoints are under <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-content-primary text-xs font-mono">/api/v1</code> and require a Bearer token unless noted.
               </p>
               <p className="text-xs text-content-tertiary mb-4">
+                Resource endpoints accept either full UUIDs or unique short UUID prefixes (for example <code className="px-1 py-0.5 rounded bg-surface-tertiary text-content-primary text-[11px] font-mono">34a927ba</code>). If a resource is not found, error responses include <code className="px-1 py-0.5 rounded bg-surface-tertiary text-content-primary text-[11px] font-mono">error_code</code>, <code className="px-1 py-0.5 rounded bg-surface-tertiary text-content-primary text-[11px] font-mono">message</code>, optional <code className="px-1 py-0.5 rounded bg-surface-tertiary text-content-primary text-[11px] font-mono">suggestion</code>, and <code className="px-1 py-0.5 rounded bg-surface-tertiary text-content-primary text-[11px] font-mono">docs_url</code>.
+              </p>
+              <p className="text-xs text-content-tertiary mb-4">
                 Destructive deletes use a confirmation-token flow and default to soft-delete with a 72-hour recovery window before hard delete is allowed.
               </p>
               <p className="text-xs text-content-tertiary mb-4">
                 List endpoints support optional cursor pagination via <code className="px-1 py-0.5 rounded bg-surface-tertiary text-content-primary text-[11px] font-mono">limit</code> and <code className="px-1 py-0.5 rounded bg-surface-tertiary text-content-primary text-[11px] font-mono">cursor</code>. When either is provided, responses use <code className="px-1 py-0.5 rounded bg-surface-tertiary text-content-primary text-[11px] font-mono">{`{ data, pagination }`}</code>.
               </p>
+              <CodeBlock language="json" filename="error-response.json" code={`{
+  "error_code": "SERVICE_NOT_FOUND",
+  "message": "no service with ID 34a927ba",
+  "error": "no service with ID 34a927ba",
+  "suggestion": "Did you mean 34a927ba-9c3b-4004-8a35-e7db26b12a81?",
+  "docs_url": "https://docs.railpush.com/api/errors#SERVICE_NOT_FOUND"
+}`} />
 
               {[
                 { group: 'Services', endpoints: [

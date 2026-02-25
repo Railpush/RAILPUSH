@@ -2,6 +2,7 @@ package models
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/railpush/api/database"
@@ -27,6 +28,20 @@ func CreateManagedKeyValue(kv *ManagedKeyValue) error {
 }
 
 func GetManagedKeyValue(id string) (*ManagedKeyValue, error) {
+	lookupID := strings.TrimSpace(id)
+	kv, err := getManagedKeyValueByIDExact(lookupID)
+	if err != nil || kv != nil {
+		return kv, err
+	}
+
+	resolvedID, err := resolveManagedKeyValueIDPrefix(lookupID)
+	if err != nil || resolvedID == "" || resolvedID == lookupID {
+		return nil, err
+	}
+	return getManagedKeyValueByIDExact(resolvedID)
+}
+
+func getManagedKeyValueByIDExact(id string) (*ManagedKeyValue, error) {
 	kv := &ManagedKeyValue{}
 	err := database.DB.QueryRow("SELECT id, COALESCE(workspace_id::text,''), name, COALESCE(plan,'starter'), COALESCE(container_id,''), COALESCE(host,'localhost'), COALESCE(port,6379), COALESCE(encrypted_password,''), COALESCE(maxmemory_policy,'allkeys-lru'), COALESCE(status,'creating'), created_at FROM managed_keyvalue WHERE id=$1", id).Scan(
 		&kv.ID, &kv.WorkspaceID, &kv.Name, &kv.Plan, &kv.ContainerID, &kv.Host, &kv.Port, &kv.EncryptedPassword, &kv.MaxmemoryPolicy, &kv.Status, &kv.CreatedAt)
@@ -34,6 +49,32 @@ func GetManagedKeyValue(id string) (*ManagedKeyValue, error) {
 		return nil, nil
 	}
 	return kv, err
+}
+
+func resolveManagedKeyValueIDPrefix(prefix string) (string, error) {
+	if !isUUIDPrefixCandidate(prefix) {
+		return "", nil
+	}
+	matches, err := listIDPrefixMatches(
+		"SELECT id::text FROM managed_keyvalue WHERE id::text LIKE $1 ORDER BY created_at DESC LIMIT $2",
+		prefix,
+		2,
+	)
+	if err != nil {
+		return "", err
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	return "", nil
+}
+
+func SuggestManagedKeyValueIDs(raw string, limit int) ([]string, error) {
+	return suggestIDPrefixes(
+		"SELECT id::text FROM managed_keyvalue WHERE id::text LIKE $1 ORDER BY created_at DESC LIMIT $2",
+		raw,
+		limit,
+	)
 }
 
 func ListManagedKeyValues() ([]ManagedKeyValue, error) {

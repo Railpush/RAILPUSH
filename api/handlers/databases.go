@@ -134,9 +134,10 @@ func (h *DatabaseHandler) CreateDatabase(w http.ResponseWriter, r *http.Request)
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	db.Name = strings.TrimSpace(db.Name)
+	validationIssues := make([]utils.ValidationIssue, 0, 4)
 	if db.Name == "" {
-		utils.RespondError(w, http.StatusBadRequest, "name is required")
-		return
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "name", Message: "is required"})
 	}
 	if db.PGVersion == 0 {
 		db.PGVersion = 16
@@ -147,11 +148,16 @@ func (h *DatabaseHandler) CreateDatabase(w http.ResponseWriter, r *http.Request)
 	if p, ok := services.NormalizePlan(db.Plan); ok {
 		db.Plan = p
 	} else {
-		utils.RespondError(w, http.StatusBadRequest, "invalid plan")
-		return
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "plan", Message: "must be one of free, starter, standard, pro"})
 	}
 	if db.Port == 0 {
 		db.Port = 5432
+	} else if db.Port < 0 || db.Port > 65535 {
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "port", Message: "must be between 1 and 65535"})
+	}
+	if len(validationIssues) > 0 {
+		utils.RespondValidationErrors(w, http.StatusBadRequest, validationIssues)
+		return
 	}
 	db.Host = "localhost"
 	db.DBName = db.Name
@@ -250,11 +256,11 @@ func (h *DatabaseHandler) GetDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if db == nil {
-		utils.RespondError(w, http.StatusNotFound, "database not found")
+		respondDatabaseNotFound(w, id)
 		return
 	}
 	if strings.EqualFold(strings.TrimSpace(db.Status), "soft_deleted") {
-		utils.RespondError(w, http.StatusNotFound, "database not found")
+		respondDatabaseNotFound(w, id)
 		return
 	}
 	userID := middleware.GetUserID(r)
@@ -281,7 +287,7 @@ func (h *DatabaseHandler) RevealDatabaseCredentials(w http.ResponseWriter, r *ht
 		return
 	}
 	if db == nil {
-		utils.RespondError(w, http.StatusNotFound, "database not found")
+		respondDatabaseNotFound(w, id)
 		return
 	}
 
@@ -329,7 +335,7 @@ func (h *DatabaseHandler) RotateDatabasePassword(w http.ResponseWriter, r *http.
 		return
 	}
 	if db == nil || strings.EqualFold(strings.TrimSpace(db.Status), "soft_deleted") {
-		utils.RespondError(w, http.StatusNotFound, "database not found")
+		respondDatabaseNotFound(w, id)
 		return
 	}
 
@@ -460,7 +466,7 @@ func (h *DatabaseHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if db == nil || strings.EqualFold(strings.TrimSpace(db.Status), "soft_deleted") {
-		utils.RespondError(w, http.StatusNotFound, "database not found")
+		respondDatabaseNotFound(w, id)
 		return
 	}
 
@@ -803,7 +809,7 @@ func (h *DatabaseHandler) UpdateDatabase(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if db == nil {
-		utils.RespondError(w, http.StatusNotFound, "database not found")
+		respondDatabaseNotFound(w, id)
 		return
 	}
 
@@ -962,7 +968,7 @@ func (h *DatabaseHandler) DeleteDatabase(w http.ResponseWriter, r *http.Request)
 
 	db, err := models.GetManagedDatabase(id)
 	if err != nil || db == nil {
-		utils.RespondError(w, http.StatusNotFound, "database not found")
+		respondDatabaseNotFound(w, id)
 		return
 	}
 	if err := services.EnsureWorkspaceAccess(userID, db.WorkspaceID, models.RoleDeveloper); err != nil {
@@ -1123,7 +1129,7 @@ func (h *DatabaseHandler) RestoreDatabase(w http.ResponseWriter, r *http.Request
 	userID := middleware.GetUserID(r)
 	db, err := models.GetManagedDatabase(id)
 	if err != nil || db == nil {
-		utils.RespondError(w, http.StatusNotFound, "database not found")
+		respondDatabaseNotFound(w, id)
 		return
 	}
 	if err := services.EnsureWorkspaceAccess(userID, db.WorkspaceID, models.RoleDeveloper); err != nil {
@@ -1189,7 +1195,7 @@ func (h *DatabaseHandler) ListBackups(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 	db, err := models.GetManagedDatabase(id)
 	if err != nil || db == nil {
-		utils.RespondError(w, http.StatusNotFound, "database not found")
+		respondDatabaseNotFound(w, id)
 		return
 	}
 	userID := middleware.GetUserID(r)
@@ -1246,7 +1252,7 @@ func (h *DatabaseHandler) TriggerBackup(w http.ResponseWriter, r *http.Request) 
 	id := mux.Vars(r)["id"]
 	db, err := models.GetManagedDatabase(id)
 	if err != nil || db == nil {
-		utils.RespondError(w, http.StatusNotFound, "database not found")
+		respondDatabaseNotFound(w, id)
 		return
 	}
 	userID := middleware.GetUserID(r)
@@ -1528,7 +1534,7 @@ func (h *DatabaseHandler) ListReplicas(w http.ResponseWriter, r *http.Request) {
 	primaryID := mux.Vars(r)["id"]
 	primary, err := models.GetManagedDatabase(primaryID)
 	if err != nil || primary == nil {
-		utils.RespondError(w, http.StatusNotFound, "database not found")
+		respondDatabaseNotFound(w, primaryID)
 		return
 	}
 	userID := middleware.GetUserID(r)
@@ -1551,7 +1557,7 @@ func (h *DatabaseHandler) CreateReplica(w http.ResponseWriter, r *http.Request) 
 	primaryID := mux.Vars(r)["id"]
 	primary, err := models.GetManagedDatabase(primaryID)
 	if err != nil || primary == nil {
-		utils.RespondError(w, http.StatusNotFound, "database not found")
+		respondDatabaseNotFound(w, primaryID)
 		return
 	}
 	userID := middleware.GetUserID(r)
@@ -1614,7 +1620,7 @@ func (h *DatabaseHandler) PromoteReplica(w http.ResponseWriter, r *http.Request)
 	replicaID := mux.Vars(r)["replicaId"]
 	primary, err := models.GetManagedDatabase(primaryID)
 	if err != nil || primary == nil {
-		utils.RespondError(w, http.StatusNotFound, "database not found")
+		respondDatabaseNotFound(w, primaryID)
 		return
 	}
 	userID := middleware.GetUserID(r)
@@ -1653,7 +1659,7 @@ func (h *DatabaseHandler) EnableHA(w http.ResponseWriter, r *http.Request) {
 	primaryID := mux.Vars(r)["id"]
 	primary, err := models.GetManagedDatabase(primaryID)
 	if err != nil || primary == nil {
-		utils.RespondError(w, http.StatusNotFound, "database not found")
+		respondDatabaseNotFound(w, primaryID)
 		return
 	}
 	userID := middleware.GetUserID(r)
@@ -1855,7 +1861,7 @@ func (h *DatabaseHandler) LinkDatabaseToService(w http.ResponseWriter, r *http.R
 	}
 	db, err := models.GetManagedDatabase(strings.TrimSpace(req.DatabaseID))
 	if err != nil || db == nil {
-		utils.RespondError(w, http.StatusNotFound, "database not found")
+		respondDatabaseNotFound(w, req.DatabaseID)
 		return
 	}
 	if db.WorkspaceID != svc.WorkspaceID {

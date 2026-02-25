@@ -207,6 +207,20 @@ func ListBaseServicesForPreview(repoURL string, baseBranch string) ([]Service, e
 }
 
 func GetService(id string) (*Service, error) {
+	lookupID := strings.TrimSpace(id)
+	svc, err := getServiceByIDExact(lookupID)
+	if err != nil || svc != nil {
+		return svc, err
+	}
+
+	resolvedID, err := resolveServiceIDPrefix(lookupID)
+	if err != nil || resolvedID == "" || resolvedID == lookupID {
+		return nil, err
+	}
+	return getServiceByIDExact(resolvedID)
+}
+
+func getServiceByIDExact(id string) (*Service, error) {
 	s := &Service{}
 	var projectID, environmentID string
 	err := database.DB.QueryRow(
@@ -219,6 +233,32 @@ func GetService(id string) (*Service, error) {
 	s.EnvironmentID = serviceStrPtrOrNil(environmentID)
 	s.fillAliases()
 	return s, err
+}
+
+func resolveServiceIDPrefix(prefix string) (string, error) {
+	if !isUUIDPrefixCandidate(prefix) {
+		return "", nil
+	}
+	matches, err := listIDPrefixMatches(
+		"SELECT id::text FROM services WHERE id::text LIKE $1 ORDER BY created_at DESC LIMIT $2",
+		prefix,
+		2,
+	)
+	if err != nil {
+		return "", err
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	return "", nil
+}
+
+func SuggestServiceIDs(raw string, limit int) ([]string, error) {
+	return suggestIDPrefixes(
+		"SELECT id::text FROM services WHERE id::text LIKE $1 ORDER BY created_at DESC LIMIT $2",
+		raw,
+		limit,
+	)
 }
 
 func CreateService(s *Service) error {
