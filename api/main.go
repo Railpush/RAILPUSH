@@ -350,6 +350,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 
 	authed.HandleFunc("/services/{id}/ai-fix", aiFixH.StartFix).Methods("POST")
 	authed.HandleFunc("/services/{id}/ai-fix/status", aiFixH.GetStatus).Methods("GET")
+	authed.HandleFunc("/services/{id}/ai-fix/diagnosis", aiFixH.GetDiagnosis).Methods("GET")
 
 	authed.HandleFunc("/services/{id}/env-vars", envH.ListEnvVars).Methods("GET")
 	authed.HandleFunc("/services/{id}/env-vars", envH.BulkUpdateEnvVars).Methods("PUT")

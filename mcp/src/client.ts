@@ -713,6 +713,12 @@ export class RailPushClient {
     return this.request("GET", `/services/${serviceId}/ai-fix/status`);
   }
 
+  async getAIFixDiagnosis(serviceId: string, deployId?: string) {
+    const query: Record<string, string> = {};
+    if (deployId) query.deploy_id = deployId;
+    return this.request("GET", `/services/${serviceId}/ai-fix/diagnosis`, undefined, query);
+  }
+
   // ── One-Off Jobs ─────────────────────────────────────────────────────
 
   async runJob(serviceId: string, command: string, opts?: {

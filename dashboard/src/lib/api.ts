@@ -5,6 +5,7 @@ import type {
   DatabaseReplica, WorkspaceMember, AuditLogEntry, SamlSSOConfig, Incident, IncidentDetail, OpsOverview, OpsUserItem, OpsWorkspaceItem, OpsServiceItem, OpsDeployItem,
   OpsEmailOutboxItem, OpsBillingCustomerItem, OpsBillingCustomerDetail, OpsTicketItem, OpsTicketDetail, OpsTicketSearchResult, OpsWorkspaceCreditItem, OpsWorkspaceCreditDetail,
   OpsKubeSummary, OpsClusterSummary, OpsPerformanceSummary, OpsDatastoreItem, OpsAuditLogEntry, SupportTicket, SupportTicketMessage, BlueprintAISettings, AIFixSession,
+  AIFixDiagnosis,
   Disk, DeployQueueInfo,
 } from '../types';
 
@@ -152,6 +153,8 @@ export const deploys = {
 export const aiFix = {
   start: (serviceId: string) => request<AIFixSession>(`/services/${serviceId}/ai-fix`, { method: 'POST' }),
   status: (serviceId: string) => request<{ active: boolean; session?: AIFixSession; status?: string; current_attempt?: number; max_attempts?: number; last_ai_summary?: string; last_deploy_status?: string }>(`/services/${serviceId}/ai-fix/status`),
+  diagnose: (serviceId: string, deployId?: string) =>
+    request<AIFixDiagnosis>(`/services/${serviceId}/ai-fix/diagnosis${deployId ? `?deploy_id=${encodeURIComponent(deployId)}` : ''}`),
 };
 
 // Env Vars

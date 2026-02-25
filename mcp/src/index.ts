@@ -2044,6 +2044,19 @@ server.tool(
   },
 );
 
+server.tool(
+  "get_ai_fix_diagnosis",
+  "Get a plain-English diagnosis for the latest failed deploy (or a specific failed deploy) before applying AI auto-fix.",
+  {
+    service_id: z.string().describe("Service ID"),
+    deploy_id: z.string().optional().describe("Optional failed deploy ID to diagnose"),
+  },
+  async ({ service_id, deploy_id }) => {
+    try { return text(await client.getAIFixDiagnosis(service_id, deploy_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
 // ════════════════════════════════════════════════════════════════════════
 //  ONE-OFF JOBS
 // ════════════════════════════════════════════════════════════════════════

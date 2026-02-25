@@ -3,6 +3,7 @@ package handlers
 import (
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/railpush/api/config"
@@ -123,6 +124,69 @@ func (h *AIFixHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.RespondJSON(w, http.StatusOK, resp)
+}
+
+// GetDiagnosis returns a plain-English diagnosis for a failed deploy.
+// It does not mutate state or trigger a new deploy.
+func (h *AIFixHandler) GetDiagnosis(w http.ResponseWriter, r *http.Request) {
+	serviceID := mux.Vars(r)["id"]
+	svc, err := models.GetService(serviceID)
+	if err != nil || svc == nil {
+		utils.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+
+	userID := middleware.GetUserID(r)
+	if err := services.EnsureWorkspaceAccess(userID, svc.WorkspaceID, models.RoleViewer); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	deployID := strings.TrimSpace(r.URL.Query().Get("deploy_id"))
+	var deploy *models.Deploy
+	if deployID != "" {
+		deploy, err = models.GetDeploy(deployID)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to load deploy")
+			return
+		}
+		if deploy == nil || deploy.ServiceID != svc.ID {
+			utils.RespondError(w, http.StatusNotFound, "deploy not found")
+			return
+		}
+		if strings.ToLower(strings.TrimSpace(deploy.Status)) != "failed" {
+			utils.RespondError(w, http.StatusBadRequest, "deploy is not failed")
+			return
+		}
+	} else {
+		deploy, err = models.GetLastFailedDeploy(svc.ID)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to load failed deploy")
+			return
+		}
+		if deploy == nil {
+			utils.RespondError(w, http.StatusNotFound, "no failed deploy to diagnose")
+			return
+		}
+	}
+
+	aiFixer := services.NewAIFixService(h.Config)
+	diagnosis, err := aiFixer.DiagnoseDeployFailure(deploy)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to generate diagnosis")
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"deploy_id":      deploy.ID,
+		"status":         deploy.Status,
+		"source":         diagnosis.Source,
+		"summary":        diagnosis.Summary,
+		"probable_cause": diagnosis.ProbableCause,
+		"suggested_fix":  diagnosis.SuggestedFix,
+		"confidence":     diagnosis.Confidence,
+		"can_auto_fix":   aiFixer.Available(),
+	})
 }
 
 func getMostRecentAIFixSession(serviceID string) (*models.AIFixSession, error) {

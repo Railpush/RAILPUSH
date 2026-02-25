@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ExternalLink, RotateCw, GitBranch, ChevronDown, ShieldCheck, Clock, Activity, Box, Settings, Copy, Check, Loader2, ListOrdered } from 'lucide-react';
+import { ExternalLink, RotateCw, GitBranch, ChevronDown, ShieldCheck, Clock, Activity, Box, Settings, Copy, Check, Loader2, ListOrdered, Sparkles, X } from 'lucide-react';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
@@ -10,8 +10,8 @@ import { ServiceIcon } from '../components/ui/ServiceIcon';
 import { deriveDeployAutomationState, parseWorkflowNames, type DeployAutomationMode } from '../lib/deployAutomation';
 import { serviceTypeLabel, timeAgo, formatDuration } from '../lib/utils';
 import { buildDefaultServiceUrl } from '../lib/serviceUrl';
-import { services as servicesApi, deploys as deploysApi, envVars as envVarsApi, connectBuildStream } from '../lib/api';
-import type { Service, Deploy, ServiceGitHubWebhookStatus, DeployQueueInfo } from '../types';
+import { services as servicesApi, deploys as deploysApi, envVars as envVarsApi, aiFix as aiFixApi, connectBuildStream } from '../lib/api';
+import type { Service, Deploy, ServiceGitHubWebhookStatus, DeployQueueInfo, AIFixDiagnosis } from '../types';
 import { toast } from 'sonner';
 
 interface QuickMetrics { cpu_percent: string; memory_used: string; memory_percent: string }
@@ -25,6 +25,10 @@ function queueEtaLabel(status: string, info?: DeployQueueInfo | null): string {
   if (waitSeconds <= 0) return 'soon';
   if (info?.estimated_wait_human) return info.estimated_wait_human;
   return `~${formatDuration(waitSeconds * 1000)}`;
+}
+
+function aiDiagnosisDismissKey(serviceID: string, deployID: string): string {
+	return `railpush:ai-diagnosis:dismissed:${serviceID}:${deployID}`;
 }
 
 function CopyUrlButton({ url }: { url: string }) {
@@ -60,6 +64,10 @@ export function ServiceDetail() {
   const [githubWebhookStatus, setGitHubWebhookStatus] = useState<ServiceGitHubWebhookStatus | null>(null);
   const [repairingWebhook, setRepairingWebhook] = useState(false);
   const [latestQueueInfo, setLatestQueueInfo] = useState<DeployQueueInfo | null>(null);
+  const [aiDiagnosis, setAiDiagnosis] = useState<AIFixDiagnosis | null>(null);
+  const [aiDiagnosisLoading, setAiDiagnosisLoading] = useState(false);
+  const [aiDiagnosisDismissed, setAiDiagnosisDismissed] = useState(false);
+  const [startingAIFix, setStartingAIFix] = useState(false);
   const buildWsRef = useRef<WebSocket | null>(null);
   const buildLogEndRef = useRef<HTMLDivElement>(null);
 
@@ -173,6 +181,40 @@ export function ServiceDetail() {
     };
   }, [serviceId, latestDeployForWs?.id, latestDeployForWs?.status]);
 
+  useEffect(() => {
+    if (!serviceId || !latestDeployForWs || latestDeployForWs.status !== 'failed') {
+      setAiDiagnosis(null);
+      setAiDiagnosisLoading(false);
+      setAiDiagnosisDismissed(false);
+      return;
+    }
+
+    const dismissKey = aiDiagnosisDismissKey(serviceId, latestDeployForWs.id);
+    const dismissed = typeof window !== 'undefined' && window.localStorage.getItem(dismissKey) === '1';
+    setAiDiagnosisDismissed(dismissed);
+    if (dismissed) {
+      setAiDiagnosisLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setAiDiagnosisLoading(true);
+    aiFixApi.diagnose(serviceId, latestDeployForWs.id)
+      .then((diag) => {
+        if (!cancelled) setAiDiagnosis(diag);
+      })
+      .catch(() => {
+        if (!cancelled) setAiDiagnosis(null);
+      })
+      .finally(() => {
+        if (!cancelled) setAiDiagnosisLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [serviceId, latestDeployForWs?.id, latestDeployForWs?.status]);
+
   if (loading) {
     return (
       <div className="space-y-6 animate-pulse">
@@ -230,6 +272,32 @@ export function ServiceDetail() {
       setTimeout(refresh, 1000);
     } catch { /* ignore */ }
     setActionInProgress(null);
+  };
+
+  const dismissAIDiagnosis = () => {
+    if (!serviceId || !latestDeploy) {
+      setAiDiagnosisDismissed(true);
+      return;
+    }
+    setAiDiagnosisDismissed(true);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(aiDiagnosisDismissKey(serviceId, latestDeploy.id), '1');
+    }
+  };
+
+  const startAIFix = async () => {
+    if (!serviceId) return;
+    setStartingAIFix(true);
+    try {
+      await aiFixApi.start(serviceId);
+      toast.success('AI fix started. Deploying an automated patch now.');
+      dismissAIDiagnosis();
+      setTimeout(refresh, 800);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to start AI fix';
+      toast.error(message || 'Failed to start AI fix');
+    }
+    setStartingAIFix(false);
   };
 
   const repairGitHubWebhook = async () => {
@@ -520,6 +588,63 @@ export function ServiceDetail() {
                 </div>
               </Card>
             </div>
+          )}
+
+          {/* AI Deploy Diagnosis */}
+          {latestDeploy?.status === 'failed' && !aiDiagnosisDismissed && (
+            <Card className="glass-panel p-5 border-amber-400/40 bg-amber-400/5">
+              <div className="flex items-start justify-between gap-4 mb-3">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-amber-300" />
+                  <h3 className="text-sm font-semibold text-content-primary">AI Deploy Diagnosis</h3>
+                  {aiDiagnosis?.confidence && (
+                    <span className="text-[11px] px-2 py-0.5 rounded border border-amber-400/30 text-amber-300 bg-amber-400/10">
+                      {aiDiagnosis.confidence} confidence
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={dismissAIDiagnosis}
+                  className="p-1 rounded text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary/40"
+                  title="Dismiss diagnosis"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {aiDiagnosisLoading ? (
+                <div className="text-sm text-content-secondary flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Analyzing failed deploy logs...
+                </div>
+              ) : aiDiagnosis ? (
+                <>
+                  <p className="text-sm text-content-primary mb-2">{aiDiagnosis.summary}</p>
+                  <p className="text-xs text-content-secondary mb-2"><span className="text-content-tertiary">Likely cause:</span> {aiDiagnosis.probable_cause}</p>
+                  <p className="text-xs text-content-secondary"><span className="text-content-tertiary">Suggested fix:</span> {aiDiagnosis.suggested_fix}</p>
+
+                  <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={startAIFix}
+                      loading={startingAIFix}
+                      disabled={!aiDiagnosis.can_auto_fix || startingAIFix}
+                    >
+                      Apply AI Fix
+                    </Button>
+                    <Button variant="secondary" size="sm" onClick={dismissAIDiagnosis}>
+                      Dismiss
+                    </Button>
+                    {!aiDiagnosis.can_auto_fix && (
+                      <span className="text-xs text-content-tertiary">AI auto-fix is not configured on this workspace.</span>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-content-secondary">Diagnosis unavailable for this failed deploy.</p>
+              )}
+            </Card>
           )}
 
           {/* Build Log — streaming or completed */}

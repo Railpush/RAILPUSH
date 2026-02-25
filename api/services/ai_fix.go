@@ -20,6 +20,14 @@ type AIFixService struct {
 	HTTPClient *http.Client
 }
 
+type AIFixDiagnosis struct {
+	Summary       string `json:"summary"`
+	ProbableCause string `json:"probable_cause"`
+	SuggestedFix  string `json:"suggested_fix"`
+	Confidence    string `json:"confidence"`
+	Source        string `json:"source"`
+}
+
 func NewAIFixService(cfg *config.Config) *AIFixService {
 	return &AIFixService{
 		Config:     cfg,
@@ -35,6 +43,35 @@ func (s *AIFixService) Available() bool {
 		strings.TrimSpace(s.Config.BlueprintAI.OpenRouterAPIKey) != "" &&
 		strings.TrimSpace(s.Config.BlueprintAI.OpenRouterModel) != "" &&
 		strings.TrimSpace(s.Config.BlueprintAI.OpenRouterURL) != ""
+}
+
+func (s *AIFixService) DiagnoseDeployFailure(deploy *models.Deploy) (*AIFixDiagnosis, error) {
+	if deploy == nil {
+		return nil, fmt.Errorf("missing deploy")
+	}
+
+	buildLogs := strings.TrimSpace(deploy.BuildLog)
+	if len(buildLogs) < 50 && s != nil && s.Config != nil && s.Config.Kubernetes.Enabled {
+		if lokiLogs := strings.TrimSpace(s.fetchLokiLogs(deploy)); lokiLogs != "" {
+			buildLogs = lokiLogs
+		}
+	}
+	buildLogs = strings.TrimSpace(lastNLines(buildLogs, 240))
+
+	if s.Available() && buildLogs != "" {
+		diag, err := s.callOpenRouterDiagnosis(buildLogs)
+		if err == nil && diag != nil {
+			diag.Source = "ai"
+			return sanitizeAIFixDiagnosis(diag), nil
+		}
+		if err != nil {
+			log.Printf("ai_fix: diagnosis openrouter fallback: %v", err)
+		}
+	}
+
+	diag := heuristicAIFixDiagnosis(buildLogs)
+	diag.Source = "heuristic"
+	return sanitizeAIFixDiagnosis(diag), nil
 }
 
 // AttemptFix gets the last failed deploy's build logs, sends them to OpenRouter
@@ -201,6 +238,83 @@ CRITICAL RULES:
 	return content, summaryLine, nil
 }
 
+func (s *AIFixService) callOpenRouterDiagnosis(buildLogs string) (*AIFixDiagnosis, error) {
+	systemPrompt := `You are a senior SRE helping a developer understand a failed deployment.
+Analyze the build/runtime logs and explain what most likely failed.
+
+Return ONLY valid JSON with this exact shape:
+{
+  "summary": "one concise sentence",
+  "probable_cause": "plain-English root cause",
+  "suggested_fix": "specific actionable fix",
+  "confidence": "high|medium|low"
+}
+
+Rules:
+- Keep summary under 140 characters.
+- suggested_fix must be practical and immediately actionable.
+- If logs are ambiguous, say that and lower confidence.
+- No markdown, no code fences, no extra keys.`
+
+	userPrompt := fmt.Sprintf("Deploy logs (last 240 lines):\n```\n%s\n```", buildLogs)
+
+	reqBody := openRouterChatRequest{
+		Model: s.Config.BlueprintAI.OpenRouterModel,
+		Messages: []openRouterMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+		Temperature: 0.1,
+		MaxTokens:   700,
+	}
+
+	raw, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), s.HTTPClient.Timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.Config.BlueprintAI.OpenRouterURL, bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+s.Config.BlueprintAI.OpenRouterAPIKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("HTTP-Referer", "https://railpush.com")
+	req.Header.Set("X-Title", "RailPush AI Diagnostics")
+
+	resp, err := s.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("openrouter error (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var parsed openRouterChatResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	if parsed.Error != nil && strings.TrimSpace(parsed.Error.Message) != "" {
+		return nil, fmt.Errorf("openrouter error: %s", strings.TrimSpace(parsed.Error.Message))
+	}
+	if len(parsed.Choices) == 0 {
+		return nil, fmt.Errorf("openrouter returned no choices")
+	}
+
+	content := extractOpenRouterContent(parsed.Choices[0].Message.Content)
+	diag, err := parseAIFixDiagnosisJSON(content)
+	if err != nil {
+		return nil, err
+	}
+	return sanitizeAIFixDiagnosis(diag), nil
+}
+
 func (s *AIFixService) fetchLokiLogs(deploy *models.Deploy) string {
 	if s == nil || s.Config == nil || !s.Config.Kubernetes.Enabled {
 		return ""
@@ -284,6 +398,151 @@ func normalizeDockerfileContent(in string) string {
 	}
 	out := strings.TrimSpace(strings.Join(lines, "\n"))
 	return out
+}
+
+func sanitizeAIFixDiagnosis(diag *AIFixDiagnosis) *AIFixDiagnosis {
+	if diag == nil {
+		diag = &AIFixDiagnosis{}
+	}
+	diag.Summary = strings.TrimSpace(diag.Summary)
+	diag.ProbableCause = strings.TrimSpace(diag.ProbableCause)
+	diag.SuggestedFix = strings.TrimSpace(diag.SuggestedFix)
+	diag.Confidence = normalizeAIFixConfidence(diag.Confidence)
+
+	if diag.Summary == "" {
+		diag.Summary = "Deploy failed due to a build or runtime configuration issue."
+	}
+	if diag.ProbableCause == "" {
+		diag.ProbableCause = "The logs do not provide a single definitive root cause."
+	}
+	if diag.SuggestedFix == "" {
+		diag.SuggestedFix = "Review the failing step in the build logs, fix that change locally, and redeploy."
+	}
+	if strings.TrimSpace(diag.Source) == "" {
+		diag.Source = "heuristic"
+	}
+	return diag
+}
+
+func normalizeAIFixConfidence(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "high":
+		return "high"
+	case "low":
+		return "low"
+	default:
+		return "medium"
+	}
+}
+
+func parseAIFixDiagnosisJSON(raw string) (*AIFixDiagnosis, error) {
+	type payload struct {
+		Summary       string `json:"summary"`
+		ProbableCause string `json:"probable_cause"`
+		SuggestedFix  string `json:"suggested_fix"`
+		Confidence    string `json:"confidence"`
+	}
+
+	cleaned := strings.TrimSpace(stripMarkdownFences(raw))
+	if cleaned == "" {
+		return nil, fmt.Errorf("empty diagnosis response")
+	}
+
+	decode := func(candidate string) (*AIFixDiagnosis, error) {
+		var p payload
+		if err := json.Unmarshal([]byte(candidate), &p); err != nil {
+			return nil, err
+		}
+		return &AIFixDiagnosis{
+			Summary:       p.Summary,
+			ProbableCause: p.ProbableCause,
+			SuggestedFix:  p.SuggestedFix,
+			Confidence:    p.Confidence,
+		}, nil
+	}
+
+	if diag, err := decode(cleaned); err == nil {
+		return diag, nil
+	}
+
+	start := strings.Index(cleaned, "{")
+	end := strings.LastIndex(cleaned, "}")
+	if start >= 0 && end > start {
+		if diag, err := decode(cleaned[start : end+1]); err == nil {
+			return diag, nil
+		}
+	}
+
+	return nil, fmt.Errorf("diagnosis response is not valid JSON")
+}
+
+func heuristicAIFixDiagnosis(buildLogs string) *AIFixDiagnosis {
+	logs := strings.TrimSpace(buildLogs)
+	if logs == "" {
+		return &AIFixDiagnosis{
+			Summary:       "No build logs were available for diagnosis.",
+			ProbableCause: "RailPush could not read enough logs from the failed deploy.",
+			SuggestedFix:  "Open deploy logs, verify the failing step, and rerun with verbose logging if needed.",
+			Confidence:    "low",
+		}
+	}
+
+	lower := strings.ToLower(logs)
+	if strings.Contains(lower, "enoent") && strings.Contains(lower, "package.json") {
+		return &AIFixDiagnosis{
+			Summary:       "Build context is pointing at the wrong directory.",
+			ProbableCause: "The build step cannot find package.json, which usually means docker context/rootDir is incorrect.",
+			SuggestedFix:  "Set dockerContext/rootDir to the folder containing package.json (or update COPY paths), then redeploy.",
+			Confidence:    "high",
+		}
+	}
+	if strings.Contains(lower, "npm ci can only install") && strings.Contains(lower, "package-lock.json") {
+		return &AIFixDiagnosis{
+			Summary:       "npm ci failed because package-lock.json is missing.",
+			ProbableCause: "The Dockerfile or build command uses npm ci without a lock file in the repo.",
+			SuggestedFix:  "Commit package-lock.json or switch the build step to npm install.",
+			Confidence:    "high",
+		}
+	}
+	if strings.Contains(lower, "modulenotfounderror") || strings.Contains(lower, "no module named") {
+		return &AIFixDiagnosis{
+			Summary:       "Python dependency is missing during startup or build.",
+			ProbableCause: "A required module is not installed from requirements.txt.",
+			SuggestedFix:  "Add the missing package to requirements.txt and ensure pip install runs in the Docker build.",
+			Confidence:    "high",
+		}
+	}
+	if strings.Contains(lower, "eaddrinuse") || strings.Contains(lower, "address already in use") {
+		return &AIFixDiagnosis{
+			Summary:       "The app failed due to a port conflict.",
+			ProbableCause: "The process is binding to a hardcoded port instead of the platform-provided PORT.",
+			SuggestedFix:  "Use the PORT environment variable in your app and avoid hardcoded listen ports.",
+			Confidence:    "medium",
+		}
+	}
+	if strings.Contains(lower, "out of memory") || strings.Contains(lower, "javascript heap") || strings.Contains(lower, "enomem") {
+		return &AIFixDiagnosis{
+			Summary:       "The build likely ran out of memory.",
+			ProbableCause: "Dependency install or compile step exceeded available memory.",
+			SuggestedFix:  "Reduce build memory usage (or set NODE_OPTIONS), trim dependencies, or use a larger plan.",
+			Confidence:    "medium",
+		}
+	}
+	if strings.Contains(lower, "could not find or read dockerfile") || (strings.Contains(lower, "no such file") && strings.Contains(lower, "dockerfile")) {
+		return &AIFixDiagnosis{
+			Summary:       "Dockerfile path is invalid for this repository.",
+			ProbableCause: "The configured dockerfile path does not exist in the selected branch/context.",
+			SuggestedFix:  "Fix dockerfilePath (or place Dockerfile at repo root) and redeploy.",
+			Confidence:    "high",
+		}
+	}
+
+	return &AIFixDiagnosis{
+		Summary:       "Deploy failed, but no single root cause was confidently detected.",
+		ProbableCause: "The logs contain multiple failures or incomplete context.",
+		SuggestedFix:  "Inspect the first failing command in build logs, fix it locally, and redeploy. Use AI Fix to attempt an automated patch.",
+		Confidence:    "low",
+	}
 }
 
 func looksLikeDockerfile(in string) bool {

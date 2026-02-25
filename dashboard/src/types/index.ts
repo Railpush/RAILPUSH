@@ -224,6 +224,17 @@ export interface AIFixSession {
   created_at: string;
 }
 
+export interface AIFixDiagnosis {
+  deploy_id: string;
+  status: string;
+  source: 'ai' | 'heuristic';
+  summary: string;
+  probable_cause: string;
+  suggested_fix: string;
+  confidence: 'high' | 'medium' | 'low';
+  can_auto_fix: boolean;
+}
+
 export interface Disk {
   id: string;
   service_id: string;

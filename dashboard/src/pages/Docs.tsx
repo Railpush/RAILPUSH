@@ -1612,6 +1612,9 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'GET', path: '/services/:id/deploys/:deployId/queue', desc: 'Get queue position and estimated wait time for a deploy' },
                   { method: 'POST', path: '/services/:id/deploys/:deployId/wait', desc: 'Wait for deploy completion (timeout query param)' },
                   { method: 'POST', path: '/services/:id/deploys/:deployId/rollback', desc: 'Rollback to a deploy' },
+                  { method: 'GET', path: '/services/:id/ai-fix/diagnosis', desc: 'Get a plain-English AI diagnosis for the latest failed deploy (optional deploy_id query)' },
+                  { method: 'POST', path: '/services/:id/ai-fix', desc: 'Start AI auto-fix for a failed deploy' },
+                  { method: 'GET', path: '/services/:id/ai-fix/status', desc: 'Get AI auto-fix session status' },
                 ]},
                 { group: 'Env Vars & Domains', endpoints: [
                   { method: 'POST', path: '/services/bulk-set-env', desc: 'Set env vars for multiple services (merge/replace + dry_run + transaction_mode)' },
@@ -1923,7 +1926,7 @@ npm run build`} />
                       ['Key-Value (Redis)', 'list (plan/status/name/query filters + limit/cursor pagination), create, get (redacted), reveal credentials, update, delete (token-confirmed soft delete), restore'],
                       ['Logs', 'get runtime/deploy logs with text search, regex, since/until, level, structured field filter; list/create/delete/test log drains + stats; list/create/update/delete log alerts'],
                       ['Terminal & Filesystem', 'exec_command, create_shell_session, shell_exec, close_shell_session, list_directory, read_file, search_files'],
-                      ['AI Fix', 'start fix session, get fix status'],
+                      ['AI Fix', 'get deploy diagnosis, start fix session, get fix status'],
                       ['One-Off Jobs', 'run, list (limit/cursor pagination), get'],
                       ['Autoscaling', 'get policy, set policy'],
                       ['Blueprints', 'list, create, get, update (move to folder), sync, delete'],
