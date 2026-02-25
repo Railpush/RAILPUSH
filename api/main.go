@@ -314,6 +314,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/services/{id}/event-webhook", svcH.GetServiceEventWebhookConfig).Methods("GET")
 	authed.HandleFunc("/services/{id}/event-webhook", svcH.UpdateServiceEventWebhookConfig).Methods("PUT")
 	authed.HandleFunc("/services/{id}/event-webhook/test", svcH.TestServiceEventWebhook).Methods("POST")
+	authed.HandleFunc("/services/{id}/exec", svcH.ExecServiceCommand).Methods("POST")
 	authed.HandleFunc("/services/{id}", svcH.UpdateService).Methods("PATCH")
 	authed.HandleFunc("/services/{id}/retention", svcH.GetRetention).Methods("GET")
 	authed.HandleFunc("/services/{id}/retention", svcH.UpdateRetention).Methods("PUT")

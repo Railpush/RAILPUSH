@@ -183,6 +183,17 @@ export class RailPushClient {
     return this.request("PATCH", `/services/${id}`, data);
   }
 
+  async execServiceCommand(id: string, data: {
+    command: string;
+    timeout_seconds?: number;
+    user?: string;
+    acknowledge_risky_command?: boolean;
+    reason?: string;
+    max_output_bytes?: number;
+  }) {
+    return this.request("POST", `/services/${id}/exec`, data);
+  }
+
   async getServiceRetention(id: string) {
     return this.request("GET", `/services/${id}/retention`);
   }

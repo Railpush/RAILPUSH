@@ -1615,6 +1615,7 @@ curl https://railpush.com/api/v1/services \\
                 { group: 'Autoscaling & Jobs', endpoints: [
                   { method: 'GET', path: '/services/:id/autoscaling', desc: 'Get autoscaling policy' },
                   { method: 'PUT', path: '/services/:id/autoscaling', desc: 'Set autoscaling policy' },
+                  { method: 'POST', path: '/services/:id/exec', desc: 'Execute a command in the running service container (synchronous)' },
                   { method: 'GET', path: '/services/:id/jobs', desc: 'List one-off jobs (pagination: limit,cursor)' },
                   { method: 'POST', path: '/services/:id/jobs', desc: 'Run a one-off job' },
                   { method: 'GET', path: '/jobs/:jobId', desc: 'Get job details' },
@@ -1874,7 +1875,7 @@ npm run build`} />
                   <tbody className="text-content-secondary">
                     {[
                       ['Auth', 'whoami, get_rate_limit'],
-                      ['Services', 'list (with server-side filters + limit/cursor pagination), get, create, update, get/set retention policy, delete (token-confirmed soft delete), restore, restart, suspend, resume, search/filter'],
+                      ['Services', 'list (with server-side filters + limit/cursor pagination), get, create, update, exec command (sync in-container), get/set retention policy, delete (token-confirmed soft delete), restore, restart, suspend, resume, search/filter'],
                       ['Bulk Operations', 'bulk update services, bulk deploy, bulk restart, bulk set env vars, bulk update databases, plus bulk suspend/resume helpers'],
                       ['Deploys', 'trigger, list (status/branch/since/until + limit/cursor pagination), get, wait_for_deploy, rollback, queue position'],
                       ['Env Vars', 'list (limit/cursor pagination), set (bulk replace), upsert (additive), get/set/enable/disable GitHub Actions deploy gate, set workflow allowlist'],

@@ -1624,6 +1624,33 @@ server.tool(
 // ════════════════════════════════════════════════════════════════════════
 
 server.tool(
+  "exec_command",
+  "Execute a single command directly inside a running service container and return stdout/stderr synchronously.",
+  {
+    service_id: z.string().describe("Service ID"),
+    command: z.string().describe("Shell command to execute"),
+    timeout_seconds: z.number().int().positive().max(120).optional().describe("Execution timeout in seconds (default: 30, max: 120)"),
+    user: z.string().optional().describe("Optional Linux user for Docker-based services (not supported for Kubernetes services)"),
+    acknowledge_risky_command: z.boolean().optional().describe("Acknowledge a risky command so it can run"),
+    reason: z.string().optional().describe("Reason for executing a risky command"),
+    max_output_bytes: z.number().int().positive().max(262144).optional().describe("Max captured bytes per stdout/stderr stream (default: 65536)"),
+  },
+  async ({ service_id, command, timeout_seconds, user, acknowledge_risky_command, reason, max_output_bytes }) => {
+    try {
+      return text(await client.execServiceCommand(service_id, {
+        command,
+        timeout_seconds,
+        user,
+        acknowledge_risky_command,
+        reason,
+        max_output_bytes,
+      }));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
   "run_job",
   "Run a one-off command against a service's container. Useful for migrations, data fixes, shell commands, etc.",
   {
