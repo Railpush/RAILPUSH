@@ -70,7 +70,7 @@ jobs:
 
           # Keep source sync and build in one step so the same SSH control session is reused.
           ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "mkdir -p /opt/railpush/railpush-api /opt/railpush/dashboard"
+            "rm -rf /opt/railpush/railpush-api /opt/railpush/dashboard && mkdir -p /opt/railpush/railpush-api /opt/railpush/dashboard"
 
           rsync -az --delete \
             --exclude '.git' \
@@ -87,6 +87,9 @@ jobs:
             --exclude 'dist' \
             -e "${RSYNC_SSH}" \
             ./dashboard/ "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/railpush/dashboard/"
+
+          ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "test -f /opt/railpush/railpush-api/services/access.go"
 
           ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" <<'SSH'
           set -euo pipefail
