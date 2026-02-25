@@ -1596,6 +1596,119 @@ server.tool(
 );
 
 // ════════════════════════════════════════════════════════════════════════
+//  TERMINAL / SHELL / FILESYSTEM
+// ════════════════════════════════════════════════════════════════════════
+
+server.tool(
+  "create_shell_session",
+  "Create a persistent shell session for a service. Session cwd/env state is preserved between shell_exec calls.",
+  {
+    service_id: z.string().describe("Service ID"),
+    idle_timeout_minutes: z.number().int().positive().max(120).optional().describe("Idle expiration in minutes (default: 30)"),
+    working_directory: z.string().optional().describe("Optional initial working directory inside container"),
+  },
+  async ({ service_id, idle_timeout_minutes, working_directory }) => {
+    try {
+      return text(await client.createShellSession(service_id, {
+        idle_timeout_minutes,
+        working_directory,
+      }));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "shell_exec",
+  "Execute a command in an existing shell session. Session cwd/env state is updated after each command.",
+  {
+    session_id: z.string().describe("Shell session ID"),
+    command: z.string().describe("Command to execute"),
+    timeout_seconds: z.number().int().positive().max(300).optional().describe("Command timeout in seconds (default: 60, max: 300)"),
+    acknowledge_risky_command: z.boolean().optional().describe("Acknowledge risky commands"),
+    reason: z.string().optional().describe("Optional reason for risky command execution"),
+  },
+  async ({ session_id, command, timeout_seconds, acknowledge_risky_command, reason }) => {
+    try {
+      return text(await client.shellExec(session_id, {
+        command,
+        timeout_seconds,
+        acknowledge_risky_command,
+        reason,
+      }));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "close_shell_session",
+  "Close a shell session and release its state.",
+  {
+    session_id: z.string().describe("Shell session ID"),
+  },
+  async ({ session_id }) => {
+    try { return text(await client.closeShellSession(session_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "list_directory",
+  "List files/directories in a service container path (read-only).",
+  {
+    service_id: z.string().describe("Service ID"),
+    path: z.string().optional().describe("Absolute path to list (default: /app)"),
+    limit: z.number().int().positive().max(1000).optional().describe("Max entries to return (default: 200)"),
+  },
+  async ({ service_id, path, limit }) => {
+    try {
+      return text(await client.listServiceFilesystem(service_id, { path, limit }));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "read_file",
+  "Read a file from a service container (read-only, size-limited).",
+  {
+    service_id: z.string().describe("Service ID"),
+    path: z.string().describe("Absolute file path"),
+    max_bytes: z.number().int().positive().max(262144).optional().describe("Max bytes to read (default: 10240)"),
+  },
+  async ({ service_id, path, max_bytes }) => {
+    try {
+      return text(await client.readServiceFilesystemFile(service_id, { path, max_bytes }));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "search_files",
+  "Search files in a service container path using a glob pattern.",
+  {
+    service_id: z.string().describe("Service ID"),
+    path: z.string().optional().describe("Absolute search root path (default: /app)"),
+    pattern: z.string().describe("Glob pattern (example: *.js)"),
+    recursive: z.boolean().optional().describe("Search recursively (default: true)"),
+    limit: z.number().int().positive().max(1000).optional().describe("Max matches to return (default: 200)"),
+  },
+  async ({ service_id, path, pattern, recursive, limit }) => {
+    try {
+      return text(await client.searchServiceFilesystem(service_id, {
+        path,
+        pattern,
+        recursive,
+        limit,
+      }));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+// ════════════════════════════════════════════════════════════════════════
 //  AI FIX
 // ════════════════════════════════════════════════════════════════════════
 
@@ -2710,6 +2823,52 @@ server.tool(
         metric_history,
       }));
     }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_workspace_compliance",
+  "Get workspace compliance guardrail policy (Phase 1): data residency preference, audit retention floor, encryption/MFA posture, session timeout, and IP allowlist requirement.",
+  {
+    workspace_id: z.string().describe("Workspace ID"),
+  },
+  async ({ workspace_id }) => {
+    try { return text(await client.getWorkspaceCompliance(workspace_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "set_workspace_compliance",
+  "Update workspace compliance guardrails (Phase 1).",
+  {
+    workspace_id: z.string().describe("Workspace ID"),
+    data_residency: z.enum(["global", "eu-only", "us-only"]).optional().describe("Preferred residency policy"),
+    audit_log_retention: z.union([z.number().int().positive(), z.string()]).optional().describe("Audit log retention floor (e.g. 1y)"),
+    require_encryption_at_rest: z.boolean().optional().describe("Require encryption-at-rest posture"),
+    require_mfa_for_destructive: z.boolean().optional().describe("Require MFA policy for destructive actions"),
+    session_timeout_minutes: z.number().int().min(5).max(1440).optional().describe("Session timeout target in minutes"),
+    ip_allowlist_required: z.boolean().optional().describe("Require IP allowlisting posture for protected operations"),
+  },
+  async ({ workspace_id, ...updates }) => {
+    try {
+      const data = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
+      return text(await client.setWorkspaceCompliance(workspace_id, data));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_workspace_compliance_report",
+  "Generate a workspace compliance readiness report for soc2, hipaa, or gdpr controls (Phase 1 policy controls).",
+  {
+    workspace_id: z.string().describe("Workspace ID"),
+    framework: z.enum(["soc2", "hipaa", "gdpr"]).optional().describe("Framework to evaluate (default: soc2)"),
+  },
+  async ({ workspace_id, framework }) => {
+    try { return text(await client.getWorkspaceComplianceReport(workspace_id, { framework })); }
     catch (e) { return err(e); }
   },
 );

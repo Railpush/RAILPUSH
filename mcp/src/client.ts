@@ -583,6 +583,58 @@ export class RailPushClient {
     return this.request("GET", `/services/${serviceId}/logs`, undefined, query);
   }
 
+  async createShellSession(serviceId: string, data?: {
+    idle_timeout_minutes?: number;
+    working_directory?: string;
+  }) {
+    return this.request("POST", `/services/${serviceId}/shell`, data ?? {});
+  }
+
+  async shellExec(sessionId: string, data: {
+    command: string;
+    timeout_seconds?: number;
+    acknowledge_risky_command?: boolean;
+    reason?: string;
+  }) {
+    return this.request("POST", `/shell/${sessionId}/exec`, data);
+  }
+
+  async closeShellSession(sessionId: string) {
+    return this.request("DELETE", `/shell/${sessionId}`);
+  }
+
+  async listServiceFilesystem(serviceId: string, opts?: {
+    path?: string;
+    limit?: number;
+  }) {
+    const query: Record<string, string> = {};
+    if (opts?.path) query.path = opts.path;
+    if (typeof opts?.limit === "number" && opts.limit > 0) query.limit = String(opts.limit);
+    return this.request("GET", `/services/${serviceId}/fs`, undefined, query);
+  }
+
+  async readServiceFilesystemFile(serviceId: string, opts: {
+    path: string;
+    max_bytes?: number;
+  }) {
+    const query: Record<string, string> = { path: opts.path };
+    if (typeof opts.max_bytes === "number" && opts.max_bytes > 0) query.max_bytes = String(opts.max_bytes);
+    return this.request("GET", `/services/${serviceId}/fs/read`, undefined, query);
+  }
+
+  async searchServiceFilesystem(serviceId: string, opts: {
+    path?: string;
+    pattern: string;
+    recursive?: boolean;
+    limit?: number;
+  }) {
+    const query: Record<string, string> = { pattern: opts.pattern };
+    if (opts.path) query.path = opts.path;
+    if (typeof opts.recursive === "boolean") query.recursive = opts.recursive ? "true" : "false";
+    if (typeof opts.limit === "number" && opts.limit > 0) query.limit = String(opts.limit);
+    return this.request("GET", `/services/${serviceId}/fs/search`, undefined, query);
+  }
+
   // ── AI Fix ───────────────────────────────────────────────────────────
 
   async startAIFix(serviceId: string) {
@@ -969,6 +1021,27 @@ export class RailPushClient {
     metric_history?: string | number;
   }) {
     return this.request("PUT", `/workspaces/${workspaceId}/retention`, data);
+  }
+
+  async getWorkspaceCompliance(workspaceId: string) {
+    return this.request("GET", `/workspaces/${workspaceId}/compliance`);
+  }
+
+  async setWorkspaceCompliance(workspaceId: string, data: {
+    data_residency?: string;
+    audit_log_retention?: string | number;
+    require_encryption_at_rest?: boolean;
+    require_mfa_for_destructive?: boolean;
+    session_timeout_minutes?: number;
+    ip_allowlist_required?: boolean;
+  }) {
+    return this.request("PUT", `/workspaces/${workspaceId}/compliance`, data);
+  }
+
+  async getWorkspaceComplianceReport(workspaceId: string, opts?: { framework?: string }) {
+    const query: Record<string, string> = {};
+    if (opts?.framework) query.framework = opts.framework;
+    return this.request("GET", `/workspaces/${workspaceId}/compliance/report`, undefined, query);
   }
 
   // ── Preview Environments ────────────────────────────────────────────
