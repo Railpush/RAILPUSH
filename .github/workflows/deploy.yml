@@ -60,7 +60,7 @@ jobs:
           fi
           chmod 644 ~/.ssh/known_hosts
 
-      - name: Sync source to server
+      - name: Sync, build and restart on server
         shell: bash
         run: |
           set -euo pipefail
@@ -68,7 +68,7 @@ jobs:
           SSH_OPTS="-p ${PORT} -o ControlMaster=auto -o ControlPersist=600 -o ControlPath=~/.ssh/cm-%C"
           RSYNC_SSH="ssh ${SSH_OPTS}"
 
-          # Ensure target directories exist on the server before rsync --delete
+          # Keep source sync and build in one step so the same SSH control session is reused.
           ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "mkdir -p /opt/railpush/railpush-api /opt/railpush/dashboard"
 
@@ -87,13 +87,6 @@ jobs:
             --exclude 'dist' \
             -e "${RSYNC_SSH}" \
             ./dashboard/ "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/railpush/dashboard/"
-
-      - name: Build and restart on server
-        shell: bash
-        run: |
-          set -euo pipefail
-          PORT="${DEPLOY_PORT:-22}"
-          SSH_OPTS="-p ${PORT} -o ControlMaster=auto -o ControlPersist=600 -o ControlPath=~/.ssh/cm-%C"
 
           ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" <<'SSH'
           set -euo pipefail
