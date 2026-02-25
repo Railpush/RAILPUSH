@@ -170,6 +170,12 @@ func CreateServiceLogAlert(alert *ServiceLogAlert) error {
 		return fmt.Errorf("missing alert")
 	}
 	channels := normalizeLogAlertChannels(alert.Channels)
+	var createdBy interface{}
+	if alert.CreatedBy != nil {
+		if userID := strings.TrimSpace(*alert.CreatedBy); userID != "" {
+			createdBy = userID
+		}
+	}
 	return database.DB.QueryRow(
 		`INSERT INTO service_log_alerts
 			(service_id, workspace_id, name, enabled, filter_query, pattern, threshold, window_seconds, comparison,
@@ -190,7 +196,7 @@ func CreateServiceLogAlert(alert *ServiceLogAlert) error {
 		channels,
 		strings.TrimSpace(alert.WebhookURL),
 		strings.TrimSpace(alert.Priority),
-		alert.CreatedBy,
+		createdBy,
 	).Scan(&alert.ID, &alert.CreatedAt, &alert.UpdatedAt)
 }
 
