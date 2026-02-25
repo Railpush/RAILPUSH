@@ -5,7 +5,7 @@ import type {
   DatabaseReplica, WorkspaceMember, AuditLogEntry, SamlSSOConfig, Incident, IncidentDetail, OpsOverview, OpsUserItem, OpsWorkspaceItem, OpsServiceItem, OpsDeployItem,
   OpsEmailOutboxItem, OpsBillingCustomerItem, OpsBillingCustomerDetail, OpsTicketItem, OpsTicketDetail, OpsTicketSearchResult, OpsWorkspaceCreditItem, OpsWorkspaceCreditDetail,
   OpsKubeSummary, OpsClusterSummary, OpsPerformanceSummary, OpsDatastoreItem, OpsAuditLogEntry, SupportTicket, SupportTicketMessage, BlueprintAISettings, AIFixSession,
-  Disk,
+  Disk, DeployQueueInfo,
 } from '../types';
 
 const BASE = '/api/v1';
@@ -145,7 +145,7 @@ export const deploys = {
   rollback: (serviceId: string, deployId: string) =>
     request<Deploy>(`/services/${serviceId}/deploys/${deployId}/rollback`, { method: 'POST' }),
   queuePosition: (serviceId: string, deployId: string) =>
-    request<{ position: number; total_queued: number }>(`/services/${serviceId}/deploys/${deployId}/queue`),
+    request<DeployQueueInfo>(`/services/${serviceId}/deploys/${deployId}/queue`),
 };
 
 // AI Fix

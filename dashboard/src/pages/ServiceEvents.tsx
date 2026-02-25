@@ -6,7 +6,18 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { formatDate, formatTime, formatDuration } from '../lib/utils';
 import { deploys as deploysApi, services as servicesApi } from '../lib/api';
-import type { Deploy } from '../types';
+import type { Deploy, DeployQueueInfo } from '../types';
+
+const queuedStatuses = ['pending', 'building', 'deploying'];
+
+function queueEtaLabel(status: string, info?: DeployQueueInfo): string {
+  const normalizedStatus = status.toLowerCase();
+  if (normalizedStatus === 'building' || normalizedStatus === 'deploying') return 'in progress';
+  const waitSeconds = Number(info?.estimated_wait_seconds || 0);
+  if (waitSeconds <= 0) return 'soon';
+  if (info?.estimated_wait_human) return info.estimated_wait_human;
+  return `~${formatDuration(waitSeconds * 1000)}`;
+}
 
 export function ServiceEvents() {
   const { serviceId } = useParams<{ serviceId: string }>();
@@ -14,7 +25,7 @@ export function ServiceEvents() {
   const [deployList, setDeployList] = useState<Deploy[]>([]);
   const [loading, setLoading] = useState(true);
   const [serviceName, setServiceName] = useState('');
-  const [queuePositions, setQueuePositions] = useState<Record<string, { position: number; total_queued: number }>>({});
+  const [queuePositions, setQueuePositions] = useState<Record<string, DeployQueueInfo>>({});
 
   useEffect(() => {
     if (!serviceId) return;
@@ -26,16 +37,45 @@ export function ServiceEvents() {
       setDeployList(deploys);
       setServiceName(name);
       setLoading(false);
-
-      // Fetch queue positions for pending/building/deploying deploys
-      const queued = deploys.filter(d => ['pending', 'building', 'deploying'].includes(d.status));
-      queued.forEach(d => {
-        deploysApi.queuePosition(serviceId, d.id).then(info => {
-          setQueuePositions(prev => ({ ...prev, [d.id]: info }));
-        }).catch(() => {});
-      });
     });
   }, [serviceId]);
+
+  useEffect(() => {
+    if (!serviceId) return;
+    const queued = deployList.filter(d => queuedStatuses.includes(d.status));
+    if (queued.length === 0) {
+      setQueuePositions({});
+      return;
+    }
+
+    let cancelled = false;
+    const fetchQueuePositions = async () => {
+      const pairs = await Promise.all(
+        queued.map(async (d) => {
+          try {
+            const info = await deploysApi.queuePosition(serviceId, d.id);
+            return [d.id, info] as const;
+          } catch {
+            return null;
+          }
+        })
+      );
+      if (cancelled) return;
+      const next: Record<string, DeployQueueInfo> = {};
+      for (const pair of pairs) {
+        if (!pair) continue;
+        next[pair[0]] = pair[1];
+      }
+      setQueuePositions(next);
+    };
+
+    void fetchQueuePositions();
+    const interval = setInterval(fetchQueuePositions, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [serviceId, deployList]);
 
   if (loading) {
     return (
@@ -167,10 +207,10 @@ export function ServiceEvents() {
                           <Clock className="w-3.5 h-3.5" />
                           {deploy.started_at ? formatTime(deploy.started_at) : 'Pending'}
                         </div>
-                        {queuePositions[deploy.id] && ['pending', 'building', 'deploying'].includes(deploy.status) && (
+                        {queuePositions[deploy.id] && queuedStatuses.includes(deploy.status) && (
                           <span className="flex items-center gap-1 text-xs text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20">
                             <ListOrdered className="w-3 h-3" />
-                            #{queuePositions[deploy.id].position} of {queuePositions[deploy.id].total_queued}
+                            #{queuePositions[deploy.id].position} of {queuePositions[deploy.id].total_queued} | ETA {queueEtaLabel(deploy.status, queuePositions[deploy.id])}
                           </span>
                         )}
                         {deploy.started_at && deploy.finished_at && (
@@ -190,4 +230,3 @@ export function ServiceEvents() {
     </div>
   );
 }
-

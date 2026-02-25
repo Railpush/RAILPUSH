@@ -1,8 +1,21 @@
 package models
 
 import (
+	"database/sql"
+	"fmt"
+	"math"
+	"strings"
+	"time"
+
 	"github.com/lib/pq"
 	"github.com/railpush/api/database"
+)
+
+const (
+	defaultDeployQueueEstimateSeconds = 180
+	minDeployQueueEstimateSeconds     = 30
+	maxDeployQueueEstimateSeconds     = 3600
+	deployQueueEstimateSampleSize     = 80
 )
 
 // ClaimDeployLease attempts to claim a deploy for processing by setting a lease on the row.
@@ -134,31 +147,157 @@ func ClaimExpiredDeploys(owner string, limit int, leaseSeconds int, maxAttempts 
 
 // DeployQueueInfo contains queue position and stats for a pending deploy.
 type DeployQueueInfo struct {
-	Position   int `json:"position"`
-	TotalQueue int `json:"total_queued"`
+	Position             int    `json:"position"`
+	TotalQueue           int    `json:"total_queued"`
+	EstimatedWaitSeconds int    `json:"estimated_wait_seconds"`
+	EstimatedWaitHuman   string `json:"estimated_wait_human,omitempty"`
+	AverageDeploySeconds int    `json:"average_deploy_seconds,omitempty"`
+	Concurrency          int    `json:"concurrency,omitempty"`
+	Status               string `json:"status,omitempty"`
 }
 
 // GetDeployQueuePosition returns the queue position of a deploy (1-based) and total queue size.
 // Returns position 0 if the deploy is not in the queue.
-func GetDeployQueuePosition(deployID string) (*DeployQueueInfo, error) {
-	var pos int
+func GetDeployQueuePosition(deployID string, workerConcurrency int) (*DeployQueueInfo, error) {
+	workerConcurrency = normalizeDeployWorkerConcurrency(workerConcurrency)
+	info := &DeployQueueInfo{Concurrency: workerConcurrency}
+
+	var status string
+	var createdAt sql.NullTime
 	err := database.DB.QueryRow(
-		`SELECT COUNT(*) FROM deploys
-		  WHERE status IN ('pending','building','deploying')
-		    AND created_at <= (SELECT created_at FROM deploys WHERE id=$1)`,
+		`SELECT COALESCE(status, ''), created_at
+		   FROM deploys
+		  WHERE id = $1`,
 		deployID,
-	).Scan(&pos)
+	).Scan(&status, &createdAt)
+	if err == sql.ErrNoRows {
+		return info, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	var total int
+
+	status = strings.ToLower(strings.TrimSpace(status))
+	info.Status = status
+
 	err = database.DB.QueryRow(
 		`SELECT COUNT(*) FROM deploys WHERE status IN ('pending','building','deploying')`,
-	).Scan(&total)
+	).Scan(&info.TotalQueue)
 	if err != nil {
 		return nil, err
 	}
-	return &DeployQueueInfo{Position: pos, TotalQueue: total}, nil
+
+	if !isQueuedDeployStatus(status) || !createdAt.Valid || info.TotalQueue <= 0 {
+		return info, nil
+	}
+
+	err = database.DB.QueryRow(
+		`SELECT COUNT(*)
+		   FROM deploys
+		  WHERE status IN ('pending','building','deploying')
+		    AND (created_at, id) <= ($1, $2::uuid)`,
+		createdAt.Time.UTC(),
+		deployID,
+	).Scan(&info.Position)
+	if err != nil {
+		return nil, err
+	}
+
+	if info.Position < 0 {
+		info.Position = 0
+	}
+	if info.Position > info.TotalQueue {
+		info.Position = info.TotalQueue
+	}
+
+	avgDeploySeconds, err := recentAverageDeployDurationSeconds(deployQueueEstimateSampleSize)
+	if err != nil {
+		return nil, err
+	}
+	info.AverageDeploySeconds = avgDeploySeconds
+
+	if status == "pending" && info.Position > 1 {
+		ahead := info.Position - 1
+		batches := int(math.Ceil(float64(ahead) / float64(workerConcurrency)))
+		estimated := batches * avgDeploySeconds
+		if estimated < 0 {
+			estimated = 0
+		}
+		info.EstimatedWaitSeconds = estimated
+		info.EstimatedWaitHuman = humanizeQueueWait(estimated)
+	}
+
+	return info, nil
+}
+
+func isQueuedDeployStatus(status string) bool {
+	status = strings.ToLower(strings.TrimSpace(status))
+	return status == "pending" || status == "building" || status == "deploying"
+}
+
+func normalizeDeployWorkerConcurrency(workerConcurrency int) int {
+	if workerConcurrency <= 0 {
+		return 1
+	}
+	return workerConcurrency
+}
+
+func recentAverageDeployDurationSeconds(limit int) (int, error) {
+	if limit <= 0 {
+		limit = deployQueueEstimateSampleSize
+	}
+
+	var avg sql.NullFloat64
+	err := database.DB.QueryRow(
+		`SELECT AVG(duration_seconds)
+		   FROM (
+			 SELECT EXTRACT(EPOCH FROM (finished_at - started_at)) AS duration_seconds
+			   FROM deploys
+			  WHERE status IN ('live','failed','cancelled','canceled')
+			    AND started_at IS NOT NULL
+			    AND finished_at IS NOT NULL
+			    AND finished_at >= started_at
+			  ORDER BY finished_at DESC
+			  LIMIT $1
+		   ) recent`,
+		limit,
+	).Scan(&avg)
+	if err != nil {
+		return 0, err
+	}
+
+	if !avg.Valid || avg.Float64 <= 0 {
+		return defaultDeployQueueEstimateSeconds, nil
+	}
+
+	seconds := int(math.Round(avg.Float64))
+	if seconds < minDeployQueueEstimateSeconds {
+		seconds = minDeployQueueEstimateSeconds
+	}
+	if seconds > maxDeployQueueEstimateSeconds {
+		seconds = maxDeployQueueEstimateSeconds
+	}
+	return seconds, nil
+}
+
+func humanizeQueueWait(seconds int) string {
+	if seconds <= 0 {
+		return ""
+	}
+	d := time.Duration(seconds) * time.Second
+	if d < time.Minute {
+		return "under 1m"
+	}
+	if d < time.Hour {
+		minutes := int(math.Ceil(d.Minutes()))
+		return fmt.Sprintf("~%dm", minutes)
+	}
+	hours := int(d.Hours())
+	minutes := int(math.Ceil(d.Minutes())) % 60
+	if minutes == 0 {
+		return fmt.Sprintf("~%dh", hours)
+	}
+	return fmt.Sprintf("~%dh %dm", hours, minutes)
 }
 
 // GetQueueSummary returns the number of deploys currently in the queue.

@@ -105,6 +105,16 @@ export interface Deploy {
   created_by: string;
 }
 
+export interface DeployQueueInfo {
+  position: number;
+  total_queued: number;
+  estimated_wait_seconds?: number;
+  estimated_wait_human?: string;
+  average_deploy_seconds?: number;
+  concurrency?: number;
+  status?: string;
+}
+
 export interface EnvVar {
   id: string;
   key: string;

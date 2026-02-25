@@ -246,7 +246,12 @@ func (h *DeployHandler) QueuePosition(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
-	info, err := models.GetDeployQueuePosition(deployID)
+	concurrency := 1
+	if h != nil && h.Config != nil && h.Config.Worker.Concurrency > 0 {
+		concurrency = h.Config.Worker.Concurrency
+	}
+
+	info, err := models.GetDeployQueuePosition(deployID, concurrency)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to get queue position")
 		return

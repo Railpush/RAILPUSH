@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ExternalLink, RotateCw, GitBranch, ChevronDown, ShieldCheck, Clock, Activity, Box, Settings, Copy, Check, Loader2 } from 'lucide-react';
+import { ExternalLink, RotateCw, GitBranch, ChevronDown, ShieldCheck, Clock, Activity, Box, Settings, Copy, Check, Loader2, ListOrdered } from 'lucide-react';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
@@ -11,10 +11,21 @@ import { deriveDeployAutomationState, parseWorkflowNames, type DeployAutomationM
 import { serviceTypeLabel, timeAgo, formatDuration } from '../lib/utils';
 import { buildDefaultServiceUrl } from '../lib/serviceUrl';
 import { services as servicesApi, deploys as deploysApi, envVars as envVarsApi, connectBuildStream } from '../lib/api';
-import type { Service, Deploy, ServiceGitHubWebhookStatus } from '../types';
+import type { Service, Deploy, ServiceGitHubWebhookStatus, DeployQueueInfo } from '../types';
 import { toast } from 'sonner';
 
 interface QuickMetrics { cpu_percent: string; memory_used: string; memory_percent: string }
+
+const queuedDeployStatuses = ['pending', 'building', 'deploying'];
+
+function queueEtaLabel(status: string, info?: DeployQueueInfo | null): string {
+  const normalizedStatus = status.toLowerCase();
+  if (normalizedStatus === 'building' || normalizedStatus === 'deploying') return 'in progress';
+  const waitSeconds = Number(info?.estimated_wait_seconds || 0);
+  if (waitSeconds <= 0) return 'soon';
+  if (info?.estimated_wait_human) return info.estimated_wait_human;
+  return `~${formatDuration(waitSeconds * 1000)}`;
+}
 
 function CopyUrlButton({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);
@@ -48,6 +59,7 @@ export function ServiceDetail() {
   const [githubWorkflowLoadError, setGitHubWorkflowLoadError] = useState<string | null>(null);
   const [githubWebhookStatus, setGitHubWebhookStatus] = useState<ServiceGitHubWebhookStatus | null>(null);
   const [repairingWebhook, setRepairingWebhook] = useState(false);
+  const [latestQueueInfo, setLatestQueueInfo] = useState<DeployQueueInfo | null>(null);
   const buildWsRef = useRef<WebSocket | null>(null);
   const buildLogEndRef = useRef<HTMLDivElement>(null);
 
@@ -136,6 +148,30 @@ export function ServiceDetail() {
     };
     return () => { ws.close(); buildWsRef.current = null; };
   }, [latestDeployForWs?.id, isBuildInProgress]);
+
+  useEffect(() => {
+    if (!serviceId || !latestDeployForWs || !queuedDeployStatuses.includes(latestDeployForWs.status)) {
+      setLatestQueueInfo(null);
+      return;
+    }
+
+    let cancelled = false;
+    const fetchQueueInfo = async () => {
+      try {
+        const info = await deploysApi.queuePosition(serviceId, latestDeployForWs.id);
+        if (!cancelled) setLatestQueueInfo(info);
+      } catch {
+        if (!cancelled) setLatestQueueInfo(null);
+      }
+    };
+
+    void fetchQueueInfo();
+    const interval = setInterval(fetchQueueInfo, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [serviceId, latestDeployForWs?.id, latestDeployForWs?.status]);
 
   if (loading) {
     return (
@@ -467,12 +503,20 @@ export function ServiceDetail() {
                     </div>
                   </div>
 
-                  {latestDeploy.started_at && latestDeploy.finished_at && (
-                    <div className="text-xs text-content-tertiary flex items-center gap-1.5 bg-surface-tertiary/20 px-2 py-1 rounded">
-                      <Clock className="w-3 h-3" />
-                      {formatDuration(new Date(latestDeploy.finished_at).getTime() - new Date(latestDeploy.started_at).getTime())}
-                    </div>
-                  )}
+                  <div className="flex flex-col items-end gap-1">
+                    {latestQueueInfo && queuedDeployStatuses.includes(latestDeploy.status) && (
+                      <div className="text-xs text-amber-400 flex items-center gap-1.5 bg-amber-400/10 border border-amber-400/20 px-2 py-1 rounded">
+                        <ListOrdered className="w-3 h-3" />
+                        #{latestQueueInfo.position} of {latestQueueInfo.total_queued} | ETA {queueEtaLabel(latestDeploy.status, latestQueueInfo)}
+                      </div>
+                    )}
+                    {latestDeploy.started_at && latestDeploy.finished_at && (
+                      <div className="text-xs text-content-tertiary flex items-center gap-1.5 bg-surface-tertiary/20 px-2 py-1 rounded">
+                        <Clock className="w-3 h-3" />
+                        {formatDuration(new Date(latestDeploy.finished_at).getTime() - new Date(latestDeploy.started_at).getTime())}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </Card>
             </div>
