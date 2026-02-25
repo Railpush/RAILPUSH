@@ -67,10 +67,18 @@ jobs:
           PORT="${DEPLOY_PORT:-22}"
           SSH_OPTS="-p ${PORT} -o ControlMaster=auto -o ControlPersist=600 -o ControlPath=~/.ssh/cm-%C"
           RSYNC_SSH="ssh ${SSH_OPTS}"
+          RSYNC_REMOTE="sudo rsync"
 
           # Keep source sync and build in one step so the same SSH control session is reused.
-          ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "mkdir -p /opt/railpush/railpush-api /opt/railpush/dashboard"
+          ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" <<'SSH'
+          set -euo pipefail
+          if [ "$(id -u)" -eq 0 ]; then
+            SUDO=""
+          else
+            SUDO="sudo"
+          fi
+          ${SUDO} mkdir -p /opt/railpush/railpush-api /opt/railpush/dashboard
+          SSH
 
           ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" <<'SSH'
           set -euo pipefail
@@ -89,6 +97,7 @@ jobs:
             --exclude '.github' \
             --exclude 'node_modules' \
             --exclude 'dist' \
+            --rsync-path "${RSYNC_REMOTE}" \
             -e "${RSYNC_SSH}" \
             ./api/ "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/railpush/railpush-api/"
 
@@ -97,6 +106,7 @@ jobs:
             --exclude '.github' \
             --exclude 'node_modules' \
             --exclude 'dist' \
+            --rsync-path "${RSYNC_REMOTE}" \
             -e "${RSYNC_SSH}" \
             ./dashboard/ "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/railpush/dashboard/"
 
