@@ -214,8 +214,8 @@ func scanServiceLogDrain(scanner interface{ Scan(dest ...interface{}) error }) (
 func ListServiceLogDrains(serviceID string) ([]ServiceLogDrain, error) {
 	rows, err := database.DB.Query(
 		`SELECT id::text,
-		        service_id::text,
-		        workspace_id::text,
+		        COALESCE(service_id::text, ''),
+		        COALESCE(workspace_id::text, ''),
 		        COALESCE(name,''),
 		        COALESCE(destination,''),
 		        COALESCE(config_encrypted,''),
@@ -260,8 +260,8 @@ func ListServiceLogDrains(serviceID string) ([]ServiceLogDrain, error) {
 func GetServiceLogDrainForService(serviceID, drainID string) (*ServiceLogDrain, error) {
 	row := database.DB.QueryRow(
 		`SELECT id::text,
-		        service_id::text,
-		        workspace_id::text,
+		        COALESCE(service_id::text, ''),
+		        COALESCE(workspace_id::text, ''),
 		        COALESCE(name,''),
 		        COALESCE(destination,''),
 		        COALESCE(config_encrypted,''),
@@ -371,8 +371,8 @@ func ListEnabledServiceLogDrains(limit int) ([]ServiceLogDrain, error) {
 	}
 	rows, err := database.DB.Query(
 		`SELECT id::text,
-		        service_id::text,
-		        workspace_id::text,
+		        COALESCE(service_id::text, ''),
+		        COALESCE(workspace_id::text, ''),
 		        COALESCE(name,''),
 		        COALESCE(destination,''),
 		        COALESCE(config_encrypted,''),
