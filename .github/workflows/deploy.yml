@@ -68,6 +68,7 @@ jobs:
           SSH_OPTS="-p ${PORT} -o ControlMaster=auto -o ControlPersist=600 -o ControlPath=~/.ssh/cm-%C"
           RSYNC_SSH="ssh ${SSH_OPTS}"
           RSYNC_REMOTE="sudo rsync"
+          SERVER_ROOT="/opt/railpush-server"
 
           # Keep source sync and build in one step so the same SSH control session is reused.
           ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" <<'SSH'
@@ -77,7 +78,8 @@ jobs:
           else
             SUDO="sudo"
           fi
-          ${SUDO} mkdir -p /opt/railpush/railpush-api /opt/railpush/dashboard
+          SERVER_ROOT="/opt/railpush-server"
+          ${SUDO} mkdir -p "${SERVER_ROOT}/railpush-api" "${SERVER_ROOT}/dashboard"
           SSH
 
           rsync -az --delete \
@@ -89,7 +91,7 @@ jobs:
             --exclude '.env.*' \
             --rsync-path "${RSYNC_REMOTE}" \
             -e "${RSYNC_SSH}" \
-            ./api/ "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/railpush/railpush-api/"
+            ./api/ "${DEPLOY_USER}@${DEPLOY_HOST}:${SERVER_ROOT}/railpush-api/"
 
           rsync -az --delete \
             --exclude '.git' \
@@ -100,10 +102,10 @@ jobs:
             --exclude '.env.*' \
             --rsync-path "${RSYNC_REMOTE}" \
             -e "${RSYNC_SSH}" \
-            ./dashboard/ "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/railpush/dashboard/"
+            ./dashboard/ "${DEPLOY_USER}@${DEPLOY_HOST}:${SERVER_ROOT}/dashboard/"
 
           ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "test -f /opt/railpush/railpush-api/services/access.go"
+            "test -f ${SERVER_ROOT}/railpush-api/services/access.go"
 
           ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" <<'SSH'
           set -euo pipefail
@@ -113,6 +115,13 @@ jobs:
           else
             SUDO="sudo"
           fi
+
+          SERVER_ROOT="/opt/railpush-server"
+          API_DIR="${SERVER_ROOT}/railpush-api"
+          DASHBOARD_DIR="${SERVER_ROOT}/dashboard"
+          API_BIN="${SERVER_ROOT}/railpush-api-bin"
+          PREV_BIN="${API_BIN}.prev"
+          NEW_BIN="${API_BIN}.new"
 
           ENV_FILE="/etc/railpush/railpush-api.env"
           ${SUDO} mkdir -p /etc/railpush
@@ -187,16 +196,14 @@ jobs:
           ${SUDO} chown root:root "${ENV_FILE}"
           ${SUDO} chmod 0600 "${ENV_FILE}"
 
-          cd /opt/railpush/dashboard
+          cd "${DASHBOARD_DIR}"
           npm ci
           npm run build
 
-          cd /opt/railpush/railpush-api
-          PREV_BIN="/opt/railpush/railpush-api-bin.prev"
-          NEW_BIN="/opt/railpush/railpush-api-bin.new"
+          cd "${API_DIR}"
 
-          if [ -f /opt/railpush/railpush-api-bin ]; then
-            cp -f /opt/railpush/railpush-api-bin "${PREV_BIN}"
+          if [ -f "${API_BIN}" ]; then
+            cp -f "${API_BIN}" "${PREV_BIN}"
           fi
 
           if [ -x /usr/local/go/bin/go ]; then
@@ -208,8 +215,8 @@ jobs:
           elif command -v docker >/dev/null 2>&1; then
             echo "Go not found, using Docker to build..."
             docker run --rm \
-              -v /opt/railpush/railpush-api:/src \
-              -v /opt/railpush:/opt/railpush \
+              -v "${API_DIR}:/src" \
+              -v "${SERVER_ROOT}:${SERVER_ROOT}" \
               -w /src golang:1.24-alpine \
               sh -c "export PATH=/usr/local/go/bin:\$PATH && go mod download && CGO_ENABLED=0 go build -o ${NEW_BIN} ."
           else
@@ -217,7 +224,8 @@ jobs:
             exit 1
           fi
 
-          mv -f "${NEW_BIN}" /opt/railpush/railpush-api-bin
+          mv -f "${NEW_BIN}" "${API_BIN}"
+          chmod 0755 "${API_BIN}" || true
 
           SERVICE_UNIT=""
           for unit in railpush-api.service railpush-api railpush.service railpush-api-bin.service; do
@@ -232,7 +240,7 @@ jobs:
             for unit in ${ALL_UNITS}; do
               [ -z "${unit}" ] && continue
               EXEC_START="$(${SUDO} systemctl show -p ExecStart --value "${unit}" 2>/dev/null || true)"
-              if printf '%s' "${EXEC_START}" | grep -Fq "/opt/railpush/railpush-api-bin"; then
+              if printf '%s' "${EXEC_START}" | grep -Eq '/opt/railpush(-server)?/railpush-api-bin'; then
                 SERVICE_UNIT="${unit}"
                 break
               fi
@@ -252,9 +260,9 @@ jobs:
               printf '%s\n' ''
               printf '%s\n' '[Service]'
               printf '%s\n' 'Type=simple'
-              printf '%s\n' 'WorkingDirectory=/opt/railpush/railpush-api'
+              printf '%s\n' "WorkingDirectory=${API_DIR}"
               printf '%s\n' 'EnvironmentFile=-/etc/railpush/railpush-api.env'
-              printf '%s\n' 'ExecStart=/opt/railpush/railpush-api-bin'
+              printf '%s\n' "ExecStart=${API_BIN}"
               printf '%s\n' 'Restart=always'
               printf '%s\n' 'RestartSec=5'
               printf '%s\n' "User=${RUN_USER}"
@@ -270,20 +278,30 @@ jobs:
           ${SUDO} mkdir -p "/etc/systemd/system/${SERVICE_UNIT}.d"
           {
             printf '%s\n' '[Service]'
+            printf '%s\n' 'Environment='
             printf '%s\n' 'EnvironmentFile='
             printf '%s\n' 'EnvironmentFile=-/etc/railpush/railpush-api.env'
+            printf '%s\n' "WorkingDirectory=${API_DIR}"
+            printf '%s\n' 'ExecStart='
+            printf '%s\n' "ExecStart=${API_BIN}"
           } | ${SUDO} tee "/etc/systemd/system/${SERVICE_UNIT}.d/10-env.conf" >/dev/null
           ${SUDO} systemctl daemon-reload
 
-          if ! ${SUDO} grep -Eq '^(DATABASE_URL|DB_PASSWORD)=.+' "${ENV_FILE}"; then
+          TMP_PARSED_ENV="$(mktemp)"
+          ${SUDO} cat "${ENV_FILE}" > "${TMP_PARSED_ENV}"
+          # shellcheck disable=SC1090
+          . "${TMP_PARSED_ENV}"
+          rm -f "${TMP_PARSED_ENV}"
+
+          if [ -z "${DATABASE_URL:-}" ] && [ -z "${DB_PASSWORD:-}" ]; then
             echo "${ENV_FILE} must define DATABASE_URL or DB_PASSWORD."
             exit 1
           fi
-          if ! ${SUDO} grep -Eq '^JWT_SECRET=.+' "${ENV_FILE}"; then
+          if [ -z "${JWT_SECRET:-}" ]; then
             echo "${ENV_FILE} must define JWT_SECRET."
             exit 1
           fi
-          if ! ${SUDO} grep -Eq '^ENCRYPTION_KEY=.+' "${ENV_FILE}"; then
+          if [ -z "${ENCRYPTION_KEY:-}" ]; then
             echo "${ENV_FILE} must define ENCRYPTION_KEY."
             exit 1
           fi
@@ -293,7 +311,7 @@ jobs:
             ${SUDO} systemctl --no-pager --lines=60 status "${SERVICE_UNIT}" || true
             ${SUDO} journalctl -u "${SERVICE_UNIT}" --no-pager -n 80 || true
             if [ -f "${PREV_BIN}" ]; then
-              cp -f "${PREV_BIN}" /opt/railpush/railpush-api-bin
+              cp -f "${PREV_BIN}" "${API_BIN}"
               ${SUDO} systemctl restart "${SERVICE_UNIT}" || true
             fi
             exit 1
@@ -312,7 +330,7 @@ jobs:
           if [ "${HEALTH_OK}" -ne 1 ]; then
             echo "Health check failed after deploy, rolling back API binary..."
             if [ -f "${PREV_BIN}" ]; then
-              cp -f "${PREV_BIN}" /opt/railpush/railpush-api-bin
+              cp -f "${PREV_BIN}" "${API_BIN}"
               ${SUDO} systemctl restart "${SERVICE_UNIT}"
             fi
             ${SUDO} systemctl --no-pager --lines=60 status "${SERVICE_UNIT}" || true
@@ -323,7 +341,7 @@ jobs:
           if ! ${SUDO} systemctl is-active --quiet "${SERVICE_UNIT}"; then
             echo "Service is not active after deploy, rolling back API binary..."
             if [ -f "${PREV_BIN}" ]; then
-              cp -f "${PREV_BIN}" /opt/railpush/railpush-api-bin
+              cp -f "${PREV_BIN}" "${API_BIN}"
               ${SUDO} systemctl restart "${SERVICE_UNIT}" || true
             fi
             ${SUDO} systemctl --no-pager --lines=60 status "${SERVICE_UNIT}" || true
