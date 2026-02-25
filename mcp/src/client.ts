@@ -400,6 +400,16 @@ export class RailPushClient {
     });
   }
 
+  async queryDatabase(id: string, data: {
+    query: string;
+    allow_write?: boolean;
+    acknowledge_risky_query?: boolean;
+    max_rows?: number;
+    timeout_ms?: number;
+  }) {
+    return this.request("POST", `/databases/${id}/query`, data);
+  }
+
   async updateDatabase(id: string, data: Record<string, unknown>) {
     return this.request("PATCH", `/databases/${id}`, data);
   }

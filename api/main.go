@@ -362,6 +362,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/databases/bulk-update", dbH.BulkUpdateDatabases).Methods("POST")
 	authed.HandleFunc("/databases/{id}", dbH.GetDatabase).Methods("GET")
 	authed.HandleFunc("/databases/{id}/credentials/reveal", dbH.RevealDatabaseCredentials).Methods("POST")
+	authed.HandleFunc("/databases/{id}/query", dbH.QueryDatabase).Methods("POST")
 	authed.HandleFunc("/databases/{id}", dbH.UpdateDatabase).Methods("PATCH")
 	authed.HandleFunc("/databases/{id}", dbH.DeleteDatabase).Methods("DELETE")
 	authed.HandleFunc("/databases/{id}/restore", dbH.RestoreDatabase).Methods("POST")

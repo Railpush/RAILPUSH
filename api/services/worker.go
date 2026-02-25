@@ -1,17 +1,17 @@
 package services
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/hex"
-	"encoding/pem"
-	"bytes"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log"
 	"math/big"
@@ -452,18 +452,18 @@ func (w *Worker) notifyDeployWebhook(svc *models.Service, deploy *models.Deploy,
 	}
 
 	payload := map[string]interface{}{
-		"event":          "deploy." + event,
-		"service_id":     svc.ID,
-		"service_name":   svc.Name,
-		"deploy_id":      deploy.ID,
-		"trigger":        deploy.Trigger,
-		"status":         status,
-		"success":        success,
-		"commit_sha":     deploy.CommitSHA,
-		"branch":         deploy.Branch,
-		"duration_ms":    durationMs,
-		"error_message":  deployErrorMessage(deploy.BuildLog),
-		"timestamp":      time.Now().UTC().Format(time.RFC3339),
+		"event":         "deploy." + event,
+		"service_id":    svc.ID,
+		"service_name":  svc.Name,
+		"deploy_id":     deploy.ID,
+		"trigger":       deploy.Trigger,
+		"status":        status,
+		"success":       success,
+		"commit_sha":    deploy.CommitSHA,
+		"branch":        deploy.Branch,
+		"duration_ms":   durationMs,
+		"error_message": deployErrorMessage(deploy.BuildLog),
+		"timestamp":     time.Now().UTC().Format(time.RFC3339),
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -1045,7 +1045,7 @@ func (w *Worker) processJob(job DeployJob) {
 				}
 			}
 			_ = models.DeleteServiceInstancesByService(svc.ID)
-			w.failDeploy(deploy, svc)
+			w.failDeployWithReason(deploy, svc, "health_check_failed")
 			return
 		}
 		appendLog("==> Health check passed")
@@ -1202,14 +1202,14 @@ func (w *Worker) processJobKubernetes(job DeployJob, appendLog func(string)) {
 	// Warn about development-mode start commands that waste resources and crash in production.
 	if cmd := strings.ToLower(strings.TrimSpace(svc.StartCommand)); cmd != "" {
 		devPatterns := map[string]string{
-			"next dev":    "next start",
-			"nuxt dev":    "nuxt start",
-			"vite dev":    "vite preview",
-			"npm run dev": "npm start (with a production start script)",
-			"yarn dev":    "yarn start (with a production start script)",
-			"pnpm dev":    "pnpm start (with a production start script)",
+			"next dev":          "next start",
+			"nuxt dev":          "nuxt start",
+			"vite dev":          "vite preview",
+			"npm run dev":       "npm start (with a production start script)",
+			"yarn dev":          "yarn start (with a production start script)",
+			"pnpm dev":          "pnpm start (with a production start script)",
 			"flask run --debug": "gunicorn",
-			"nodemon":     "node",
+			"nodemon":           "node",
 		}
 		for pattern, suggestion := range devPatterns {
 			if strings.Contains(cmd, pattern) {
@@ -1277,7 +1277,7 @@ func (w *Worker) processJobKubernetes(job DeployJob, appendLog func(string)) {
 		appendLog("==> Waiting for rollout...")
 		if err := kd.WaitForServiceReady(deploymentName, svc); err != nil {
 			appendLog(fmt.Sprintf("ERROR: Rollout failed: %v", err))
-			w.failDeploy(deploy, svc)
+			w.failDeployWithReason(deploy, svc, "rollout_failed")
 			return
 		}
 
@@ -1626,14 +1626,106 @@ func appendBuildHints(buildLog string, appendLog func(string)) {
 }
 
 func (w *Worker) failDeploy(deploy *models.Deploy, svc *models.Service) {
+	w.failDeployWithReason(deploy, svc, "")
+}
+
+func (w *Worker) failDeployWithReason(deploy *models.Deploy, svc *models.Service, reason string) {
 	models.UpdateDeployStatus(deploy.ID, "failed")
 	models.UpdateServiceStatus(svc.ID, "deploy_failed", svc.ContainerID, svc.HostPort)
 	w.notifyDeployResult(svc, deploy, false)
+	w.maybeAutoRollback(svc, deploy, reason)
 
 	// Auto-retry if this deploy was triggered by an AI fix session.
 	if deploy.Trigger == "ai_fix" {
 		go w.maybeRetryAIFix(svc, deploy)
 	}
+}
+
+func shouldAutoRollbackReason(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "health_check_failed", "rollout_failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func selectRollbackDeployCandidate(deploys []models.Deploy, failed *models.Deploy) *models.Deploy {
+	if failed == nil {
+		return nil
+	}
+	failedID := strings.TrimSpace(failed.ID)
+	failedImage := strings.TrimSpace(failed.ImageTag)
+	for i := range deploys {
+		d := deploys[i]
+		if strings.TrimSpace(d.ID) == "" || strings.TrimSpace(d.ID) == failedID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(d.Status), "live") {
+			continue
+		}
+		candidateImage := strings.TrimSpace(d.ImageTag)
+		if candidateImage == "" || candidateImage == failedImage {
+			continue
+		}
+		candidate := d
+		return &candidate
+	}
+	return nil
+}
+
+func (w *Worker) maybeAutoRollback(svc *models.Service, failed *models.Deploy, reason string) {
+	if w == nil || svc == nil || failed == nil {
+		return
+	}
+	if !shouldAutoRollbackReason(reason) {
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(failed.Trigger), "rollback") {
+		return
+	}
+	if strings.TrimSpace(failed.ImageTag) == "" {
+		return
+	}
+
+	deploys, err := models.ListDeploys(svc.ID)
+	if err != nil || len(deploys) == 0 {
+		return
+	}
+	candidate := selectRollbackDeployCandidate(deploys, failed)
+	if candidate == nil {
+		return
+	}
+
+	rollback := &models.Deploy{
+		ServiceID:     svc.ID,
+		Trigger:       "rollback",
+		CommitSHA:     candidate.CommitSHA,
+		CommitMessage: candidate.CommitMessage,
+		Branch:        candidate.Branch,
+		ImageTag:      candidate.ImageTag,
+		CreatedBy:     failed.CreatedBy,
+	}
+	if err := models.CreateDeploy(rollback); err != nil {
+		log.Printf("worker: auto rollback create deploy failed service=%s failed_deploy=%s err=%v", svc.ID, failed.ID, err)
+		return
+	}
+
+	_ = models.UpdateDeployBuildLog(failed.ID, fmt.Sprintf("==> Auto-rollback queued: deploy %s using image %s from deploy %s", rollback.ID, rollback.ImageTag, candidate.ID))
+
+	actorID := ""
+	if failed.CreatedBy != nil {
+		actorID = strings.TrimSpace(*failed.CreatedBy)
+	}
+	Audit(svc.WorkspaceID, actorID, "deploy.auto_rollback_triggered", "deploy", rollback.ID, map[string]interface{}{
+		"failed_deploy_id": failed.ID,
+		"failed_image":     failed.ImageTag,
+		"rollback_to":      candidate.ID,
+		"rollback_image":   candidate.ImageTag,
+		"reason":           strings.TrimSpace(reason),
+	})
+
+	w.Enqueue(DeployJob{Deploy: rollback, Service: svc, GitHubToken: ""})
 }
 
 func (w *Worker) maybeRetryAIFix(svc *models.Service, deploy *models.Deploy) {

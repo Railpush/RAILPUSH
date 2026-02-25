@@ -1188,6 +1188,31 @@ server.tool(
 );
 
 server.tool(
+  "query_database",
+  "Run SQL against a managed PostgreSQL database. Default mode is read-only; set allow_write=true with acknowledge_risky_query=true for write-capable execution.",
+  {
+    database_id: z.string().describe("Database ID"),
+    query: z.string().describe("SQL statement to execute"),
+    allow_write: z.boolean().optional().describe("Enable write-capable transaction mode (default: false/read-only)"),
+    acknowledge_risky_query: z.boolean().optional().describe("Required when allow_write=true"),
+    max_rows: z.number().int().positive().max(1000).optional().describe("Max rows returned for SELECT/RETURNING queries (default: 100, max: 1000)"),
+    timeout_ms: z.number().int().positive().max(120000).optional().describe("Statement timeout in milliseconds (default: 15000, max: 120000)"),
+  },
+  async ({ database_id, query, allow_write, acknowledge_risky_query, max_rows, timeout_ms }) => {
+    try {
+      return text(await client.queryDatabase(database_id, {
+        query,
+        allow_write,
+        acknowledge_risky_query,
+        max_rows,
+        timeout_ms,
+      }));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
   "update_database",
   "Update a database configuration (plan and deletion protection).",
   {

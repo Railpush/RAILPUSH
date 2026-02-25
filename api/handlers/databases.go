@@ -2,10 +2,14 @@ package handlers
 
 import (
 	"context"
+	stdsql "database/sql"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -314,6 +318,311 @@ func (h *DatabaseHandler) RevealDatabaseCredentials(w http.ResponseWriter, r *ht
 
 	resp := h.databaseResponse(db, pw, true)
 	utils.RespondJSON(w, http.StatusOK, resp)
+}
+
+func (h *DatabaseHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	db, err := models.GetManagedDatabase(id)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if db == nil || strings.EqualFold(strings.TrimSpace(db.Status), "soft_deleted") {
+		utils.RespondError(w, http.StatusNotFound, "database not found")
+		return
+	}
+
+	userID := middleware.GetUserID(r)
+	if err := services.EnsureWorkspaceAccess(userID, db.WorkspaceID, models.RoleDeveloper); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	var req struct {
+		Query                string `json:"query"`
+		AllowWrite           bool   `json:"allow_write"`
+		AcknowledgeRiskyQuery bool   `json:"acknowledge_risky_query"`
+		MaxRows              int    `json:"max_rows"`
+		TimeoutMS            int    `json:"timeout_ms"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024)).Decode(&req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.Query = strings.TrimSpace(req.Query)
+	if req.Query == "" {
+		utils.RespondError(w, http.StatusBadRequest, "query is required")
+		return
+	}
+	if req.MaxRows <= 0 {
+		req.MaxRows = 100
+	}
+	if req.MaxRows > 1000 {
+		utils.RespondError(w, http.StatusBadRequest, "max_rows cannot exceed 1000")
+		return
+	}
+	if req.TimeoutMS <= 0 {
+		req.TimeoutMS = 15000
+	}
+	if req.TimeoutMS > 120000 {
+		utils.RespondError(w, http.StatusBadRequest, "timeout_ms cannot exceed 120000")
+		return
+	}
+
+	firstKeyword := sqlFirstKeyword(req.Query)
+	if !req.AllowWrite && !isReadOnlySQLKeyword(firstKeyword) {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error":        "query blocked in read-only mode",
+			"first_keyword": firstKeyword,
+			"hint":         "set allow_write=true and acknowledge_risky_query=true for write-capable execution",
+		})
+		return
+	}
+	if req.AllowWrite && !req.AcknowledgeRiskyQuery {
+		utils.RespondError(w, http.StatusBadRequest, "allow_write requires acknowledge_risky_query=true")
+		return
+	}
+
+	apiKeyID := middleware.GetAPIKeyID(r)
+	apiKeyScopes := middleware.GetAPIKeyScopes(r)
+	if req.AllowWrite && apiKeyID != "" && !models.HasAnyAPIKeyScope(apiKeyScopes, models.APIKeyScopeAdmin) {
+		utils.RespondError(w, http.StatusForbidden, "write SQL queries via API key require admin scope")
+		return
+	}
+
+	if strings.TrimSpace(db.EncryptedPassword) == "" {
+		utils.RespondError(w, http.StatusBadRequest, "database credentials are not ready yet")
+		return
+	}
+	password, err := utils.Decrypt(db.EncryptedPassword, h.Config.Crypto.EncryptionKey)
+	if err != nil || strings.TrimSpace(password) == "" {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to decrypt database credentials")
+		return
+	}
+
+	startedAt := time.Now()
+	if h.Config != nil && h.Config.Kubernetes.Enabled && strings.HasPrefix(strings.TrimSpace(db.ContainerID), "k8s:") {
+		if h.Worker == nil {
+			utils.RespondError(w, http.StatusBadGateway, "kubernetes query executor unavailable")
+			return
+		}
+		kd, err := h.Worker.GetKubeDeployer()
+		if err != nil || kd == nil {
+			utils.RespondError(w, http.StatusBadGateway, "failed to initialize kubernetes query executor")
+			return
+		}
+		querySQL := req.Query
+		if !req.AllowWrite {
+			querySQL = "BEGIN READ ONLY;\n" + ensureSQLTerminated(req.Query) + "\nCOMMIT;"
+		}
+		stdout, stderr, err := kd.RunDatabaseQuery(db, password, querySQL, time.Duration(req.TimeoutMS)*time.Millisecond)
+		if err != nil {
+			details := strings.TrimSpace(stderr)
+			if details == "" {
+				details = err.Error()
+			}
+			utils.RespondJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "query failed", "details": details})
+			return
+		}
+
+		columns, parsedRows, truncated, parsed := parsePSQLCSVOutput(stdout, req.MaxRows)
+		auditDetails := map[string]interface{}{
+			"allow_write":   req.AllowWrite,
+			"first_keyword": firstKeyword,
+			"max_rows":      req.MaxRows,
+			"duration_ms":   time.Since(startedAt).Milliseconds(),
+			"api_key_id":    apiKeyID,
+			"execution_mode": "k8s_exec",
+		}
+		if parsed {
+			auditDetails["rows_returned"] = len(parsedRows)
+			auditDetails["rows_truncated"] = truncated
+		} else {
+			auditDetails["raw_output"] = strings.TrimSpace(stdout)
+		}
+		services.Audit(db.WorkspaceID, userID, "database.query_executed", "database", db.ID, auditDetails)
+
+		if parsed {
+			utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+				"database_id":       db.ID,
+				"allow_write":       req.AllowWrite,
+				"first_keyword":     firstKeyword,
+				"execution_mode":    "k8s_exec",
+				"execution_time_ms": time.Since(startedAt).Milliseconds(),
+				"row_count":         len(parsedRows),
+				"truncated":         truncated,
+				"columns":           columns,
+				"rows":              parsedRows,
+			})
+			return
+		}
+
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"database_id":       db.ID,
+			"allow_write":       req.AllowWrite,
+			"first_keyword":     firstKeyword,
+			"execution_mode":    "k8s_exec",
+			"execution_time_ms": time.Since(startedAt).Milliseconds(),
+			"raw_output":        strings.TrimSpace(stdout),
+			"stderr":            strings.TrimSpace(stderr),
+		})
+		return
+	}
+
+	host := strings.TrimSpace(db.Host)
+	if host == "" || db.Port <= 0 || strings.TrimSpace(db.Username) == "" || strings.TrimSpace(db.DBName) == "" {
+		utils.RespondError(w, http.StatusBadRequest, "database endpoint is not ready yet")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(req.TimeoutMS)*time.Millisecond)
+	defer cancel()
+
+	hostCandidates := []string{host}
+	if !strings.Contains(host, ".") {
+		hostCandidates = append(hostCandidates, host+".railpush.svc.cluster.local")
+	}
+	sslModes := []string{"disable", "require"}
+	var conn *stdsql.DB
+	var tx *stdsql.Tx
+	var connectErr error
+	for _, candidateHost := range hostCandidates {
+		for _, sslMode := range sslModes {
+			dsn := buildPostgresDSN(candidateHost, db.Port, strings.TrimSpace(db.DBName), strings.TrimSpace(db.Username), password, sslMode)
+			candidateConn, err := stdsql.Open("postgres", dsn)
+			if err != nil {
+				connectErr = err
+				continue
+			}
+			candidateConn.SetMaxOpenConns(1)
+			candidateConn.SetMaxIdleConns(0)
+			candidateTx, err := candidateConn.BeginTx(ctx, &stdsql.TxOptions{ReadOnly: !req.AllowWrite})
+			if err != nil {
+				connectErr = err
+				candidateConn.Close()
+				continue
+			}
+			conn = candidateConn
+			tx = candidateTx
+			connectErr = nil
+			break
+		}
+		if tx != nil {
+			break
+		}
+	}
+	if connectErr != nil || tx == nil || conn == nil {
+		details := "connection failed"
+		if connectErr != nil {
+			details = connectErr.Error()
+		}
+		utils.RespondJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "failed to start query transaction", "details": details})
+		return
+	}
+	defer conn.Close()
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL statement_timeout = %d", req.TimeoutMS)); err != nil {
+		utils.RespondError(w, http.StatusBadGateway, "failed to apply statement timeout")
+		return
+	}
+
+	shouldReturnRows := isReadOnlySQLKeyword(firstKeyword) || strings.EqualFold(firstKeyword, "WITH") || strings.Contains(strings.ToLower(req.Query), "returning")
+
+	if shouldReturnRows {
+		rows, err := tx.QueryContext(ctx, req.Query)
+		if err != nil {
+			utils.RespondJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "query failed", "details": err.Error()})
+			return
+		}
+		defer rows.Close()
+
+		columns, err := rows.Columns()
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to read query columns")
+			return
+		}
+		resultRows := make([]map[string]interface{}, 0)
+		truncated := false
+		for rows.Next() {
+			if len(resultRows) >= req.MaxRows {
+				truncated = true
+				break
+			}
+			raw := make([]interface{}, len(columns))
+			dest := make([]interface{}, len(columns))
+			for i := range raw {
+				dest[i] = &raw[i]
+			}
+			if err := rows.Scan(dest...); err != nil {
+				utils.RespondError(w, http.StatusInternalServerError, "failed to scan query row")
+				return
+			}
+			row := make(map[string]interface{}, len(columns))
+			for i, col := range columns {
+				row[col] = normalizeSQLValue(raw[i])
+			}
+			resultRows = append(resultRows, row)
+		}
+		if err := rows.Err(); err != nil {
+			utils.RespondJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "query failed", "details": err.Error()})
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to finalize query transaction")
+			return
+		}
+
+		services.Audit(db.WorkspaceID, userID, "database.query_executed", "database", db.ID, map[string]interface{}{
+			"allow_write":    req.AllowWrite,
+			"first_keyword":  firstKeyword,
+			"max_rows":       req.MaxRows,
+			"rows_returned":  len(resultRows),
+			"rows_truncated": truncated,
+			"duration_ms":    time.Since(startedAt).Milliseconds(),
+			"api_key_id":     apiKeyID,
+		})
+
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"database_id":       db.ID,
+			"allow_write":       req.AllowWrite,
+			"first_keyword":     firstKeyword,
+			"execution_time_ms": time.Since(startedAt).Milliseconds(),
+			"row_count":         len(resultRows),
+			"truncated":         truncated,
+			"columns":           columns,
+			"rows":              resultRows,
+		})
+		return
+	}
+
+	result, err := tx.ExecContext(ctx, req.Query)
+	if err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "query failed", "details": err.Error()})
+		return
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if err := tx.Commit(); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to finalize query transaction")
+		return
+	}
+
+	services.Audit(db.WorkspaceID, userID, "database.query_executed", "database", db.ID, map[string]interface{}{
+		"allow_write":   req.AllowWrite,
+		"first_keyword": firstKeyword,
+		"max_rows":      req.MaxRows,
+		"rows_affected": rowsAffected,
+		"duration_ms":   time.Since(startedAt).Milliseconds(),
+		"api_key_id":    apiKeyID,
+	})
+
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"database_id":       db.ID,
+		"allow_write":       req.AllowWrite,
+		"first_keyword":     firstKeyword,
+		"execution_time_ms": time.Since(startedAt).Milliseconds(),
+		"rows_affected":     rowsAffected,
+	})
 }
 
 func (h *DatabaseHandler) databaseResponse(db *models.ManagedDatabase, password string, revealCredentials bool) map[string]interface{} {
@@ -819,6 +1128,121 @@ func (h *DatabaseHandler) TriggerBackup(w http.ResponseWriter, r *http.Request) 
 
 func intToStr(i int) string {
 	return fmt.Sprintf("%d", i)
+}
+
+func isReadOnlySQLKeyword(keyword string) bool {
+	switch strings.ToUpper(strings.TrimSpace(keyword)) {
+	case "SELECT", "SHOW", "VALUES", "EXPLAIN", "DESCRIBE", "WITH":
+		return true
+	default:
+		return false
+	}
+}
+
+func sqlFirstKeyword(query string) string {
+	s := strings.TrimSpace(query)
+	for {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return ""
+		}
+		if strings.HasPrefix(s, "--") {
+			if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+				s = s[idx+1:]
+				continue
+			}
+			return ""
+		}
+		if strings.HasPrefix(s, "/*") {
+			if idx := strings.Index(s, "*/"); idx >= 0 {
+				s = s[idx+2:]
+				continue
+			}
+			return ""
+		}
+		if s[0] == ';' {
+			s = s[1:]
+			continue
+		}
+		break
+	}
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.ToUpper(fields[0])
+}
+
+func normalizeSQLValue(v interface{}) interface{} {
+	switch val := v.(type) {
+	case nil:
+		return nil
+	case []byte:
+		return string(val)
+	case time.Time:
+		return val.UTC().Format(time.RFC3339Nano)
+	default:
+		return val
+	}
+}
+
+func parsePSQLCSVOutput(raw string, maxRows int) ([]string, []map[string]interface{}, bool, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil, false, false
+	}
+	r := csv.NewReader(strings.NewReader(trimmed))
+	r.FieldsPerRecord = -1
+	records, err := r.ReadAll()
+	if err != nil || len(records) < 2 {
+		return nil, nil, false, false
+	}
+	columns := records[0]
+	if len(columns) == 0 {
+		return nil, nil, false, false
+	}
+	rows := make([]map[string]interface{}, 0, len(records)-1)
+	truncated := false
+	for _, rec := range records[1:] {
+		if len(rows) >= maxRows {
+			truncated = true
+			break
+		}
+		row := make(map[string]interface{}, len(columns))
+		for i, col := range columns {
+			if i < len(rec) {
+				row[col] = rec[i]
+			} else {
+				row[col] = ""
+			}
+		}
+		rows = append(rows, row)
+	}
+	return columns, rows, truncated, true
+}
+
+func ensureSQLTerminated(query string) string {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return ";"
+	}
+	if strings.HasSuffix(trimmed, ";") {
+		return trimmed
+	}
+	return trimmed + ";"
+}
+
+func buildPostgresDSN(host string, port int, dbName, username, password, sslMode string) string {
+	u := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(username, password),
+		Host:   net.JoinHostPort(host, intToStr(port)),
+		Path:   "/" + dbName,
+	}
+	q := u.Query()
+	q.Set("sslmode", sslMode)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func (h *DatabaseHandler) ListReplicas(w http.ResponseWriter, r *http.Request) {

@@ -1,14 +1,17 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net/http"
 	"strings"
 	"time"
 
@@ -18,6 +21,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
 
 	"github.com/railpush/api/models"
 )
@@ -965,4 +971,85 @@ func (k *KubeDeployer) RunDatabaseInitScript(db *models.ManagedDatabase, passwor
 		}
 		time.Sleep(2 * time.Second)
 	}
+}
+
+// RunDatabaseQuery executes SQL in the target managed database pod and returns stdout/stderr.
+// This path avoids cluster networking dependencies by using localhost access from inside the DB pod.
+func (k *KubeDeployer) RunDatabaseQuery(db *models.ManagedDatabase, password string, query string, timeout time.Duration) (string, string, error) {
+	if k == nil || k.Client == nil {
+		return "", "", fmt.Errorf("kube deployer not initialized")
+	}
+	if db == nil {
+		return "", "", fmt.Errorf("database is nil")
+	}
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+
+	dbName := strings.TrimSpace(db.DBName)
+	if dbName == "" {
+		dbName = strings.TrimSpace(db.Name)
+	}
+	user := strings.TrimSpace(db.Username)
+	if user == "" {
+		user = strings.TrimSpace(db.Name)
+	}
+	if dbName == "" || user == "" {
+		return "", "", fmt.Errorf("database connection metadata is incomplete")
+	}
+
+	ns := k.namespace()
+	podName := kubeManagedDatabaseName(db.ID) + "-0"
+	queryB64 := base64.StdEncoding.EncodeToString([]byte(query))
+	script := "set -euo pipefail; " +
+		"printf %s " + shellSingleQuote(queryB64) + " | base64 -d > /tmp/railpush-query.sql; " +
+		"PGPASSWORD=" + shellSingleQuote(password) + " " +
+		"psql -v ON_ERROR_STOP=1 --no-psqlrc --csv -h 127.0.0.1 -p 5432 -U " + shellSingleQuote(user) + " -d " + shellSingleQuote(dbName) + " -f /tmp/railpush-query.sql"
+
+	restCfg, err := rest.InClusterConfig()
+	if err != nil {
+		return "", "", fmt.Errorf("in-cluster config: %w", err)
+	}
+
+	req := k.Client.CoreV1().RESTClient().Post().
+		Namespace(ns).
+		Resource("pods").
+		Name(podName).
+		SubResource("exec")
+	req.VersionedParams(&corev1.PodExecOptions{
+		Container: "postgres",
+		Command:   []string{"sh", "-lc", script},
+		Stdin:     false,
+		Stdout:    true,
+		Stderr:    true,
+		TTY:       false,
+	}, scheme.ParameterCodec)
+
+	exec, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, req.URL())
+	if err != nil {
+		return "", "", fmt.Errorf("create exec stream: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+	if err := exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: &stdout,
+		Stderr: &stderr,
+	}); err != nil {
+		serr := strings.TrimSpace(stderr.String())
+		if serr != "" {
+			return stdout.String(), serr, fmt.Errorf("query execution failed: %w", err)
+		}
+		return stdout.String(), "", fmt.Errorf("query execution failed: %w", err)
+	}
+
+	return stdout.String(), stderr.String(), nil
+}
+
+func shellSingleQuote(input string) string {
+	if input == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(input, "'", "'\"'\"'") + "'"
 }
