@@ -339,6 +339,9 @@ func Load() *Config {
 }
 
 func (c *DatabaseConfig) DSN() string {
+	if databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL")); databaseURL != "" {
+		return databaseURL
+	}
 	return "host=" + c.Host + " port=" + strconv.Itoa(c.Port) + " user=" + c.User + " password=" + c.Password + " dbname=" + c.DBName + " sslmode=" + c.SSLMode
 }
 

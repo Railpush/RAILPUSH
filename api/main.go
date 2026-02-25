@@ -151,7 +151,7 @@ func validateCriticalConfig(cfg *config.Config) error {
 	if cfg == nil {
 		return fmt.Errorf("missing config")
 	}
-	if strings.TrimSpace(cfg.Database.Password) == "" {
+	if strings.TrimSpace(cfg.Database.Password) == "" && strings.TrimSpace(os.Getenv("DATABASE_URL")) == "" {
 		return fmt.Errorf("DB_PASSWORD is required")
 	}
 	if strings.TrimSpace(cfg.JWT.Secret) == "" {
