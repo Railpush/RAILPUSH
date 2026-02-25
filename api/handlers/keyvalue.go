@@ -38,6 +38,11 @@ func (h *KeyValueHandler) ListKeyValues(w http.ResponseWriter, r *http.Request) 
 		utils.RespondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
+	pagination, err := parseCursorPagination(r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	kvs, err := models.ListManagedKeyValuesByWorkspace(workspaceID)
 	if err != nil {
@@ -89,7 +94,15 @@ func (h *KeyValueHandler) ListKeyValues(w http.ResponseWriter, r *http.Request) 
 		}
 		kvs = filtered
 	}
-	utils.RespondJSON(w, http.StatusOK, kvs)
+	paged, pageMeta := paginateSlice(kvs, pagination)
+	if pageMeta != nil {
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"data":       paged,
+			"pagination": pageMeta,
+		})
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, paged)
 }
 
 func (h *KeyValueHandler) CreateKeyValue(w http.ResponseWriter, r *http.Request) {

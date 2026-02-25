@@ -35,6 +35,11 @@ func (h *EnvVarHandler) ListEnvVars(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
+	pagination, err := parseCursorPagination(r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	vars, err := models.ListEnvVars("service", serviceID)
 	if err != nil {
@@ -56,7 +61,15 @@ func (h *EnvVarHandler) ListEnvVars(w http.ResponseWriter, r *http.Request) {
 		}
 		result = append(result, entry)
 	}
-	utils.RespondJSON(w, http.StatusOK, result)
+	paged, pageMeta := paginateSlice(result, pagination)
+	if pageMeta != nil {
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"data":       paged,
+			"pagination": pageMeta,
+		})
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, paged)
 }
 
 // MergeEnvVars handles PATCH /services/{id}/env-vars — additive upsert.
@@ -88,6 +101,31 @@ func (h *EnvVarHandler) MergeEnvVars(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	upsertCount := 0
+	for _, item := range req.EnvVars {
+		if strings.TrimSpace(item.Key) != "" {
+			upsertCount++
+		}
+	}
+	trimmedDelete := make([]string, 0, len(req.Delete))
+	for _, k := range req.Delete {
+		k = strings.TrimSpace(k)
+		if k != "" {
+			trimmedDelete = append(trimmedDelete, k)
+		}
+	}
+
+	if isDryRunRequest(r) {
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":       "dry_run",
+			"service_id":   svc.ID,
+			"workspace_id": svc.WorkspaceID,
+			"upserted":     upsertCount,
+			"deleted":      len(trimmedDelete),
+		})
+		return
+	}
+
 	// Upsert provided vars.
 	if len(req.EnvVars) > 0 {
 		vars := make([]models.EnvVar, 0, len(req.EnvVars))
@@ -110,23 +148,16 @@ func (h *EnvVarHandler) MergeEnvVars(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete specified keys.
-	if len(req.Delete) > 0 {
-		trimmed := make([]string, 0, len(req.Delete))
-		for _, k := range req.Delete {
-			k = strings.TrimSpace(k)
-			if k != "" {
-				trimmed = append(trimmed, k)
-			}
-		}
-		if err := models.DeleteEnvVarsByKeys("service", serviceID, trimmed); err != nil {
+	if len(trimmedDelete) > 0 {
+		if err := models.DeleteEnvVarsByKeys("service", serviceID, trimmedDelete); err != nil {
 			utils.RespondError(w, http.StatusInternalServerError, "failed to delete env vars: "+err.Error())
 			return
 		}
 	}
 
 	services.Audit(svc.WorkspaceID, userID, "service.env_vars_merged", "service", svc.ID, map[string]interface{}{
-		"upserted": len(req.EnvVars),
-		"deleted":  len(req.Delete),
+		"upserted": upsertCount,
+		"deleted":  len(trimmedDelete),
 	})
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
@@ -229,6 +260,19 @@ func (h *EnvVarHandler) BulkUpdateEnvVars(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if isDryRunRequest(r) {
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":              "dry_run",
+			"service_id":          svc.ID,
+			"workspace_id":        svc.WorkspaceID,
+			"mode":                "replace",
+			"upserted":            len(incomingKeys),
+			"removed":             len(missingExisting),
+			"confirm_destructive": confirmDestructive,
+		})
+		return
+	}
+
 	vars := make([]models.EnvVar, 0, len(req))
 	for _, item := range req {
 		key := strings.TrimSpace(item.Key)
@@ -259,10 +303,10 @@ func (h *EnvVarHandler) BulkUpdateEnvVars(w http.ResponseWriter, r *http.Request
 		return
 	}
 	services.Audit(svc.WorkspaceID, userID, "service.env_vars_updated", "service", svc.ID, map[string]interface{}{
-		"count":                len(vars),
-		"removed":              len(missingExisting),
-		"confirm_destructive":  confirmDestructive,
-		"mode":                 "replace",
+		"count":               len(vars),
+		"removed":             len(missingExisting),
+		"confirm_destructive": confirmDestructive,
+		"mode":                "replace",
 	})
 	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{"status": "updated", "removed": len(missingExisting)})
 }

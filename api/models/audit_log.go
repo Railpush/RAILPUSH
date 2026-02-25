@@ -29,16 +29,37 @@ func CreateAuditLog(workspaceID, userID, action, resourceType, resourceID string
 }
 
 func ListAuditLogs(workspaceID string, limit int) ([]AuditLogEntry, error) {
+	return ListAuditLogsPage(workspaceID, limit, 0)
+}
+
+func CountAuditLogs(workspaceID string) (int, error) {
+	var total int
+	err := database.DB.QueryRow(
+		`SELECT COUNT(*)
+		   FROM audit_log
+		  WHERE workspace_id=$1`,
+		workspaceID,
+	).Scan(&total)
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func ListAuditLogsPage(workspaceID string, limit int, offset int) ([]AuditLogEntry, error) {
 	if limit <= 0 {
 		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	rows, err := database.DB.Query(
 		`SELECT id, COALESCE(workspace_id::text,''), COALESCE(user_id::text,''), COALESCE(action,''), COALESCE(resource_type,''), COALESCE(resource_id::text,''), COALESCE(details_json::text,'{}'), created_at
 		   FROM audit_log
 		  WHERE workspace_id=$1
 		  ORDER BY created_at DESC
-		  LIMIT $2`,
-		workspaceID, limit,
+		  LIMIT $2 OFFSET $3`,
+		workspaceID, limit, offset,
 	)
 	if err != nil {
 		return nil, err
@@ -54,6 +75,12 @@ func ListAuditLogs(workspaceID string, limit int) ([]AuditLogEntry, error) {
 		}
 		e.DetailsJSON = json.RawMessage(details)
 		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []AuditLogEntry{}
 	}
 	return out, nil
 }

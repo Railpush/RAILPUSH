@@ -196,6 +196,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	rateLimitH := handlers.NewRateLimitHandler()
 	regRouter := registrar.NewProviderRouter(cfg.Registrar)
 	rdH := handlers.NewRegisteredDomainHandler(cfg, regRouter)
+	relH := handlers.NewRelationshipHandler(cfg)
 
 	api := r.PathPrefix("/api/v1").Subrouter()
 	api.Use(middleware.APIVersionMiddleware())
@@ -225,6 +226,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/settings/blueprint-ai", auth.UpdateBlueprintAISettings).Methods("PUT")
 	authed.HandleFunc("/auth/api-keys", auth.ListAPIKeys).Methods("GET")
 	authed.HandleFunc("/auth/api-keys", auth.CreateAPIKey).Methods("POST")
+	authed.HandleFunc("/auth/api-keys/{id}/allowlist", auth.UpdateAPIKeyAllowlist).Methods("PATCH")
 	authed.HandleFunc("/auth/api-keys/{id}", auth.DeleteAPIKey).Methods("DELETE")
 
 	opsH := handlers.NewOpsIncidentsHandler(cfg)
@@ -296,9 +298,15 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/templates/{id}", tplH.GetTemplate).Methods("GET")
 	authed.HandleFunc("/templates/{id}/deploy", tplH.DeployTemplate).Methods("POST")
 	authed.HandleFunc("/search", searchH.Search).Methods("GET")
+	authed.HandleFunc("/workspace/topology", relH.GetWorkspaceTopology).Methods("GET")
+	authed.HandleFunc("/workspaces/{id}/topology", relH.GetWorkspaceTopology).Methods("GET")
 
 	authed.HandleFunc("/services", svcH.ListServices).Methods("GET")
 	authed.HandleFunc("/services", svcH.CreateService).Methods("POST")
+	authed.HandleFunc("/services/bulk-update", svcH.BulkUpdateServices).Methods("POST")
+	authed.HandleFunc("/services/bulk-deploy", depH.BulkTriggerDeploy).Methods("POST")
+	authed.HandleFunc("/services/bulk-restart", svcH.BulkRestartServices).Methods("POST")
+	authed.HandleFunc("/services/bulk-set-env", envH.BulkSetEnvVars).Methods("POST")
 	authed.HandleFunc("/services/{id}", svcH.GetService).Methods("GET")
 	authed.HandleFunc("/services/{id}/github/workflows", svcH.ListServiceGitHubWorkflows).Methods("GET")
 	authed.HandleFunc("/services/{id}/github/webhook/status", svcH.GetServiceGitHubWebhookStatus).Methods("GET")
@@ -351,6 +359,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 
 	authed.HandleFunc("/databases", dbH.ListDatabases).Methods("GET")
 	authed.HandleFunc("/databases", dbH.CreateDatabase).Methods("POST")
+	authed.HandleFunc("/databases/bulk-update", dbH.BulkUpdateDatabases).Methods("POST")
 	authed.HandleFunc("/databases/{id}", dbH.GetDatabase).Methods("GET")
 	authed.HandleFunc("/databases/{id}/credentials/reveal", dbH.RevealDatabaseCredentials).Methods("POST")
 	authed.HandleFunc("/databases/{id}", dbH.UpdateDatabase).Methods("PATCH")
@@ -362,9 +371,12 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/databases/{id}/replicas", dbH.CreateReplica).Methods("POST")
 	authed.HandleFunc("/databases/{id}/replicas/{replicaId}/promote", dbH.PromoteReplica).Methods("POST")
 	authed.HandleFunc("/databases/{id}/ha/enable", dbH.EnableHA).Methods("POST")
+	authed.HandleFunc("/databases/{id}/connected-services", relH.GetDatabaseConnectedServices).Methods("GET")
+	authed.HandleFunc("/databases/{id}/impact", relH.GetDatabaseImpact).Methods("GET")
 	authed.HandleFunc("/services/{id}/link-database", dbH.LinkDatabaseToService).Methods("POST")
 	authed.HandleFunc("/services/{id}/link-database/{databaseId}", dbH.UnlinkDatabaseFromService).Methods("DELETE")
 	authed.HandleFunc("/services/{id}/linked-databases", dbH.ListServiceDatabaseLinks).Methods("GET")
+	authed.HandleFunc("/services/{id}/dependencies", relH.GetServiceDependencies).Methods("GET")
 
 	authed.HandleFunc("/keyvalue", kvH.ListKeyValues).Methods("GET")
 	authed.HandleFunc("/keyvalue", kvH.CreateKeyValue).Methods("POST")

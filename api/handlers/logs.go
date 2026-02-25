@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -31,11 +32,200 @@ func NewLogHandler(cfg *config.Config, worker *services.Worker) *LogHandler {
 	return &LogHandler{Config: cfg, Worker: worker}
 }
 
+type logFilterOptions struct {
+	search  string
+	regex   bool
+	level   string
+	since   *time.Time
+	until   *time.Time
+	pattern *regexp.Regexp
+}
+
+func parseLogFilterOptions(r *http.Request) (logFilterOptions, error) {
+	var out logFilterOptions
+	out.search = strings.TrimSpace(utils.GetQueryString(r, "search", ""))
+	out.level = normalizeLogLevel(strings.TrimSpace(utils.GetQueryString(r, "level", "")))
+
+	rawRegex := strings.TrimSpace(strings.ToLower(utils.GetQueryString(r, "regex", "false")))
+	out.regex = rawRegex == "1" || rawRegex == "true" || rawRegex == "yes"
+
+	if raw := strings.TrimSpace(utils.GetQueryString(r, "since", "")); raw != "" {
+		ts, err := parseLogFilterTime(raw)
+		if err != nil {
+			return out, fmt.Errorf("invalid since")
+		}
+		out.since = &ts
+	}
+	if raw := strings.TrimSpace(utils.GetQueryString(r, "until", "")); raw != "" {
+		ts, err := parseLogFilterTime(raw)
+		if err != nil {
+			return out, fmt.Errorf("invalid until")
+		}
+		out.until = &ts
+	}
+
+	if out.since != nil && out.until != nil && out.since.After(*out.until) {
+		return out, fmt.Errorf("since must be <= until")
+	}
+
+	if out.search != "" && out.regex {
+		re, err := regexp.Compile(`(?i)` + out.search)
+		if err != nil {
+			return out, fmt.Errorf("invalid search regex")
+		}
+		out.pattern = re
+	}
+
+	if out.level != "" {
+		switch out.level {
+		case "debug", "info", "warn", "error":
+		default:
+			return out, fmt.Errorf("invalid level")
+		}
+	}
+
+	return out, nil
+}
+
+func parseLogFilterTime(raw string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t, nil
+	}
+	return time.Parse(time.RFC3339, raw)
+}
+
+func normalizeLogLevel(level string) string {
+	level = strings.ToLower(strings.TrimSpace(level))
+	switch level {
+	case "warning":
+		return "warn"
+	case "err", "fatal", "panic":
+		return "error"
+	default:
+		return level
+	}
+}
+
+func inferLogLevel(message string) string {
+	lower := strings.ToLower(message)
+	if strings.Contains(lower, "error") || strings.Contains(lower, "fatal") || strings.Contains(lower, "panic") {
+		return "error"
+	}
+	if strings.Contains(lower, "warn") {
+		return "warn"
+	}
+	if strings.Contains(lower, "debug") {
+		return "debug"
+	}
+	return "info"
+}
+
+func entryMessage(entry map[string]interface{}) string {
+	if v, ok := entry["message"].(string); ok {
+		return v
+	}
+	if v, ok := entry["log"].(string); ok {
+		return v
+	}
+	if v, ok := entry["status"].(string); ok {
+		return v
+	}
+	return fmt.Sprintf("%v", entry)
+}
+
+func entryLevel(entry map[string]interface{}) string {
+	if v, ok := entry["level"].(string); ok && strings.TrimSpace(v) != "" {
+		return normalizeLogLevel(v)
+	}
+	if v, ok := entry["status"].(string); ok && strings.TrimSpace(v) != "" {
+		return normalizeLogLevel(v)
+	}
+	return inferLogLevel(entryMessage(entry))
+}
+
+func entryTimestamp(entry map[string]interface{}) (*time.Time, bool) {
+	for _, key := range []string{"timestamp", "started_at", "created_at", "updated_at"} {
+		raw, ok := entry[key]
+		if !ok || raw == nil {
+			continue
+		}
+		switch v := raw.(type) {
+		case time.Time:
+			t := v
+			return &t, true
+		case *time.Time:
+			if v != nil {
+				t := *v
+				return &t, true
+			}
+		case string:
+			if strings.TrimSpace(v) == "" {
+				continue
+			}
+			if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+				return &t, true
+			}
+			if t, err := time.Parse(time.RFC3339, v); err == nil {
+				return &t, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func applyLogFilters(entries []map[string]interface{}, filters logFilterOptions, limit int) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(entries))
+	for _, entry := range entries {
+		msg := entryMessage(entry)
+
+		if filters.search != "" {
+			if filters.regex {
+				if filters.pattern == nil || !filters.pattern.MatchString(msg) {
+					continue
+				}
+			} else if !strings.Contains(strings.ToLower(msg), strings.ToLower(filters.search)) {
+				continue
+			}
+		}
+
+		if filters.level != "" {
+			if entryLevel(entry) != filters.level {
+				continue
+			}
+		}
+
+		if filters.since != nil || filters.until != nil {
+			ts, ok := entryTimestamp(entry)
+			if !ok {
+				continue
+			}
+			if filters.since != nil && ts.Before(*filters.since) {
+				continue
+			}
+			if filters.until != nil && ts.After(*filters.until) {
+				continue
+			}
+		}
+
+		out = append(out, entry)
+	}
+
+	if limit > 0 && len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	return out
+}
+
 func (h *LogHandler) QueryLogs(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r)
 	serviceID := mux.Vars(r)["id"]
 	limit := utils.GetQueryInt(r, "limit", 100)
 	logType := utils.GetQueryString(r, "type", "runtime")
+	filters, err := parseLogFilterOptions(r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	svc, err := models.GetService(serviceID)
 	if err != nil || svc == nil {
 		utils.RespondJSON(w, http.StatusOK, []map[string]interface{}{})
@@ -47,7 +237,7 @@ func (h *LogHandler) QueryLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if logType == "runtime" {
-		h.queryRuntimeLogs(w, svc, limit)
+		h.queryRuntimeLogs(w, svc, limit, filters)
 		return
 	}
 
@@ -66,72 +256,17 @@ func (h *LogHandler) QueryLogs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// In Kubernetes mode, build output is shipped to Loki via Promtail.
-		// Keep DB output as metadata-only and hydrate with Loki at query time.
 		if h != nil && h.Config != nil && h.Config.Kubernetes.Enabled {
-			// Avoid duplicating logs for older deploys that still have build output persisted.
-			if !strings.Contains(buildLog, "\n    ") && !strings.HasPrefix(buildLog, "    ") {
-				ns := strings.TrimSpace(h.Config.Kubernetes.Namespace)
-				if ns == "" {
-					ns = "railpush"
-				}
-				lokiURL := strings.TrimSpace(h.Config.Logging.LokiURL)
-				if lokiURL == "" {
-					// Default matches deploy/k8s/logging/* (Loki gateway is cluster-internal).
-					lokiURL = "http://loki-gateway.logging.svc.cluster.local"
-				}
-
-				jobName := services.KubeBuildJobName(id)
-				if jobName != "" && lokiURL != "" {
-					start := time.Now().UTC().Add(-30 * time.Minute)
-					if startedAt.Valid {
-						start = startedAt.Time.Add(-2 * time.Minute)
-					}
-					end := time.Now().UTC()
-					if finishedAt.Valid {
-						end = finishedAt.Time.Add(5 * time.Minute)
-					}
-
-					// Bound queries to avoid accidental huge scans.
-					if end.Sub(start) > 6*time.Hour {
-						start = end.Add(-6 * time.Hour)
-					}
-
-					logQL := fmt.Sprintf(`{namespace=%q, app=%q, component="build", container=~"clone|kaniko"}`, ns, jobName)
-					ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-					lines, err := services.LokiQueryRange(ctx, lokiURL, logQL, start, end, 5000)
-					cancel()
-					if err == nil && len(lines) > 0 {
-						if buildLog != "" && !strings.HasSuffix(buildLog, "\n") {
-							buildLog += "\n"
-						}
-						buildLog += "==> Build logs (Loki):\n"
-						// Cap output to keep the API response bounded.
-						const maxBytes = 512 * 1024
-						var bytes int
-						for _, ln := range lines {
-							container := ""
-							if ln.Labels != nil {
-								container = strings.TrimSpace(ln.Labels["container"])
-							}
-							prefix := "    "
-							if container != "" {
-								prefix = "    [" + container + "] "
-							}
-							line := prefix + strings.TrimRight(ln.Line, "\r\n")
-							if line == "" {
-								continue
-							}
-							if bytes+len(line)+1 > maxBytes {
-								buildLog += "    (truncated; view full logs in Grafana Loki)\n"
-								break
-							}
-							buildLog += line + "\n"
-							bytes += len(line) + 1
-						}
-					}
-				}
+			var startedPtr, finishedPtr *time.Time
+			if startedAt.Valid {
+				t := startedAt.Time
+				startedPtr = &t
 			}
+			if finishedAt.Valid {
+				t := finishedAt.Time
+				finishedPtr = &t
+			}
+			buildLog = hydrateDeployBuildLogFromLoki(h.Config, id, buildLog, startedPtr, finishedPtr)
 		}
 
 		var startedAtVal interface{} = nil
@@ -143,7 +278,7 @@ func (h *LogHandler) QueryLogs(w http.ResponseWriter, r *http.Request) {
 	if logs == nil {
 		logs = []map[string]interface{}{}
 	}
-	utils.RespondJSON(w, http.StatusOK, logs)
+	utils.RespondJSON(w, http.StatusOK, applyLogFilters(logs, filters, limit))
 }
 
 // QueryLogsOps is the ops-scoped version of QueryLogs (bypasses workspace RBAC).
@@ -157,6 +292,11 @@ func (h *LogHandler) QueryLogsOps(w http.ResponseWriter, r *http.Request) {
 	serviceID := mux.Vars(r)["id"]
 	limit := utils.GetQueryInt(r, "limit", 100)
 	logType := utils.GetQueryString(r, "type", "runtime")
+	filters, err := parseLogFilterOptions(r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	svc, err := models.GetService(serviceID)
 	if err != nil || svc == nil {
 		utils.RespondJSON(w, http.StatusOK, []map[string]interface{}{})
@@ -164,7 +304,7 @@ func (h *LogHandler) QueryLogsOps(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if logType == "runtime" {
-		h.queryRuntimeLogs(w, svc, limit)
+		h.queryRuntimeLogs(w, svc, limit, filters)
 		return
 	}
 
@@ -183,72 +323,17 @@ func (h *LogHandler) QueryLogsOps(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// In Kubernetes mode, build output is shipped to Loki via Promtail.
-		// Keep DB output as metadata-only and hydrate with Loki at query time.
 		if h != nil && h.Config != nil && h.Config.Kubernetes.Enabled {
-			// Avoid duplicating logs for older deploys that still have build output persisted.
-			if !strings.Contains(buildLog, "\n    ") && !strings.HasPrefix(buildLog, "    ") {
-				ns := strings.TrimSpace(h.Config.Kubernetes.Namespace)
-				if ns == "" {
-					ns = "railpush"
-				}
-				lokiURL := strings.TrimSpace(h.Config.Logging.LokiURL)
-				if lokiURL == "" {
-					// Default matches deploy/k8s/logging/* (Loki gateway is cluster-internal).
-					lokiURL = "http://loki-gateway.logging.svc.cluster.local"
-				}
-
-				jobName := services.KubeBuildJobName(id)
-				if jobName != "" && lokiURL != "" {
-					start := time.Now().UTC().Add(-30 * time.Minute)
-					if startedAt.Valid {
-						start = startedAt.Time.Add(-2 * time.Minute)
-					}
-					end := time.Now().UTC()
-					if finishedAt.Valid {
-						end = finishedAt.Time.Add(5 * time.Minute)
-					}
-
-					// Bound queries to avoid accidental huge scans.
-					if end.Sub(start) > 6*time.Hour {
-						start = end.Add(-6 * time.Hour)
-					}
-
-					logQL := fmt.Sprintf(`{namespace=%q, app=%q, component="build", container=~"clone|kaniko"}`, ns, jobName)
-					ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-					lines, err := services.LokiQueryRange(ctx, lokiURL, logQL, start, end, 5000)
-					cancel()
-					if err == nil && len(lines) > 0 {
-						if buildLog != "" && !strings.HasSuffix(buildLog, "\n") {
-							buildLog += "\n"
-						}
-						buildLog += "==> Build logs (Loki):\n"
-						// Cap output to keep the API response bounded.
-						const maxBytes = 512 * 1024
-						var bytes int
-						for _, ln := range lines {
-							container := ""
-							if ln.Labels != nil {
-								container = strings.TrimSpace(ln.Labels["container"])
-							}
-							prefix := "    "
-							if container != "" {
-								prefix = "    [" + container + "] "
-							}
-							line := prefix + strings.TrimRight(ln.Line, "\r\n")
-							if line == "" {
-								continue
-							}
-							if bytes+len(line)+1 > maxBytes {
-								buildLog += "    (truncated; view full logs in Grafana Loki)\n"
-								break
-							}
-							buildLog += line + "\n"
-							bytes += len(line) + 1
-						}
-					}
-				}
+			var startedPtr, finishedPtr *time.Time
+			if startedAt.Valid {
+				t := startedAt.Time
+				startedPtr = &t
 			}
+			if finishedAt.Valid {
+				t := finishedAt.Time
+				finishedPtr = &t
+			}
+			buildLog = hydrateDeployBuildLogFromLoki(h.Config, id, buildLog, startedPtr, finishedPtr)
 		}
 
 		var startedAtVal interface{} = nil
@@ -260,16 +345,16 @@ func (h *LogHandler) QueryLogsOps(w http.ResponseWriter, r *http.Request) {
 	if logs == nil {
 		logs = []map[string]interface{}{}
 	}
-	utils.RespondJSON(w, http.StatusOK, logs)
+	utils.RespondJSON(w, http.StatusOK, applyLogFilters(logs, filters, limit))
 }
 
-func (h *LogHandler) queryRuntimeLogs(w http.ResponseWriter, svc *models.Service, limit int) {
+func (h *LogHandler) queryRuntimeLogs(w http.ResponseWriter, svc *models.Service, limit int, filters logFilterOptions) {
 	if svc == nil {
 		utils.RespondJSON(w, http.StatusOK, []map[string]interface{}{})
 		return
 	}
 	if h != nil && h.Config != nil && h.Config.Kubernetes.Enabled {
-		h.queryRuntimeLogsKubernetes(w, svc, limit)
+		h.queryRuntimeLogsKubernetes(w, svc, limit, filters)
 		return
 	}
 	if svc.ContainerID == "" {
@@ -303,15 +388,7 @@ func (h *LogHandler) queryRuntimeLogs(w http.ResponseWriter, svc *models.Service
 			}
 		}
 
-		level := "info"
-		lower := strings.ToLower(message)
-		if strings.Contains(lower, "error") || strings.Contains(lower, "fatal") || strings.Contains(lower, "panic") {
-			level = "error"
-		} else if strings.Contains(lower, "warn") {
-			level = "warn"
-		} else if strings.Contains(lower, "debug") {
-			level = "debug"
-		}
+		level := inferLogLevel(message)
 
 		cid := svc.ContainerID
 		if len(cid) > 12 {
@@ -328,10 +405,10 @@ func (h *LogHandler) queryRuntimeLogs(w http.ResponseWriter, svc *models.Service
 	if logs == nil {
 		logs = []map[string]interface{}{}
 	}
-	utils.RespondJSON(w, http.StatusOK, logs)
+	utils.RespondJSON(w, http.StatusOK, applyLogFilters(logs, filters, limit))
 }
 
-func (h *LogHandler) queryRuntimeLogsKubernetes(w http.ResponseWriter, svc *models.Service, limit int) {
+func (h *LogHandler) queryRuntimeLogsKubernetes(w http.ResponseWriter, svc *models.Service, limit int, filters logFilterOptions) {
 	if h == nil || h.Worker == nil || h.Config == nil || svc == nil {
 		utils.RespondJSON(w, http.StatusOK, []map[string]interface{}{})
 		return
@@ -398,15 +475,7 @@ func (h *LogHandler) queryRuntimeLogsKubernetes(w http.ResponseWriter, svc *mode
 				}
 			}
 
-			level := "info"
-			lower := strings.ToLower(msg)
-			if strings.Contains(lower, "error") || strings.Contains(lower, "fatal") || strings.Contains(lower, "panic") {
-				level = "error"
-			} else if strings.Contains(lower, "warn") {
-				level = "warn"
-			} else if strings.Contains(lower, "debug") {
-				level = "debug"
-			}
+			level := inferLogLevel(msg)
 
 			out = append(out, entry{
 				ts: ts,
@@ -429,5 +498,5 @@ func (h *LogHandler) queryRuntimeLogsKubernetes(w http.ResponseWriter, svc *mode
 	for _, e := range out {
 		resp = append(resp, e.payload)
 	}
-	utils.RespondJSON(w, http.StatusOK, resp)
+	utils.RespondJSON(w, http.StatusOK, applyLogFilters(resp, filters, limit))
 }

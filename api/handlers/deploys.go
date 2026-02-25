@@ -44,6 +44,17 @@ func (h *DeployHandler) TriggerDeploy(w http.ResponseWriter, r *http.Request) {
 	if req.Branch == "" {
 		req.Branch = svc.Branch
 	}
+	if isDryRunRequest(r) {
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":       "dry_run",
+			"service_id":   serviceID,
+			"workspace_id": svc.WorkspaceID,
+			"trigger":      "manual",
+			"branch":       req.Branch,
+			"commit_sha":   req.CommitSHA,
+		})
+		return
+	}
 	deploy := &models.Deploy{
 		ServiceID: serviceID,
 		Trigger:   "manual",
@@ -92,6 +103,11 @@ func (h *DeployHandler) ListDeploys(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := services.EnsureWorkspaceAccess(userID, svc.WorkspaceID, models.RoleViewer); err != nil {
 		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	pagination, err := parseCursorPagination(r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	deploys, err := models.ListDeploys(serviceID)
@@ -160,7 +176,15 @@ func (h *DeployHandler) ListDeploys(w http.ResponseWriter, r *http.Request) {
 		deploys = filtered
 	}
 
-	utils.RespondJSON(w, http.StatusOK, deploys)
+	paged, pageMeta := paginateSlice(deploys, pagination)
+	if pageMeta != nil {
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"data":       paged,
+			"pagination": pageMeta,
+		})
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, paged)
 }
 
 func parseDeployFilterTime(raw string) (time.Time, error) {

@@ -1535,33 +1535,45 @@ curl https://railpush.com/api/v1/services \\
               <p className="text-xs text-content-tertiary mb-4">
                 Destructive deletes use a confirmation-token flow and default to soft-delete with a 72-hour recovery window before hard delete is allowed.
               </p>
+              <p className="text-xs text-content-tertiary mb-4">
+                List endpoints support optional cursor pagination via <code className="px-1 py-0.5 rounded bg-surface-tertiary text-content-primary text-[11px] font-mono">limit</code> and <code className="px-1 py-0.5 rounded bg-surface-tertiary text-content-primary text-[11px] font-mono">cursor</code>. When either is provided, responses use <code className="px-1 py-0.5 rounded bg-surface-tertiary text-content-primary text-[11px] font-mono">{`{ data, pagination }`}</code>.
+              </p>
 
               {[
                 { group: 'Services', endpoints: [
-                  { method: 'GET', path: '/services', desc: 'List services (filter: ?type=web&status=live&runtime=node&name=api&suspended=false)' },
+                  { method: 'GET', path: '/services', desc: 'List services (filters: type,status,runtime,plan,name,repo_url,project_id,query,suspended; pagination: limit,cursor)' },
                   { method: 'POST', path: '/services', desc: 'Create a service' },
+                  { method: 'POST', path: '/services/bulk-update', desc: 'Apply a partial update payload to multiple services (supports dry_run, transaction_mode)' },
+                  { method: 'POST', path: '/services/bulk-restart', desc: 'Restart multiple services in one request (supports dry_run, transaction_mode)' },
                   { method: 'GET', path: '/services/:id', desc: 'Get service details' },
                   { method: 'GET', path: '/services/:id/event-webhook', desc: 'Get deploy event webhook config' },
                   { method: 'PUT', path: '/services/:id/event-webhook', desc: 'Set deploy event webhook config' },
                   { method: 'POST', path: '/services/:id/event-webhook/test', desc: 'Send deploy.test webhook payload' },
                   { method: 'PATCH', path: '/services/:id', desc: 'Update a service (supports deletion_protection)' },
+                  { method: 'GET', path: '/services/:id/disks', desc: 'List persistent disk attachment' },
+                  { method: 'PUT', path: '/services/:id/disks', desc: 'Create/replace persistent disk attachment' },
+                  { method: 'DELETE', path: '/services/:id/disks', desc: 'Delete persistent disk attachment' },
                   { method: 'DELETE', path: '/services/:id', desc: 'Delete flow (token challenge -> soft-delete; optional hard_delete after recovery window)' },
                   { method: 'POST', path: '/services/:id/restore', desc: 'Restore a soft-deleted service' },
                   { method: 'POST', path: '/services/:id/restart', desc: 'Restart a service' },
                   { method: 'POST', path: '/services/:id/suspend', desc: 'Suspend a service' },
                   { method: 'POST', path: '/services/:id/resume', desc: 'Resume a suspended service' },
+                  { method: 'GET', path: '/services/:id/dependencies', desc: 'List service dependencies (databases, key-value, and service references)' },
                 ]},
                 { group: 'Deploys', endpoints: [
+                  { method: 'POST', path: '/services/bulk-deploy', desc: 'Trigger deploys for multiple services (supports dry_run, transaction_mode)' },
                   { method: 'POST', path: '/services/:id/deploys', desc: 'Trigger a deploy' },
-                  { method: 'GET', path: '/services/:id/deploys', desc: 'List deploys' },
+                  { method: 'GET', path: '/services/:id/deploys', desc: 'List deploys (filters: status,branch,since,until; pagination: limit,cursor)' },
                   { method: 'GET', path: '/services/:id/deploys/:deployId', desc: 'Get deploy details' },
+                  { method: 'POST', path: '/services/:id/deploys/:deployId/wait', desc: 'Wait for deploy completion (timeout query param)' },
                   { method: 'POST', path: '/services/:id/deploys/:deployId/rollback', desc: 'Rollback to a deploy' },
                 ]},
                 { group: 'Env Vars & Domains', endpoints: [
-                  { method: 'GET', path: '/services/:id/env-vars', desc: 'List env vars' },
+                  { method: 'POST', path: '/services/bulk-set-env', desc: 'Set env vars for multiple services (merge/replace + dry_run + transaction_mode)' },
+                  { method: 'GET', path: '/services/:id/env-vars', desc: 'List env vars (pagination: limit,cursor)' },
                   { method: 'PUT', path: '/services/:id/env-vars', desc: 'Bulk replace all env vars (confirm required for removals)' },
                   { method: 'PATCH', path: '/services/:id/env-vars', desc: 'Upsert env vars (additive)' },
-                  { method: 'GET', path: '/services/:id/custom-domains', desc: 'List custom domains' },
+                  { method: 'GET', path: '/services/:id/custom-domains', desc: 'List custom domains (pagination: limit,cursor)' },
                   { method: 'POST', path: '/services/:id/custom-domains', desc: 'Add custom domain (with optional redirect_target)' },
                   { method: 'DELETE', path: '/services/:id/custom-domains/:domain', desc: 'Remove custom domain' },
                   { method: 'GET', path: '/services/:id/rewrite-rules', desc: 'List rewrite/proxy rules' },
@@ -1569,34 +1581,37 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'DELETE', path: '/services/:id/rewrite-rules/:ruleId', desc: 'Remove rewrite rule' },
                 ]},
                 { group: 'Logs & Metrics', endpoints: [
-                  { method: 'GET', path: '/services/:id/logs', desc: 'Query service logs' },
+                  { method: 'GET', path: '/services/:id/logs', desc: 'Query service logs (supports type,search,regex,since,until,level)' },
                   { method: 'GET', path: '/services/:id/metrics', desc: 'Get current resource usage' },
                   { method: 'GET', path: '/services/:id/metrics/history', desc: 'Get usage history' },
                 ]},
                 { group: 'Autoscaling & Jobs', endpoints: [
                   { method: 'GET', path: '/services/:id/autoscaling', desc: 'Get autoscaling policy' },
                   { method: 'PUT', path: '/services/:id/autoscaling', desc: 'Set autoscaling policy' },
-                  { method: 'GET', path: '/services/:id/jobs', desc: 'List one-off jobs' },
+                  { method: 'GET', path: '/services/:id/jobs', desc: 'List one-off jobs (pagination: limit,cursor)' },
                   { method: 'POST', path: '/services/:id/jobs', desc: 'Run a one-off job' },
                   { method: 'GET', path: '/jobs/:jobId', desc: 'Get job details' },
                 ]},
                 { group: 'Databases (PostgreSQL)', endpoints: [
-                  { method: 'GET', path: '/databases', desc: 'List databases' },
+                  { method: 'GET', path: '/databases', desc: 'List databases (filters: plan,status,pg_version,name,query; pagination: limit,cursor)' },
                   { method: 'POST', path: '/databases', desc: 'Create a database' },
+                  { method: 'POST', path: '/databases/bulk-update', desc: 'Apply a partial update payload to multiple databases (supports dry_run, transaction_mode)' },
                   { method: 'GET', path: '/databases/:id', desc: 'Get database details (credentials redacted by default)' },
                   { method: 'POST', path: '/databases/:id/credentials/reveal', desc: 'Reveal plaintext credentials (explicit acknowledgement required)' },
                   { method: 'PATCH', path: '/databases/:id', desc: 'Update a database (supports deletion_protection)' },
                   { method: 'DELETE', path: '/databases/:id', desc: 'Delete flow (token challenge -> soft-delete; optional hard_delete after recovery window)' },
                   { method: 'POST', path: '/databases/:id/restore', desc: 'Restore a soft-deleted database' },
-                  { method: 'GET', path: '/databases/:id/backups', desc: 'List backups' },
+                  { method: 'GET', path: '/databases/:id/backups', desc: 'List backups (pagination: limit,cursor)' },
                   { method: 'POST', path: '/databases/:id/backups', desc: 'Trigger a backup' },
+                  { method: 'GET', path: '/databases/:id/connected-services', desc: 'List services connected to this database' },
+                  { method: 'GET', path: '/databases/:id/impact', desc: 'Show blast radius / affected services for this database' },
                   { method: 'GET', path: '/databases/:id/replicas', desc: 'List read replicas' },
                   { method: 'POST', path: '/databases/:id/replicas', desc: 'Create a read replica' },
                   { method: 'POST', path: '/databases/:id/replicas/:rid/promote', desc: 'Promote replica' },
                   { method: 'POST', path: '/databases/:id/ha/enable', desc: 'Enable high availability' },
                 ]},
                 { group: 'Key-Value (Redis)', endpoints: [
-                  { method: 'GET', path: '/keyvalue', desc: 'List key-value stores' },
+                  { method: 'GET', path: '/keyvalue', desc: 'List key-value stores (filters: plan,status,name,query; pagination: limit,cursor)' },
                   { method: 'POST', path: '/keyvalue', desc: 'Create a key-value store' },
                   { method: 'GET', path: '/keyvalue/:id', desc: 'Get key-value details (credentials redacted by default)' },
                   { method: 'POST', path: '/keyvalue/:id/credentials/reveal', desc: 'Reveal plaintext credentials (explicit acknowledgement required)' },
@@ -1622,7 +1637,7 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'PUT', path: '/env-groups/:id/vars', desc: 'Bulk update group variables' },
                   { method: 'POST', path: '/env-groups/:id/link', desc: 'Link a service' },
                   { method: 'DELETE', path: '/env-groups/:id/link/:serviceId', desc: 'Unlink a service' },
-                  { method: 'GET', path: '/env-groups/:id/services', desc: 'List linked services' },
+                  { method: 'GET', path: '/env-groups/:id/services', desc: 'List linked services (set include_usage=true for used/missing key analysis)' },
                 ]},
                 { group: 'Projects & Environments', endpoints: [
                   { method: 'GET', path: '/projects', desc: 'List projects' },
@@ -1654,11 +1669,15 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'DELETE', path: '/domains/:id/dns/:recordId', desc: 'Delete a DNS record' },
                 ]},
                 { group: 'Workspace & Billing', endpoints: [
+                  { method: 'GET', path: '/search', desc: 'Workspace search across services, databases, and key-value stores (?q=...)' },
+                  { method: 'GET', path: '/workspace/topology', desc: 'Get dependency graph for default workspace' },
+                  { method: 'GET', path: '/workspaces/:id/topology', desc: 'Get dependency graph for a specific workspace' },
+                  { method: 'GET', path: '/rate-limit', desc: 'Current API rate-limit state (limit, remaining, reset_at, window)' },
                   { method: 'GET', path: '/workspaces/:id/members', desc: 'List workspace members' },
                   { method: 'POST', path: '/workspaces/:id/members', desc: 'Invite a member' },
                   { method: 'PATCH', path: '/workspaces/:id/members/:userId', desc: 'Update member role' },
                   { method: 'DELETE', path: '/workspaces/:id/members/:userId', desc: 'Remove a member' },
-                  { method: 'GET', path: '/workspaces/:id/audit-logs', desc: 'List audit logs' },
+                  { method: 'GET', path: '/workspaces/:id/audit-logs', desc: 'List audit logs (pagination: limit,cursor)' },
                   { method: 'GET', path: '/billing', desc: 'Get billing overview' },
                 ]},
                 { group: 'Support', endpoints: [
@@ -1722,9 +1741,15 @@ curl https://railpush.com/api/v1/services \\
 curl -X POST https://apps.railpush.com/api/v1/auth/api-keys \\
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
   -H "Content-Type: application/json" \\
-  -d '{"name": "mcp-server", "scopes": ["read", "write", "deploy"], "expires_at": "2026-12-31T23:59:59Z"}'
+  -d '{"name": "mcp-server", "scopes": ["read", "write", "deploy"], "allowed_cidrs": ["203.0.113.10/32"], "expires_at": "2026-12-31T23:59:59Z"}'
 
-# Response: {"id": "...", "key": "abc123...", "name": "mcp-server", "scopes": ["read", "write", "deploy"]}`} />
+# Response: {"id": "...", "key": "abc123...", "name": "mcp-server", "scopes": ["read", "write", "deploy"], "allowed_cidrs": ["203.0.113.10/32"]}
+
+# Update IP allowlist later:
+curl -X PATCH https://apps.railpush.com/api/v1/auth/api-keys/KEY_ID/allowlist \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"allowed_cidrs": ["203.0.113.0/24", "2001:db8::/64"]}'`} />
               <p className="text-xs text-content-tertiary mb-4">
                 Available scopes: <code className="text-[11px] bg-surface-tertiary px-1 rounded">read</code>, <code className="text-[11px] bg-surface-tertiary px-1 rounded">write</code>, <code className="text-[11px] bg-surface-tertiary px-1 rounded">deploy</code>, <code className="text-[11px] bg-surface-tertiary px-1 rounded">support</code>, <code className="text-[11px] bg-surface-tertiary px-1 rounded">ops</code>, <code className="text-[11px] bg-surface-tertiary px-1 rounded">billing</code>, <code className="text-[11px] bg-surface-tertiary px-1 rounded">admin</code>, or <code className="text-[11px] bg-surface-tertiary px-1 rounded">*</code> for full access.
               </p>
@@ -1815,25 +1840,28 @@ npm run build`} />
                   </thead>
                   <tbody className="text-content-secondary">
                     {[
-                      ['Auth', 'whoami'],
-                      ['Services', 'list, get, create, update, delete (token-confirmed soft delete), restore, restart, suspend, resume, search/filter'],
-                      ['Bulk Operations', 'bulk deploy, bulk restart, bulk suspend, bulk resume'],
-                      ['Deploys', 'trigger, list, get, rollback, queue position'],
-                      ['Env Vars', 'list, set (bulk replace), upsert (additive), get/set/enable/disable GitHub Actions deploy gate, set workflow allowlist'],
-                      ['Custom Domains', 'list, add, delete'],
-                      ['Databases', 'list, create, get (redacted), reveal credentials, update, delete (token-confirmed soft delete), restore, backup, list backups, replicas, create replica, promote replica, enable HA'],
-                      ['Key-Value (Redis)', 'list, create, get (redacted), reveal credentials, update, delete (token-confirmed soft delete), restore'],
-                      ['Logs', 'get runtime logs, get deploy logs'],
+                      ['Auth', 'whoami, get_rate_limit'],
+                      ['Services', 'list (with server-side filters + limit/cursor pagination), get, create, update, delete (token-confirmed soft delete), restore, restart, suspend, resume, search/filter'],
+                      ['Bulk Operations', 'bulk update services, bulk deploy, bulk restart, bulk set env vars, bulk update databases, plus bulk suspend/resume helpers'],
+                      ['Deploys', 'trigger, list (status/branch/since/until + limit/cursor pagination), get, wait_for_deploy, rollback, queue position'],
+                      ['Env Vars', 'list (limit/cursor pagination), set (bulk replace), upsert (additive), get/set/enable/disable GitHub Actions deploy gate, set workflow allowlist'],
+                      ['Disks', 'list service disks, set/replace disk attachment, delete disk attachment'],
+                      ['Custom Domains', 'list (limit/cursor pagination), add, delete'],
+                      ['Databases', 'list (plan/status/version/name/query filters + limit/cursor pagination), create, get (redacted), reveal credentials, update, delete (token-confirmed soft delete), restore, backup, list backups (limit/cursor pagination), replicas, create replica, promote replica, enable HA'],
+                      ['Key-Value (Redis)', 'list (plan/status/name/query filters + limit/cursor pagination), create, get (redacted), reveal credentials, update, delete (token-confirmed soft delete), restore'],
+                      ['Logs', 'get runtime/deploy logs with text search, regex, since/until, and level filtering'],
                       ['AI Fix', 'start fix session, get fix status'],
-                      ['One-Off Jobs', 'run, list, get'],
+                      ['One-Off Jobs', 'run, list (limit/cursor pagination), get'],
                       ['Autoscaling', 'get policy, set policy'],
                       ['Blueprints', 'list, create, get, update (move to folder), sync, delete'],
-                      ['Env Groups', 'list, create, get, update, delete, list vars, set vars, link, unlink, list linked services'],
+                      ['Env Groups', 'list, create, get, update, delete, list vars, set vars, link, unlink, list linked services (optional usage detail)'],
                       ['Metrics', 'get resource usage, get usage history'],
                       ['Projects', 'list, create, get, update (name + move to folder), delete'],
                       ['Environments', 'list, create, update, delete'],
 
                       ['Project Folders', 'list, create, update, delete'],
+                      ['Search', 'search_workspace_resources (services/databases/key-value in one query)'],
+                      ['Relationships', 'get_workspace_topology, get_service_dependencies, get_database_connected_services, get_database_impact'],
                       ['Preview Environments', 'list, create, update, delete'],
                       ['Support Tickets', 'list/filter, create (category/component/tags), get, update tags, reply'],
                       ['Ops Tickets', 'list/search (status/category/priority/component/tags/date/sort), get (with internal notes), single update, bulk update, reply as ops'],
@@ -1841,7 +1869,7 @@ npm run build`} />
                       ['Registered Domains', 'list, register, get, delete'],
                       ['DNS Records', 'list, create, update, delete'],
                       ['Workspace Members', 'list, invite, update role, remove'],
-                      ['Audit Logs', 'list events'],
+                      ['Audit Logs', 'list events (limit/cursor pagination)'],
                       ['GitHub', 'list repos, list branches, list workflows, list service workflows, webhook status/repair'],
                       ['Event Webhooks', 'get/set/test service deploy event webhooks'],
                       ['Templates', 'list, get details, deploy stack'],

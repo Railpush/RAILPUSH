@@ -85,6 +85,11 @@ func TestRequiredAPIKeyScopesForRequest(t *testing.T) {
 		{method: http.MethodGet, path: "/api/v1/services", want: []string{models.APIKeyScopeRead}},
 		{method: http.MethodPost, path: "/api/v1/services", want: []string{models.APIKeyScopeWrite}},
 		{method: http.MethodPost, path: "/api/v1/services/abc/deploys", want: []string{models.APIKeyScopeDeploy}},
+		{method: http.MethodPost, path: "/api/v1/services/bulk-deploy", want: []string{models.APIKeyScopeDeploy}},
+		{method: http.MethodPost, path: "/api/v1/services/bulk-restart", want: []string{models.APIKeyScopeDeploy}},
+		{method: http.MethodPost, path: "/api/v1/services/bulk-update", want: []string{models.APIKeyScopeWrite}},
+		{method: http.MethodPost, path: "/api/v1/services/bulk-set-env", want: []string{models.APIKeyScopeWrite}},
+		{method: http.MethodPost, path: "/api/v1/databases/bulk-update", want: []string{models.APIKeyScopeWrite}},
 		{method: http.MethodGet, path: "/api/v1/ops/tickets", want: []string{models.APIKeyScopeOps}},
 		{method: http.MethodPost, path: "/api/v1/auth/api-keys", want: []string{models.APIKeyScopeAdmin}},
 		{method: http.MethodGet, path: "/api/v1/billing", want: []string{models.APIKeyScopeBilling, models.APIKeyScopeRead}},
@@ -96,5 +101,28 @@ func TestRequiredAPIKeyScopesForRequest(t *testing.T) {
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Fatalf("requiredAPIKeyScopesForRequest(%s %s): got %v want %v", tc.method, tc.path, got, tc.want)
 		}
+	}
+}
+
+func TestIsClientIPAllowedByCIDRs(t *testing.T) {
+	tests := []struct {
+		name    string
+		client  string
+		allowed []string
+		want    bool
+	}{
+		{name: "single ipv4 cidr", client: "203.0.113.10", allowed: []string{"203.0.113.10/32"}, want: true},
+		{name: "in subnet", client: "10.0.1.23", allowed: []string{"10.0.0.0/8"}, want: true},
+		{name: "not in subnet", client: "192.168.1.10", allowed: []string{"10.0.0.0/8"}, want: false},
+		{name: "single ipv6", client: "2001:db8::1", allowed: []string{"2001:db8::/64"}, want: true},
+		{name: "ignores invalid entry", client: "10.0.0.1", allowed: []string{"not-a-cidr"}, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isClientIPAllowedByCIDRs(tc.client, tc.allowed); got != tc.want {
+				t.Fatalf("isClientIPAllowedByCIDRs(%q, %v)=%v want %v", tc.client, tc.allowed, got, tc.want)
+			}
+		})
 	}
 }

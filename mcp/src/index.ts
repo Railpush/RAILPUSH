@@ -190,7 +190,7 @@ server.tool(
 
 server.tool(
   "list_services",
-  "List services in the workspace with optional server-side filters (type/status/runtime/plan/name/repo/project/query/suspended).",
+  "List services in the workspace with optional server-side filters (type/status/runtime/plan/name/repo/project/query/suspended). Supports cursor pagination via limit/cursor.",
   {
     workspace_id: z.string().optional().describe("Workspace ID (uses default if omitted)"),
     type: z.enum(["web", "worker", "cron", "static", "pserv"]).optional().describe("Filter by service type"),
@@ -202,8 +202,10 @@ server.tool(
     project_id: z.string().optional().describe("Filter by project ID"),
     query: z.string().optional().describe("Generic search over service name/repo/runtime/type/branch"),
     suspended: z.boolean().optional().describe("Filter by suspension state"),
+    limit: z.number().int().positive().max(100).optional().describe("Page size for cursor pagination (max 100)"),
+    cursor: z.string().optional().describe("Opaque cursor returned by previous page"),
   },
-  async ({ workspace_id, type, status, runtime, plan, name, repo_url, project_id, query, suspended }) => {
+  async ({ workspace_id, type, status, runtime, plan, name, repo_url, project_id, query, suspended, limit, cursor }) => {
     try {
       return text(await client.listServices({
         workspace_id,
@@ -216,6 +218,8 @@ server.tool(
         project_id,
         query,
         suspended: suspended !== undefined ? String(suspended) : undefined,
+        limit,
+        cursor,
       }));
     }
     catch (e) { return err(e); }
@@ -371,7 +375,7 @@ server.tool(
 
 server.tool(
   "search_services",
-  "Search and filter services. All filters are optional and combined with AND. Name filter uses substring match.",
+  "Search and filter services. All filters are optional and combined with AND. Name filter uses substring match. Supports cursor pagination via limit/cursor.",
   {
     workspace_id: z.string().optional().describe("Workspace ID (uses default if omitted)"),
     type: z.enum(["web", "worker", "cron", "static", "pserv"]).optional().describe("Filter by service type"),
@@ -383,8 +387,10 @@ server.tool(
     project_id: z.string().optional().describe("Filter by project ID"),
     query: z.string().optional().describe("Generic search across service name/repo/runtime/type/branch"),
     suspended: z.boolean().optional().describe("Filter by suspension state"),
+    limit: z.number().int().positive().max(100).optional().describe("Page size for cursor pagination (max 100)"),
+    cursor: z.string().optional().describe("Opaque cursor returned by previous page"),
   },
-  async ({ workspace_id, type, status, runtime, plan, name, repo_url, project_id, query, suspended }) => {
+  async ({ workspace_id, type, status, runtime, plan, name, repo_url, project_id, query, suspended, limit, cursor }) => {
     try {
       return text(await client.searchServices({
         workspace_id,
@@ -397,6 +403,8 @@ server.tool(
         project_id,
         query,
         suspended: suspended !== undefined ? String(suspended) : undefined,
+        limit,
+        cursor,
       }));
     }
     catch (e) { return err(e); }
@@ -413,6 +421,58 @@ server.tool(
   },
   async ({ q, workspace_id, limit }) => {
     try { return text(await client.searchWorkspaceResources({ q, workspace_id, limit })); }
+    catch (e) { return err(e); }
+  },
+);
+
+// ════════════════════════════════════════════════════════════════════════
+//  RELATIONSHIPS / TOPOLOGY
+// ════════════════════════════════════════════════════════════════════════
+
+server.tool(
+  "get_workspace_topology",
+  "Return a dependency graph for a workspace (nodes + edges) covering services, databases, and key-value stores.",
+  {
+    workspace_id: z.string().optional().describe("Workspace ID (uses default if omitted)"),
+  },
+  async ({ workspace_id }) => {
+    try { return text(await client.getWorkspaceTopology(workspace_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_service_dependencies",
+  "Return databases, key-value stores, and services a service depends on (detected via explicit links and env-var references).",
+  {
+    service_id: z.string().describe("Service ID"),
+  },
+  async ({ service_id }) => {
+    try { return text(await client.getServiceDependencies(service_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_database_connected_services",
+  "List services connected to a database, including the env var / link source used to detect each connection.",
+  {
+    database_id: z.string().describe("Database ID"),
+  },
+  async ({ database_id }) => {
+    try { return text(await client.getDatabaseConnectedServices(database_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_database_impact",
+  "Estimate blast radius for a database by listing affected services if that database becomes unavailable.",
+  {
+    database_id: z.string().describe("Database ID"),
+  },
+  async ({ database_id }) => {
+    try { return text(await client.getDatabaseImpact(database_id)); }
     catch (e) { return err(e); }
   },
 );
@@ -443,13 +503,22 @@ server.tool(
       schedule: z.string().optional(),
       max_shutdown_delay: z.number().optional(),
     }).passthrough().describe("Partial update payload applied to each service"),
+    dry_run: z.boolean().optional().describe("Validate only; do not apply changes"),
+    transaction_mode: z.enum(["best_effort", "all_or_nothing"]).optional().describe("best_effort (default) or all_or_nothing preflight"),
+    transactional: z.boolean().optional().describe("Alias for transaction_mode=all_or_nothing when true"),
   },
-  async ({ service_ids, changes }) => {
+  async ({ service_ids, changes, dry_run, transaction_mode, transactional }) => {
     const payload = { ...changes } as Record<string, unknown>;
     if (typeof payload.build_context === "string" && !payload.docker_context) {
       payload.docker_context = payload.build_context;
     }
-    return text(await client.bulkUpdateServices({ ids: service_ids, changes: payload }));
+    return text(await client.bulkUpdateServices({
+      ids: service_ids,
+      changes: payload,
+      dry_run,
+      transaction_mode,
+      transactional,
+    }));
   },
 );
 
@@ -458,9 +527,19 @@ server.tool(
   "Restart multiple services at once. Returns results for each service.",
   {
     service_ids: z.array(z.string()).describe("Array of service IDs to restart"),
+    dry_run: z.boolean().optional().describe("Validate only; do not restart services"),
+    transaction_mode: z.enum(["best_effort", "all_or_nothing"]).optional().describe("best_effort (default) or all_or_nothing preflight"),
+    transactional: z.boolean().optional().describe("Alias for transaction_mode=all_or_nothing when true"),
   },
-  async ({ service_ids }) => {
-    try { return text(await client.bulkRestartServices({ ids: service_ids })); }
+  async ({ service_ids, dry_run, transaction_mode, transactional }) => {
+    try {
+      return text(await client.bulkRestartServices({
+        ids: service_ids,
+        dry_run,
+        transaction_mode,
+        transactional,
+      }));
+    }
     catch (e) { return err(e); }
   },
 );
@@ -472,9 +551,21 @@ server.tool(
     service_ids: z.array(z.string()).describe("Array of service IDs to deploy"),
     commit_sha: z.string().optional().describe("Optional commit SHA to deploy across all selected services"),
     branch: z.string().optional().describe("Optional branch override to deploy across all selected services"),
+    dry_run: z.boolean().optional().describe("Validate only; do not create deploys"),
+    transaction_mode: z.enum(["best_effort", "all_or_nothing"]).optional().describe("best_effort (default) or all_or_nothing preflight"),
+    transactional: z.boolean().optional().describe("Alias for transaction_mode=all_or_nothing when true"),
   },
-  async ({ service_ids, commit_sha, branch }) => {
-    try { return text(await client.bulkDeployServices({ ids: service_ids, commit_sha, branch })); }
+  async ({ service_ids, commit_sha, branch, dry_run, transaction_mode, transactional }) => {
+    try {
+      return text(await client.bulkDeployServices({
+        ids: service_ids,
+        commit_sha,
+        branch,
+        dry_run,
+        transaction_mode,
+        transactional,
+      }));
+    }
     catch (e) { return err(e); }
   },
 );
@@ -492,8 +583,11 @@ server.tool(
     mode: z.enum(["merge", "replace"]).optional().describe("merge (default) or replace"),
     delete: z.array(z.string()).optional().describe("In merge mode, keys to delete"),
     confirm_destructive: z.boolean().optional().describe("Required for replace mode when existing keys would be removed"),
+    dry_run: z.boolean().optional().describe("Validate only; do not change env vars"),
+    transaction_mode: z.enum(["best_effort", "all_or_nothing"]).optional().describe("best_effort (default) or all_or_nothing preflight"),
+    transactional: z.boolean().optional().describe("Alias for transaction_mode=all_or_nothing when true"),
   },
-  async ({ service_ids, env_vars, mode, delete: deleteKeys, confirm_destructive }) => {
+  async ({ service_ids, env_vars, mode, delete: deleteKeys, confirm_destructive, dry_run, transaction_mode, transactional }) => {
     try {
       return text(await client.bulkSetServiceEnvVars({
         ids: service_ids,
@@ -501,6 +595,9 @@ server.tool(
         mode,
         delete: deleteKeys,
         confirm_destructive,
+        dry_run,
+        transaction_mode,
+        transactional,
       }));
     }
     catch (e) { return err(e); }
@@ -559,16 +656,18 @@ server.tool(
 
 server.tool(
   "list_deploys",
-  "List deploy history for a service with optional status/branch/time filtering.",
+  "List deploy history for a service with optional status/branch/time filtering. Supports cursor pagination via limit/cursor.",
   {
     service_id: z.string().describe("Service ID"),
     status: z.string().optional().describe("Filter by deploy status (e.g. pending, building, live, failed)"),
     branch: z.string().optional().describe("Filter by git branch"),
     since: z.string().optional().describe("Only include deploys at/after this RFC3339 timestamp"),
     until: z.string().optional().describe("Only include deploys at/before this RFC3339 timestamp"),
+    limit: z.number().int().positive().max(100).optional().describe("Page size for cursor pagination (max 100)"),
+    cursor: z.string().optional().describe("Opaque cursor returned by previous page"),
   },
-  async ({ service_id, status, branch, since, until }) => {
-    try { return text(await client.listDeploys(service_id, { status, branch, since, until })); }
+  async ({ service_id, status, branch, since, until, limit, cursor }) => {
+    try { return text(await client.listDeploys(service_id, { status, branch, since, until, limit, cursor })); }
     catch (e) { return err(e); }
   },
 );
@@ -846,10 +945,14 @@ server.tool(
 
 server.tool(
   "list_env_vars",
-  "List all environment variables for a service. Secret values are masked. Use this to check what env vars are configured.",
-  { service_id: z.string().describe("Service ID") },
-  async ({ service_id }) => {
-    try { return text(await client.listEnvVars(service_id)); }
+  "List environment variables for a service. Secret values are masked. Supports cursor pagination via limit/cursor.",
+  {
+    service_id: z.string().describe("Service ID"),
+    limit: z.number().int().positive().max(100).optional().describe("Page size for cursor pagination (max 100)"),
+    cursor: z.string().optional().describe("Opaque cursor returned by previous page"),
+  },
+  async ({ service_id, limit, cursor }) => {
+    try { return text(await client.listEnvVars(service_id, { limit, cursor })); }
     catch (e) { return err(e); }
   },
 );
@@ -935,10 +1038,14 @@ server.tool(
 
 server.tool(
   "list_custom_domains",
-  "List custom domains configured for a service.",
-  { service_id: z.string().describe("Service ID") },
-  async ({ service_id }) => {
-    try { return text(await client.listCustomDomains(service_id)); }
+  "List custom domains configured for a service. Supports cursor pagination via limit/cursor.",
+  {
+    service_id: z.string().describe("Service ID"),
+    limit: z.number().int().positive().max(100).optional().describe("Page size for cursor pagination (max 100)"),
+    cursor: z.string().optional().describe("Opaque cursor returned by previous page"),
+  },
+  async ({ service_id, limit, cursor }) => {
+    try { return text(await client.listCustomDomains(service_id, { limit, cursor })); }
     catch (e) { return err(e); }
   },
 );
@@ -1019,7 +1126,7 @@ server.tool(
 
 server.tool(
   "list_databases",
-  "List managed PostgreSQL databases in the workspace with optional server-side filters.",
+  "List managed PostgreSQL databases in the workspace with optional server-side filters. Supports cursor pagination via limit/cursor.",
   {
     workspace_id: z.string().optional().describe("Workspace ID"),
     plan: z.enum(["free", "starter", "standard", "pro"]).optional().describe("Filter by plan"),
@@ -1027,9 +1134,11 @@ server.tool(
     pg_version: z.number().optional().describe("Filter by PostgreSQL major version (e.g. 16)"),
     name: z.string().optional().describe("Filter by database name (substring match)"),
     query: z.string().optional().describe("Generic search over database name/host/status/plan"),
+    limit: z.number().int().positive().max(100).optional().describe("Page size for cursor pagination (max 100)"),
+    cursor: z.string().optional().describe("Opaque cursor returned by previous page"),
   },
-  async ({ workspace_id, plan, status, pg_version, name, query }) => {
-    try { return text(await client.listDatabases({ workspace_id, plan, status, pg_version, name, query })); }
+  async ({ workspace_id, plan, status, pg_version, name, query, limit, cursor }) => {
+    try { return text(await client.listDatabases({ workspace_id, plan, status, pg_version, name, query, limit, cursor })); }
     catch (e) { return err(e); }
   },
 );
@@ -1101,9 +1210,20 @@ server.tool(
     changes: z.object({
       plan: z.enum(["free", "starter", "standard", "pro"]).optional(),
     }).passthrough().describe("Partial database update payload applied to each database"),
+    dry_run: z.boolean().optional().describe("Validate only; do not apply changes"),
+    transaction_mode: z.enum(["best_effort", "all_or_nothing"]).optional().describe("best_effort (default) or all_or_nothing preflight"),
+    transactional: z.boolean().optional().describe("Alias for transaction_mode=all_or_nothing when true"),
   },
-  async ({ database_ids, changes }) => {
-    try { return text(await client.bulkUpdateDatabases({ ids: database_ids, changes })); }
+  async ({ database_ids, changes, dry_run, transaction_mode, transactional }) => {
+    try {
+      return text(await client.bulkUpdateDatabases({
+        ids: database_ids,
+        changes,
+        dry_run,
+        transaction_mode,
+        transactional,
+      }));
+    }
     catch (e) { return err(e); }
   },
 );
@@ -1150,10 +1270,14 @@ server.tool(
 
 server.tool(
   "list_backups",
-  "List all backups for a database.",
-  { database_id: z.string().describe("Database ID") },
-  async ({ database_id }) => {
-    try { return text(await client.listBackups(database_id)); }
+  "List backups for a database. Supports cursor pagination via limit/cursor.",
+  {
+    database_id: z.string().describe("Database ID"),
+    limit: z.number().int().positive().max(100).optional().describe("Page size for cursor pagination (max 100)"),
+    cursor: z.string().optional().describe("Opaque cursor returned by previous page"),
+  },
+  async ({ database_id, limit, cursor }) => {
+    try { return text(await client.listBackups(database_id, { limit, cursor })); }
     catch (e) { return err(e); }
   },
 );
@@ -1211,16 +1335,18 @@ server.tool(
 
 server.tool(
   "list_key_value_stores",
-  "List managed Redis/key-value stores in the workspace with optional server-side filters.",
+  "List managed Redis/key-value stores in the workspace with optional server-side filters. Supports cursor pagination via limit/cursor.",
   {
     workspace_id: z.string().optional().describe("Workspace ID"),
     plan: z.enum(["free", "starter", "standard", "pro"]).optional().describe("Filter by plan"),
     status: z.string().optional().describe("Filter by status (e.g. available, creating, failed)"),
     name: z.string().optional().describe("Filter by store name (substring match)"),
     query: z.string().optional().describe("Generic search over store name/host/status/plan/policy"),
+    limit: z.number().int().positive().max(100).optional().describe("Page size for cursor pagination (max 100)"),
+    cursor: z.string().optional().describe("Opaque cursor returned by previous page"),
   },
-  async ({ workspace_id, plan, status, name, query }) => {
-    try { return text(await client.listKeyValues({ workspace_id, plan, status, name, query })); }
+  async ({ workspace_id, plan, status, name, query, limit, cursor }) => {
+    try { return text(await client.listKeyValues({ workspace_id, plan, status, name, query, limit, cursor })); }
     catch (e) { return err(e); }
   },
 );
@@ -1387,19 +1513,31 @@ server.tool(
     service_id: z.string().describe("Service ID"),
     command: z.string().describe("Shell command to execute"),
     name: z.string().optional().describe("Job name (default: 'One-off command')"),
+    acknowledge_risky_command: z.boolean().optional().describe("Acknowledge a risky command so it can run"),
+    reason: z.string().optional().describe("Reason for executing a risky command"),
   },
-  async ({ service_id, command, name }) => {
-    try { return text(await client.runJob(service_id, command, name)); }
+  async ({ service_id, command, name, acknowledge_risky_command, reason }) => {
+    try {
+      return text(await client.runJob(service_id, command, {
+        name,
+        acknowledge_risky_command,
+        reason,
+      }));
+    }
     catch (e) { return err(e); }
   },
 );
 
 server.tool(
   "list_jobs",
-  "List one-off jobs that have been run against a service.",
-  { service_id: z.string().describe("Service ID") },
-  async ({ service_id }) => {
-    try { return text(await client.listJobs(service_id)); }
+  "List one-off jobs that have been run against a service. Supports cursor pagination via limit/cursor.",
+  {
+    service_id: z.string().describe("Service ID"),
+    limit: z.number().int().positive().max(100).optional().describe("Page size for cursor pagination (max 100)"),
+    cursor: z.string().optional().describe("Opaque cursor returned by previous page"),
+  },
+  async ({ service_id, limit, cursor }) => {
+    try { return text(await client.listJobs(service_id, { limit, cursor })); }
     catch (e) { return err(e); }
   },
 );
@@ -1639,10 +1777,18 @@ server.tool(
 
 server.tool(
   "list_env_group_linked_services",
-  "List services linked to an env group.",
-  { group_id: z.string().describe("Env group ID") },
-  async ({ group_id }) => {
-    try { return text(await client.listEnvGroupLinkedServices(group_id)); }
+  "List services linked to an env group. Set include_usage=true to return used/missing key details per linked service.",
+  {
+    group_id: z.string().describe("Env group ID"),
+    include_usage: z.boolean().optional().describe("Include per-service used_keys/missing_keys details"),
+  },
+  async ({ group_id, include_usage }) => {
+    try {
+      if (include_usage) {
+        return text(await client.listEnvGroupLinkedServicesDetailed(group_id));
+      }
+      return text(await client.listEnvGroupLinkedServices(group_id));
+    }
     catch (e) { return err(e); }
   },
 );
@@ -2397,10 +2543,14 @@ server.tool(
 
 server.tool(
   "list_audit_logs",
-  "List audit logs for a workspace. Shows who did what and when — service creates, deploys, config changes, member adds, etc.",
-  { workspace_id: z.string().describe("Workspace ID") },
-  async ({ workspace_id }) => {
-    try { return text(await client.listAuditLogs(workspace_id)); }
+  "List audit logs for a workspace. Shows who did what and when — service creates, deploys, config changes, member adds, etc. Supports cursor pagination via limit/cursor.",
+  {
+    workspace_id: z.string().describe("Workspace ID"),
+    limit: z.number().int().positive().max(100).optional().describe("Page size for cursor pagination (max 100)"),
+    cursor: z.string().optional().describe("Opaque cursor returned by previous page"),
+  },
+  async ({ workspace_id, limit, cursor }) => {
+    try { return text(await client.listAuditLogs(workspace_id, { limit, cursor })); }
     catch (e) { return err(e); }
   },
 );

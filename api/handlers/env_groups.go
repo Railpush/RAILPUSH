@@ -338,5 +338,74 @@ func (h *EnvGroupHandler) ListLinkedServices(w http.ResponseWriter, r *http.Requ
 	if serviceIDs == nil {
 		serviceIDs = []string{}
 	}
-	utils.RespondJSON(w, http.StatusOK, serviceIDs)
+	includeUsage := false
+	includeUsageRaw := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("include_usage")))
+	if includeUsageRaw == "1" || includeUsageRaw == "true" || includeUsageRaw == "yes" {
+		includeUsage = true
+	}
+	if !includeUsage {
+		utils.RespondJSON(w, http.StatusOK, serviceIDs)
+		return
+	}
+
+	groupVars, err := models.ListEnvVars("env_group", id)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to inspect env group vars")
+		return
+	}
+	groupKeys := make([]string, 0, len(groupVars))
+	groupKeySet := map[string]struct{}{}
+	for _, v := range groupVars {
+		k := strings.TrimSpace(v.Key)
+		if k == "" {
+			continue
+		}
+		if _, exists := groupKeySet[k]; exists {
+			continue
+		}
+		groupKeySet[k] = struct{}{}
+		groupKeys = append(groupKeys, k)
+	}
+
+	out := make([]map[string]interface{}, 0, len(serviceIDs))
+	for _, serviceID := range serviceIDs {
+		serviceName := ""
+		if svc, err := models.GetService(serviceID); err == nil && svc != nil {
+			serviceName = svc.Name
+		}
+		svcVars, err := models.ListEnvVars("service", serviceID)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to inspect linked service env vars")
+			return
+		}
+		svcKeySet := map[string]struct{}{}
+		for _, v := range svcVars {
+			k := strings.TrimSpace(v.Key)
+			if k != "" {
+				svcKeySet[k] = struct{}{}
+			}
+		}
+		usedKeys := make([]string, 0, len(groupKeys))
+		missingKeys := make([]string, 0, len(groupKeys))
+		for _, key := range groupKeys {
+			if _, exists := svcKeySet[key]; exists {
+				usedKeys = append(usedKeys, key)
+			} else {
+				missingKeys = append(missingKeys, key)
+			}
+		}
+		out = append(out, map[string]interface{}{
+			"service_id":    serviceID,
+			"service_name":  serviceName,
+			"used_keys":     usedKeys,
+			"missing_keys":  missingKeys,
+			"group_key_count": len(groupKeys),
+		})
+	}
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"service_ids":     serviceIDs,
+		"group_keys":      groupKeys,
+		"linked_services": out,
+	})
+	return
 }

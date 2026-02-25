@@ -296,6 +296,11 @@ func (h *DomainHandler) ListCustomDomains(w http.ResponseWriter, r *http.Request
 		utils.RespondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
+	pagination, err := parseCursorPagination(r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	domains, err := models.ListCustomDomains(serviceID)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to list domains")
@@ -367,7 +372,15 @@ func (h *DomainHandler) ListCustomDomains(w http.ResponseWriter, r *http.Request
 		})
 	}
 
-	utils.RespondJSON(w, http.StatusOK, resp)
+	paged, pageMeta := paginateSlice(resp, pagination)
+	if pageMeta != nil {
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"data":       paged,
+			"pagination": pageMeta,
+		})
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, paged)
 }
 
 func (h *DomainHandler) VerifyCustomDomain(w http.ResponseWriter, r *http.Request) {

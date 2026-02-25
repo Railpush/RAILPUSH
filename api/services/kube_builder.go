@@ -851,11 +851,13 @@ func (k *KubeDeployer) appendJobLogs(namespace string, jobName string, appendLog
 		return err
 	}
 	if len(pods.Items) == 0 {
+		appendLog("==> Build diagnostics: no pod found for build job")
 		return nil
 	}
 	podName := pods.Items[0].Name
 
 	// Best-effort logs from init + main containers.
+	hasLogs := false
 	for _, c := range []string{"clone", "kaniko"} {
 		logs, err := k.Client.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
 			Container: c,
@@ -863,6 +865,7 @@ func (k *KubeDeployer) appendJobLogs(namespace string, jobName string, appendLog
 		if err != nil || len(logs) == 0 {
 			continue
 		}
+		hasLogs = true
 		appendLog(fmt.Sprintf("==> [%s] logs:", c))
 		for _, line := range strings.Split(string(logs), "\n") {
 			line = strings.TrimSpace(line)
@@ -870,6 +873,89 @@ func (k *KubeDeployer) appendJobLogs(namespace string, jobName string, appendLog
 				continue
 			}
 			appendLog("    " + line)
+		}
+	}
+	if hasLogs {
+		return nil
+	}
+
+	appendLog("==> Build diagnostics: clone/kaniko produced no log output")
+	pod := pods.Items[0]
+	appendLog(fmt.Sprintf("build pod: %s phase=%s", pod.Name, pod.Status.Phase))
+	if reason := strings.TrimSpace(pod.Status.Reason); reason != "" {
+		appendLog("build pod reason: " + reason)
+	}
+	if msg := strings.TrimSpace(pod.Status.Message); msg != "" {
+		appendLog("build pod message: " + msg)
+	}
+
+	appendContainerState := func(prefix string, status corev1.ContainerStatus) {
+		name := strings.TrimSpace(status.Name)
+		if name == "" {
+			name = "unknown"
+		}
+		if status.State.Waiting != nil {
+			line := fmt.Sprintf("%s container %s waiting: %s", prefix, name, status.State.Waiting.Reason)
+			if msg := strings.TrimSpace(status.State.Waiting.Message); msg != "" {
+				line += " - " + msg
+			}
+			appendLog(line)
+		}
+		if status.State.Terminated != nil {
+			line := fmt.Sprintf("%s container %s terminated: reason=%s exit=%d", prefix, name, status.State.Terminated.Reason, status.State.Terminated.ExitCode)
+			if msg := strings.TrimSpace(status.State.Terminated.Message); msg != "" {
+				line += " - " + msg
+			}
+			appendLog(line)
+		}
+		if status.LastTerminationState.Terminated != nil {
+			line := fmt.Sprintf("%s container %s last termination: reason=%s exit=%d", prefix, name, status.LastTerminationState.Terminated.Reason, status.LastTerminationState.Terminated.ExitCode)
+			if msg := strings.TrimSpace(status.LastTerminationState.Terminated.Message); msg != "" {
+				line += " - " + msg
+			}
+			appendLog(line)
+		}
+	}
+
+	for _, st := range pod.Status.InitContainerStatuses {
+		appendContainerState("build init", st)
+	}
+	for _, st := range pod.Status.ContainerStatuses {
+		appendContainerState("build", st)
+	}
+
+	events, err := k.Client.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+		FieldSelector: fmt.Sprintf("involvedObject.kind=Pod,involvedObject.name=%s", pod.Name),
+	})
+	if err == nil {
+		count := 0
+		for _, ev := range events.Items {
+			msg := strings.TrimSpace(ev.Message)
+			if msg == "" {
+				continue
+			}
+			appendLog(fmt.Sprintf("build event: %s - %s", strings.TrimSpace(ev.Reason), msg))
+			count++
+			if count >= 10 {
+				break
+			}
+		}
+	}
+
+	if job, err := k.Client.BatchV1().Jobs(namespace).Get(ctx, jobName, metav1.GetOptions{}); err == nil {
+		appendLog(fmt.Sprintf("build job status: active=%d succeeded=%d failed=%d", job.Status.Active, job.Status.Succeeded, job.Status.Failed))
+		for _, cond := range job.Status.Conditions {
+			if cond.Status != corev1.ConditionTrue {
+				continue
+			}
+			line := fmt.Sprintf("build job condition: %s", cond.Type)
+			if reason := strings.TrimSpace(cond.Reason); reason != "" {
+				line += " reason=" + reason
+			}
+			if msg := strings.TrimSpace(cond.Message); msg != "" {
+				line += " - " + msg
+			}
+			appendLog(line)
 		}
 	}
 	return nil

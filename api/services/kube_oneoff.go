@@ -434,22 +434,102 @@ func (k *KubeDeployer) appendPredeployLogs(namespace string, jobName string, app
 	pods, err := k.Client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "job-name=" + jobName,
 	})
-	if err != nil || len(pods.Items) == 0 {
+	if err != nil {
+		appendLog(fmt.Sprintf("==> Pre-deploy diagnostics: failed to list job pod: %v", err))
+		return
+	}
+	if len(pods.Items) == 0 {
+		appendLog("==> Pre-deploy diagnostics: no pod found for pre-deploy job")
 		return
 	}
 	podName := pods.Items[0].Name
-	logs, err := k.Client.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
+
+	raw, err := k.Client.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
 		Container: "predeploy",
 	}).DoRaw(ctx)
-	if err != nil || len(logs) == 0 {
+	if err == nil && len(raw) > 0 {
+		const maxLines = 300
+		const maxBytes = 64 * 1024
+		lines := 0
+		bytes := 0
+		for _, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			entry := "[predeploy] " + line
+			if lines >= maxLines || bytes+len(entry)+1 > maxBytes {
+				appendLog("==> Pre-deploy logs truncated (output too large)")
+				break
+			}
+			appendLog(entry)
+			lines++
+			bytes += len(entry) + 1
+		}
 		return
 	}
-	for _, line := range strings.Split(string(logs), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+
+	appendLog("==> Pre-deploy diagnostics: no command output captured")
+	pod := pods.Items[0]
+	appendLog(fmt.Sprintf("predeploy pod: %s phase=%s", pod.Name, pod.Status.Phase))
+	if reason := strings.TrimSpace(pod.Status.Reason); reason != "" {
+		appendLog("predeploy pod reason: " + reason)
+	}
+	if msg := strings.TrimSpace(pod.Status.Message); msg != "" {
+		appendLog("predeploy pod message: " + msg)
+	}
+
+	appendContainerState := func(prefix string, status corev1.ContainerStatus) {
+		name := strings.TrimSpace(status.Name)
+		if name == "" {
+			name = "unknown"
 		}
-		appendLog("    " + line)
+		if status.State.Waiting != nil {
+			line := fmt.Sprintf("%s container %s waiting: %s", prefix, name, status.State.Waiting.Reason)
+			if msg := strings.TrimSpace(status.State.Waiting.Message); msg != "" {
+				line += " - " + msg
+			}
+			appendLog(line)
+		}
+		if status.State.Terminated != nil {
+			line := fmt.Sprintf("%s container %s terminated: reason=%s exit=%d", prefix, name, status.State.Terminated.Reason, status.State.Terminated.ExitCode)
+			if msg := strings.TrimSpace(status.State.Terminated.Message); msg != "" {
+				line += " - " + msg
+			}
+			appendLog(line)
+		}
+		if status.LastTerminationState.Terminated != nil {
+			line := fmt.Sprintf("%s container %s last termination: reason=%s exit=%d", prefix, name, status.LastTerminationState.Terminated.Reason, status.LastTerminationState.Terminated.ExitCode)
+			if msg := strings.TrimSpace(status.LastTerminationState.Terminated.Message); msg != "" {
+				line += " - " + msg
+			}
+			appendLog(line)
+		}
+	}
+
+	for _, st := range pod.Status.InitContainerStatuses {
+		appendContainerState("predeploy init", st)
+	}
+	for _, st := range pod.Status.ContainerStatuses {
+		appendContainerState("predeploy", st)
+	}
+
+	events, err := k.Client.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+		FieldSelector: fmt.Sprintf("involvedObject.kind=Pod,involvedObject.name=%s", pod.Name),
+	})
+	if err == nil {
+		count := 0
+		for _, ev := range events.Items {
+			msg := strings.TrimSpace(ev.Message)
+			if msg == "" {
+				continue
+			}
+			appendLog(fmt.Sprintf("predeploy event: %s - %s", strings.TrimSpace(ev.Reason), msg))
+			count++
+			if count >= 8 {
+				break
+			}
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -444,9 +445,10 @@ func (h *AuthHandler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r)
 	var req struct {
-		Name      string     `json:"name"`
-		Scopes    []string   `json:"scopes"`
-		ExpiresAt *time.Time `json:"expires_at"`
+		Name         string     `json:"name"`
+		Scopes       []string   `json:"scopes"`
+		AllowedCIDRs []string   `json:"allowed_cidrs"`
+		ExpiresAt    *time.Time `json:"expires_at"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
@@ -461,6 +463,11 @@ func (h *AuthHandler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	allowedCIDRs, err := models.NormalizeAndValidateCIDRAllowlist(req.AllowedCIDRs)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	rawKey, err := utils.GenerateRandomString(32)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to generate key")
@@ -471,17 +478,44 @@ func (h *AuthHandler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to hash key")
 		return
 	}
-	key := &models.APIKey{UserID: userID, Name: req.Name, KeyHash: hash, Scopes: scopes, ExpiresAt: req.ExpiresAt}
+	key := &models.APIKey{UserID: userID, Name: req.Name, KeyHash: hash, Scopes: scopes, AllowedCIDRs: allowedCIDRs, ExpiresAt: req.ExpiresAt}
 	if err := models.CreateAPIKey(key); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to create api key")
 		return
 	}
 	utils.RespondJSON(w, http.StatusCreated, map[string]interface{}{
-		"id":         key.ID,
-		"key":        rawKey,
-		"name":       key.Name,
-		"scopes":     key.Scopes,
-		"expires_at": key.ExpiresAt,
+		"id":            key.ID,
+		"key":           rawKey,
+		"name":          key.Name,
+		"scopes":        key.Scopes,
+		"allowed_cidrs": key.AllowedCIDRs,
+		"expires_at":    key.ExpiresAt,
+	})
+}
+
+func (h *AuthHandler) UpdateAPIKeyAllowlist(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	keyID := mux.Vars(r)["id"]
+	var req struct {
+		AllowedCIDRs []string `json:"allowed_cidrs"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := models.UpdateAPIKeyAllowedCIDRs(keyID, userID, req.AllowedCIDRs); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			utils.RespondError(w, http.StatusNotFound, "api key not found")
+			return
+		}
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	normalized, _ := models.NormalizeAndValidateCIDRAllowlist(req.AllowedCIDRs)
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"id":            keyID,
+		"allowed_cidrs": normalized,
+		"status":        "updated",
 	})
 }
 

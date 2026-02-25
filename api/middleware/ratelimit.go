@@ -200,6 +200,12 @@ func clientIPString(r *http.Request) string {
 	return strings.TrimSpace(r.RemoteAddr)
 }
 
+// ClientIPString returns the normalized client IP, honoring trusted proxy
+// headers in the same way as the rate limiter.
+func ClientIPString(r *http.Request) string {
+	return clientIPString(r)
+}
+
 func init() {
 	reloadTrustedProxyCIDRsFromEnv()
 	go generalLimiter.cleanup()

@@ -134,6 +134,8 @@ export class RailPushClient {
     project_id?: string;
     query?: string;
     suspended?: string;
+    limit?: number;
+    cursor?: string;
   }) {
     return this.searchServices(filters ?? {});
   }
@@ -149,6 +151,8 @@ export class RailPushClient {
     project_id?: string;
     query?: string;
     suspended?: string;
+    limit?: number;
+    cursor?: string;
   }) {
     const query: Record<string, string> = {};
     if (filters.workspace_id) query.workspace_id = filters.workspace_id;
@@ -161,6 +165,8 @@ export class RailPushClient {
     if (filters.project_id) query.project_id = filters.project_id;
     if (filters.query) query.query = filters.query;
     if (filters.suspended) query.suspended = filters.suspended;
+    if (typeof filters.limit === "number" && filters.limit > 0) query.limit = String(filters.limit);
+    if (filters.cursor) query.cursor = filters.cursor;
     return this.request("GET", "/services", undefined, query);
   }
 
@@ -196,15 +202,33 @@ export class RailPushClient {
     return this.request("POST", `/services/${id}/resume`);
   }
 
-  async bulkUpdateServices(data: { ids: string[]; changes: Record<string, unknown> }) {
+  async bulkUpdateServices(data: {
+    ids: string[];
+    changes: Record<string, unknown>;
+    dry_run?: boolean;
+    transaction_mode?: "best_effort" | "all_or_nothing";
+    transactional?: boolean;
+  }) {
     return this.request("POST", "/services/bulk-update", data);
   }
 
-  async bulkDeployServices(data: { ids: string[]; commit_sha?: string; branch?: string }) {
+  async bulkDeployServices(data: {
+    ids: string[];
+    commit_sha?: string;
+    branch?: string;
+    dry_run?: boolean;
+    transaction_mode?: "best_effort" | "all_or_nothing";
+    transactional?: boolean;
+  }) {
     return this.request("POST", "/services/bulk-deploy", data);
   }
 
-  async bulkRestartServices(data: { ids: string[] }) {
+  async bulkRestartServices(data: {
+    ids: string[];
+    dry_run?: boolean;
+    transaction_mode?: "best_effort" | "all_or_nothing";
+    transactional?: boolean;
+  }) {
     return this.request("POST", "/services/bulk-restart", data);
   }
 
@@ -214,6 +238,9 @@ export class RailPushClient {
     mode?: "merge" | "replace";
     delete?: string[];
     confirm_destructive?: boolean;
+    dry_run?: boolean;
+    transaction_mode?: "best_effort" | "all_or_nothing";
+    transactional?: boolean;
   }) {
     return this.request("POST", "/services/bulk-set-env", data);
   }
@@ -224,12 +251,14 @@ export class RailPushClient {
     return this.request("POST", `/services/${serviceId}/deploys`, data ?? {});
   }
 
-  async listDeploys(serviceId: string, opts?: { status?: string; branch?: string; since?: string; until?: string }) {
+  async listDeploys(serviceId: string, opts?: { status?: string; branch?: string; since?: string; until?: string; limit?: number; cursor?: string }) {
     const query: Record<string, string> = {};
     if (opts?.status) query.status = opts.status;
     if (opts?.branch) query.branch = opts.branch;
     if (opts?.since) query.since = opts.since;
     if (opts?.until) query.until = opts.until;
+    if (typeof opts?.limit === "number" && opts.limit > 0) query.limit = String(opts.limit);
+    if (opts?.cursor) query.cursor = opts.cursor;
     return this.request("GET", `/services/${serviceId}/deploys`, undefined, query);
   }
 
@@ -255,8 +284,11 @@ export class RailPushClient {
 
   // ── Environment Variables ────────────────────────────────────────────
 
-  async listEnvVars(serviceId: string) {
-    return this.request("GET", `/services/${serviceId}/env-vars`);
+  async listEnvVars(serviceId: string, opts?: { limit?: number; cursor?: string }) {
+    const query: Record<string, string> = {};
+    if (typeof opts?.limit === "number" && opts.limit > 0) query.limit = String(opts.limit);
+    if (opts?.cursor) query.cursor = opts.cursor;
+    return this.request("GET", `/services/${serviceId}/env-vars`, undefined, query);
   }
 
   async bulkUpdateEnvVars(
@@ -294,8 +326,11 @@ export class RailPushClient {
 
   // ── Custom Domains ───────────────────────────────────────────────────
 
-  async listCustomDomains(serviceId: string) {
-    return this.request("GET", `/services/${serviceId}/custom-domains`);
+  async listCustomDomains(serviceId: string, opts?: { limit?: number; cursor?: string }) {
+    const query: Record<string, string> = {};
+    if (typeof opts?.limit === "number" && opts.limit > 0) query.limit = String(opts.limit);
+    if (opts?.cursor) query.cursor = opts.cursor;
+    return this.request("GET", `/services/${serviceId}/custom-domains`, undefined, query);
   }
 
   async addCustomDomain(serviceId: string, domain: string, redirectTarget?: string) {
@@ -336,6 +371,8 @@ export class RailPushClient {
     pg_version?: number;
     name?: string;
     query?: string;
+    limit?: number;
+    cursor?: string;
   }) {
     const query: Record<string, string> = {};
     if (filters?.workspace_id) query.workspace_id = filters.workspace_id;
@@ -344,6 +381,8 @@ export class RailPushClient {
     if (typeof filters?.pg_version === "number") query.pg_version = String(filters.pg_version);
     if (filters?.name) query.name = filters.name;
     if (filters?.query) query.query = filters.query;
+    if (typeof filters?.limit === "number" && filters.limit > 0) query.limit = String(filters.limit);
+    if (filters?.cursor) query.cursor = filters.cursor;
     return this.request("GET", "/databases", undefined, query);
   }
 
@@ -365,7 +404,13 @@ export class RailPushClient {
     return this.request("PATCH", `/databases/${id}`, data);
   }
 
-  async bulkUpdateDatabases(data: { ids: string[]; changes: Record<string, unknown> }) {
+  async bulkUpdateDatabases(data: {
+    ids: string[];
+    changes: Record<string, unknown>;
+    dry_run?: boolean;
+    transaction_mode?: "best_effort" | "all_or_nothing";
+    transactional?: boolean;
+  }) {
     return this.request("POST", "/databases/bulk-update", data);
   }
 
@@ -381,8 +426,19 @@ export class RailPushClient {
     return this.request("POST", `/databases/${dbId}/backups`);
   }
 
-  async listBackups(dbId: string) {
-    return this.request("GET", `/databases/${dbId}/backups`);
+  async listBackups(dbId: string, opts?: { limit?: number; cursor?: string }) {
+    const query: Record<string, string> = {};
+    if (typeof opts?.limit === "number" && opts.limit > 0) query.limit = String(opts.limit);
+    if (opts?.cursor) query.cursor = opts.cursor;
+    return this.request("GET", `/databases/${dbId}/backups`, undefined, query);
+  }
+
+  async getDatabaseConnectedServices(dbId: string) {
+    return this.request("GET", `/databases/${dbId}/connected-services`);
+  }
+
+  async getDatabaseImpact(dbId: string) {
+    return this.request("GET", `/databases/${dbId}/impact`);
   }
 
   async listReplicas(dbId: string) {
@@ -409,6 +465,8 @@ export class RailPushClient {
     status?: string;
     name?: string;
     query?: string;
+    limit?: number;
+    cursor?: string;
   }) {
     const query: Record<string, string> = {};
     if (filters?.workspace_id) query.workspace_id = filters.workspace_id;
@@ -416,6 +474,8 @@ export class RailPushClient {
     if (filters?.status) query.status = filters.status;
     if (filters?.name) query.name = filters.name;
     if (filters?.query) query.query = filters.query;
+    if (typeof filters?.limit === "number" && filters.limit > 0) query.limit = String(filters.limit);
+    if (filters?.cursor) query.cursor = filters.cursor;
     return this.request("GET", "/keyvalue", undefined, query);
   }
 
@@ -479,12 +539,24 @@ export class RailPushClient {
 
   // ── One-Off Jobs ─────────────────────────────────────────────────────
 
-  async runJob(serviceId: string, command: string, name?: string) {
-    return this.request("POST", `/services/${serviceId}/jobs`, { command, name });
+  async runJob(serviceId: string, command: string, opts?: {
+    name?: string;
+    acknowledge_risky_command?: boolean;
+    reason?: string;
+  }) {
+    return this.request("POST", `/services/${serviceId}/jobs`, {
+      command,
+      name: opts?.name,
+      acknowledge_risky_command: opts?.acknowledge_risky_command,
+      reason: opts?.reason,
+    });
   }
 
-  async listJobs(serviceId: string) {
-    return this.request("GET", `/services/${serviceId}/jobs`);
+  async listJobs(serviceId: string, opts?: { limit?: number; cursor?: string }) {
+    const query: Record<string, string> = {};
+    if (typeof opts?.limit === "number" && opts.limit > 0) query.limit = String(opts.limit);
+    if (opts?.cursor) query.cursor = opts.cursor;
+    return this.request("GET", `/services/${serviceId}/jobs`, undefined, query);
   }
 
   async getJob(jobId: string) {
@@ -567,6 +639,21 @@ export class RailPushClient {
 
   async listEnvGroupLinkedServices(groupId: string) {
     return this.request("GET", `/env-groups/${groupId}/services`);
+  }
+
+  async listEnvGroupLinkedServicesDetailed(groupId: string) {
+    return this.request("GET", `/env-groups/${groupId}/services`, undefined, { include_usage: "true" });
+  }
+
+  async getServiceDependencies(serviceId: string) {
+    return this.request("GET", `/services/${serviceId}/dependencies`);
+  }
+
+  async getWorkspaceTopology(workspaceId?: string) {
+    if (workspaceId) {
+      return this.request("GET", `/workspaces/${workspaceId}/topology`);
+    }
+    return this.request("GET", "/workspace/topology");
   }
 
   // ── Metrics ──────────────────────────────────────────────────────────
@@ -809,8 +896,11 @@ export class RailPushClient {
     return this.request("DELETE", `/workspaces/${workspaceId}/members/${userId}`);
   }
 
-  async listAuditLogs(workspaceId: string) {
-    return this.request("GET", `/workspaces/${workspaceId}/audit-logs`);
+  async listAuditLogs(workspaceId: string, opts?: { limit?: number; cursor?: string }) {
+    const query: Record<string, string> = {};
+    if (typeof opts?.limit === "number" && opts.limit > 0) query.limit = String(opts.limit);
+    if (opts?.cursor) query.cursor = opts.cursor;
+    return this.request("GET", `/workspaces/${workspaceId}/audit-logs`, undefined, query);
   }
 
   // ── Preview Environments ────────────────────────────────────────────

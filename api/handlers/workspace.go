@@ -150,6 +150,31 @@ func (h *WorkspaceHandler) ListAuditLogs(w http.ResponseWriter, r *http.Request)
 		utils.RespondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
+	pagination, err := parseCursorPagination(r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if pagination.Enabled {
+		total, err := models.CountAuditLogs(workspaceID)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to count audit logs")
+			return
+		}
+		items, err := models.ListAuditLogsPage(workspaceID, pagination.Limit, pagination.Offset)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to list audit logs")
+			return
+		}
+		if items == nil {
+			items = []models.AuditLogEntry{}
+		}
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"data":       items,
+			"pagination": paginateWindowMeta(total, pagination, len(items)),
+		})
+		return
+	}
 	limit := 200
 	if q := strings.TrimSpace(r.URL.Query().Get("limit")); q != "" {
 		if v, err := strconv.Atoi(q); err == nil && v > 0 && v <= 1000 {

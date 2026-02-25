@@ -390,6 +390,11 @@ func (h *ServiceHandler) ListServices(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAccess(w, userID, wsID, models.RoleViewer) {
 		return
 	}
+	pagination, err := parseCursorPagination(r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	svcs, err := models.ListServices(wsID)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to list services: "+err.Error())
@@ -467,10 +472,18 @@ func (h *ServiceHandler) ListServices(w http.ResponseWriter, r *http.Request) {
 		svcs = filtered
 	}
 
-	for i := range svcs {
-		h.decorateServicePublicURL(&svcs[i])
+	paged, pageMeta := paginateSlice(svcs, pagination)
+	for i := range paged {
+		h.decorateServicePublicURL(&paged[i])
 	}
-	utils.RespondJSON(w, http.StatusOK, svcs)
+	if pageMeta != nil {
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"data":       paged,
+			"pagination": pageMeta,
+		})
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, paged)
 }
 
 func (h *ServiceHandler) CreateService(w http.ResponseWriter, r *http.Request) {
@@ -1140,6 +1153,24 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	newPlanEffective := oldPlanEffective
 	if planProvided {
 		newPlanEffective = desiredPlan
+		svc.Plan = newPlanEffective
+	}
+
+	if isDryRunRequest(r) {
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":                "dry_run",
+			"service_id":            svc.ID,
+			"workspace_id":          svc.WorkspaceID,
+			"name":                  svc.Name,
+			"plan":                  svc.Plan,
+			"instances":             svc.Instances,
+			"project_id":            svc.ProjectID,
+			"environment_id":        svc.EnvironmentID,
+			"deletion_protection":   deletionProtection,
+			"would_change_plan":     planProvided && newPlanEffective != oldPlanEffective,
+			"would_scale_instances": oldInstances != svc.Instances,
+		})
+		return
 	}
 
 	// Gate plan changes on Stripe success so users cannot upgrade resources without billing.
@@ -1174,9 +1205,6 @@ func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if planProvided {
-		svc.Plan = newPlanEffective
-	}
 	if err := models.UpdateService(svc); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to update service")
 		return
@@ -1453,6 +1481,15 @@ func (h *ServiceHandler) RestartService(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if h.isProtectedEnvironment(svc.EnvironmentID) && !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleAdmin) {
+		return
+	}
+	if isDryRunRequest(r) {
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":        "dry_run",
+			"service_id":    id,
+			"workspace_id":  svc.WorkspaceID,
+			"would_restart": true,
+		})
 		return
 	}
 	models.UpdateServiceStatus(id, "restarting", svc.ContainerID, svc.HostPort)

@@ -196,7 +196,12 @@ func (h *PreviewEnvironmentHandler) CreatePreviewEnvironment(w http.ResponseWrit
 			if key == "" {
 				continue
 			}
-			vars = append(vars, models.EnvVar{Key: key, Value: v.Value, IsSecret: v.IsSecret})
+			encrypted, err := utils.Encrypt(v.Value, h.Config.Crypto.EncryptionKey)
+			if err != nil {
+				utils.RespondError(w, http.StatusInternalServerError, "failed to encrypt env var value")
+				return
+			}
+			vars = append(vars, models.EnvVar{Key: key, EncryptedValue: encrypted, IsSecret: v.IsSecret})
 		}
 		if len(vars) > 0 {
 			if err := models.BulkUpsertEnvVars("service", previewSvc.ID, vars); err != nil {
@@ -246,7 +251,7 @@ func (h *PreviewEnvironmentHandler) CreatePreviewEnvironment(w http.ResponseWrit
 	services.Audit(workspaceID, userID, "preview_environment.created", "preview_environment", pe.ID, map[string]interface{}{
 		"service_id": previewSvc.ID,
 		"repository": pe.Repository,
-		"pr_number": pe.PRNumber,
+		"pr_number":  pe.PRNumber,
 	})
 
 	utils.RespondJSON(w, http.StatusCreated, pe)
@@ -360,7 +365,12 @@ func (h *PreviewEnvironmentHandler) UpdatePreviewEnvironment(w http.ResponseWrit
 			if key == "" {
 				continue
 			}
-			vars = append(vars, models.EnvVar{Key: key, Value: v.Value, IsSecret: v.IsSecret})
+			encrypted, err := utils.Encrypt(v.Value, h.Config.Crypto.EncryptionKey)
+			if err != nil {
+				utils.RespondError(w, http.StatusInternalServerError, "failed to encrypt env var value")
+				return
+			}
+			vars = append(vars, models.EnvVar{Key: key, EncryptedValue: encrypted, IsSecret: v.IsSecret})
 		}
 		if len(vars) > 0 {
 			if err := models.BulkUpsertEnvVars("service", previewSvc.ID, vars); err != nil {

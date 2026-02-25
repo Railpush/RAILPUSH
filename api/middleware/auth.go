@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"path"
 	"strings"
@@ -24,10 +25,11 @@ const SessionCookieName = "rp_session"
 var errMissingCredentials = errors.New("missing credentials")
 
 type AuthResult struct {
-	UserID      string
-	UsedAPIKey  bool
-	APIKeyID    string
-	APIKeyScope []string
+	UserID             string
+	UsedAPIKey         bool
+	APIKeyID           string
+	APIKeyScope        []string
+	APIKeyAllowedCIDRs []string
 }
 
 func extractTokenFromRequest(r *http.Request) string {
@@ -84,10 +86,11 @@ func AuthenticateRequestWithResult(cfg *config.Config, r *http.Request) (*AuthRe
 	if tokenStr != "" {
 		if keyIdentity, kerr := models.ResolveAPIKey(tokenStr); kerr == nil && keyIdentity != nil && keyIdentity.UserID != "" {
 			return &AuthResult{
-				UserID:      keyIdentity.UserID,
-				UsedAPIKey:  true,
-				APIKeyID:    keyIdentity.ID,
-				APIKeyScope: append([]string{}, keyIdentity.Scopes...),
+				UserID:             keyIdentity.UserID,
+				UsedAPIKey:         true,
+				APIKeyID:           keyIdentity.ID,
+				APIKeyScope:        append([]string{}, keyIdentity.Scopes...),
+				APIKeyAllowedCIDRs: append([]string{}, keyIdentity.AllowedCIDRs...),
 			}, nil
 		}
 	}
@@ -119,6 +122,12 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 				if len(required) > 0 && !models.HasAnyAPIKeyScope(authResult.APIKeyScope, required...) {
 					utils.RespondError(w, http.StatusForbidden, "api key scope denied")
 					return
+				}
+				if len(authResult.APIKeyAllowedCIDRs) > 0 {
+					if !isClientIPAllowedByCIDRs(ClientIPString(r), authResult.APIKeyAllowedCIDRs) {
+						utils.RespondError(w, http.StatusForbidden, "api key ip not allowed")
+						return
+					}
 				}
 			}
 
@@ -159,6 +168,8 @@ func requiredAPIKeyScopesForRequest(r *http.Request) []string {
 	}
 
 	if strings.Contains(cleanPath, "/deploys") ||
+		strings.HasSuffix(cleanPath, "/bulk-deploy") ||
+		strings.HasSuffix(cleanPath, "/bulk-restart") ||
 		strings.HasSuffix(cleanPath, "/restart") ||
 		strings.HasSuffix(cleanPath, "/suspend") ||
 		strings.HasSuffix(cleanPath, "/resume") ||
@@ -197,4 +208,31 @@ func GetAPIKeyScopes(r *http.Request) []string {
 		return append([]string{}, v...)
 	}
 	return nil
+}
+
+func isClientIPAllowedByCIDRs(clientIP string, allowedCIDRs []string) bool {
+	ip := net.ParseIP(strings.TrimSpace(clientIP))
+	if ip == nil {
+		return false
+	}
+	for _, raw := range allowedCIDRs {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			_, network, err := net.ParseCIDR(entry)
+			if err != nil || network == nil {
+				continue
+			}
+			if network.Contains(ip) {
+				return true
+			}
+			continue
+		}
+		if allowedIP := net.ParseIP(entry); allowedIP != nil && allowedIP.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }

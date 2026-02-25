@@ -3,6 +3,7 @@ package models
 import (
 	"database/sql"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -28,13 +29,14 @@ type User struct {
 }
 
 type APIKey struct {
-	ID        string     `json:"id"`
-	UserID    string     `json:"user_id"`
-	Name      string     `json:"name"`
-	KeyHash   string     `json:"-"`
-	Scopes    []string   `json:"scopes"`
-	ExpiresAt *time.Time `json:"expires_at"`
-	CreatedAt time.Time  `json:"created_at"`
+	ID           string     `json:"id"`
+	UserID       string     `json:"user_id"`
+	Name         string     `json:"name"`
+	KeyHash      string     `json:"-"`
+	Scopes       []string   `json:"scopes"`
+	AllowedCIDRs []string   `json:"allowed_cidrs,omitempty"`
+	ExpiresAt    *time.Time `json:"expires_at"`
+	CreatedAt    time.Time  `json:"created_at"`
 }
 
 const (
@@ -62,10 +64,51 @@ var validAPIKeyScopes = map[string]struct{}{
 var DefaultAPIKeyScopes = []string{APIKeyScopeRead, APIKeyScopeWrite, APIKeyScopeDeploy}
 
 type ResolvedAPIKey struct {
-	ID        string
-	UserID    string
-	Scopes    []string
-	ExpiresAt *time.Time
+	ID           string
+	UserID       string
+	Scopes       []string
+	AllowedCIDRs []string
+	ExpiresAt    *time.Time
+}
+
+func NormalizeAndValidateCIDRAllowlist(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		candidate := strings.TrimSpace(item)
+		if candidate == "" {
+			continue
+		}
+		if strings.Contains(candidate, "/") {
+			_, network, err := net.ParseCIDR(candidate)
+			if err != nil || network == nil {
+				return nil, fmt.Errorf("invalid cidr %q", item)
+			}
+			candidate = network.String()
+		} else {
+			ip := net.ParseIP(candidate)
+			if ip == nil {
+				return nil, fmt.Errorf("invalid ip %q", item)
+			}
+			if ip.To4() != nil {
+				candidate = ip.String() + "/32"
+			} else {
+				candidate = ip.String() + "/128"
+			}
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		out = append(out, candidate)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 func NormalizeAndValidateAPIKeyScopes(raw []string) ([]string, error) {
@@ -226,10 +269,15 @@ func CreateAPIKey(k *APIKey) error {
 	if err != nil {
 		return err
 	}
+	allowedCIDRs, err := NormalizeAndValidateCIDRAllowlist(k.AllowedCIDRs)
+	if err != nil {
+		return err
+	}
 	k.Scopes = scopes
+	k.AllowedCIDRs = allowedCIDRs
 	return database.DB.QueryRow(
-		"INSERT INTO api_keys (user_id, name, key_hash, scopes, expires_at) VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at",
-		k.UserID, k.Name, k.KeyHash, pq.Array(k.Scopes), k.ExpiresAt,
+		"INSERT INTO api_keys (user_id, name, key_hash, scopes, allowed_cidrs, expires_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at",
+		k.UserID, k.Name, k.KeyHash, pq.Array(k.Scopes), pq.Array(k.AllowedCIDRs), k.ExpiresAt,
 	).Scan(&k.ID, &k.CreatedAt)
 }
 
@@ -239,7 +287,7 @@ func DeleteAPIKey(id, userID string) error {
 }
 
 func ListAPIKeys(userID string) ([]APIKey, error) {
-	rows, err := database.DB.Query("SELECT id, user_id, name, key_hash, scopes, expires_at, created_at FROM api_keys WHERE user_id=$1", userID)
+	rows, err := database.DB.Query("SELECT id, user_id, name, key_hash, scopes, allowed_cidrs, expires_at, created_at FROM api_keys WHERE user_id=$1", userID)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +296,8 @@ func ListAPIKeys(userID string) ([]APIKey, error) {
 	for rows.Next() {
 		var k APIKey
 		var scopes pq.StringArray
-		if err := rows.Scan(&k.ID, &k.UserID, &k.Name, &k.KeyHash, &scopes, &k.ExpiresAt, &k.CreatedAt); err != nil {
+		var allowedCIDRs pq.StringArray
+		if err := rows.Scan(&k.ID, &k.UserID, &k.Name, &k.KeyHash, &scopes, &allowedCIDRs, &k.ExpiresAt, &k.CreatedAt); err != nil {
 			return nil, err
 		}
 		if len(scopes) == 0 {
@@ -256,16 +305,38 @@ func ListAPIKeys(userID string) ([]APIKey, error) {
 		} else {
 			k.Scopes = []string(scopes)
 		}
+		if len(allowedCIDRs) > 0 {
+			k.AllowedCIDRs = []string(allowedCIDRs)
+		}
 		keys = append(keys, k)
 	}
 	return keys, nil
+}
+
+func UpdateAPIKeyAllowedCIDRs(keyID, userID string, allowedCIDRs []string) error {
+	normalized, err := NormalizeAndValidateCIDRAllowlist(allowedCIDRs)
+	if err != nil {
+		return err
+	}
+	res, err := database.DB.Exec("UPDATE api_keys SET allowed_cidrs=$1 WHERE id=$2 AND user_id=$3", pq.Array(normalized), keyID, userID)
+	if err != nil {
+		return err
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // ResolveAPIKey checks a raw API key against stored hashes and returns
 // key identity + normalized scopes on match. Returns (nil, nil) when no match.
 func ResolveAPIKey(rawKey string) (*ResolvedAPIKey, error) {
 	rows, err := database.DB.Query(
-		"SELECT id, user_id, key_hash, scopes, expires_at FROM api_keys",
+		"SELECT id, user_id, key_hash, scopes, allowed_cidrs, expires_at FROM api_keys",
 	)
 	if err != nil {
 		return nil, err
@@ -276,8 +347,9 @@ func ResolveAPIKey(rawKey string) (*ResolvedAPIKey, error) {
 	for rows.Next() {
 		var id, userID, hash string
 		var scopes pq.StringArray
+		var allowedCIDRs pq.StringArray
 		var expiresAt sql.NullTime
-		if err := rows.Scan(&id, &userID, &hash, &scopes, &expiresAt); err != nil {
+		if err := rows.Scan(&id, &userID, &hash, &scopes, &allowedCIDRs, &expiresAt); err != nil {
 			return nil, err
 		}
 		if expiresAt.Valid && expiresAt.Time.Before(now) {
@@ -296,7 +368,7 @@ func ResolveAPIKey(rawKey string) (*ResolvedAPIKey, error) {
 				exp := expiresAt.Time
 				expPtr = &exp
 			}
-			return &ResolvedAPIKey{ID: id, UserID: userID, Scopes: normalizedScopes, ExpiresAt: expPtr}, nil
+			return &ResolvedAPIKey{ID: id, UserID: userID, Scopes: normalizedScopes, AllowedCIDRs: []string(allowedCIDRs), ExpiresAt: expPtr}, nil
 		}
 	}
 	return nil, nil

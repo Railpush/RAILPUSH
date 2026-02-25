@@ -43,6 +43,11 @@ func (h *DatabaseHandler) ListDatabases(w http.ResponseWriter, r *http.Request) 
 		utils.RespondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
+	pagination, err := parseCursorPagination(r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	dbs, err := models.ListManagedDatabasesByWorkspace(workspaceID)
 	if err != nil {
@@ -107,7 +112,15 @@ func (h *DatabaseHandler) ListDatabases(w http.ResponseWriter, r *http.Request) 
 		}
 		dbs = filtered
 	}
-	utils.RespondJSON(w, http.StatusOK, dbs)
+	paged, pageMeta := paginateSlice(dbs, pagination)
+	if pageMeta != nil {
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"data":       paged,
+			"pagination": pageMeta,
+		})
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, paged)
 }
 
 func (h *DatabaseHandler) CreateDatabase(w http.ResponseWriter, r *http.Request) {
@@ -393,6 +406,23 @@ func (h *DatabaseHandler) UpdateDatabase(w http.ResponseWriter, r *http.Request)
 	}
 
 	planChanged := planProvided && desiredPlan != oldPlan
+	if isDryRunRequest(r) {
+		projectedPlan := db.Plan
+		if planChanged {
+			projectedPlan = desiredPlan
+		}
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":              "dry_run",
+			"database_id":         db.ID,
+			"workspace_id":        db.WorkspaceID,
+			"plan":                projectedPlan,
+			"plan_changed":        planChanged,
+			"deletion_protection": deletionProtection,
+			"has_deletion_toggle": deletionProtectionProvided,
+		})
+		return
+	}
+
 	if !planChanged && !deletionProtectionProvided {
 		utils.RespondJSON(w, http.StatusOK, db)
 		return
@@ -669,6 +699,11 @@ func (h *DatabaseHandler) ListBackups(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
+	pagination, err := parseCursorPagination(r)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	rows, err := database.DB.Query("SELECT id, resource_type, resource_id, COALESCE(file_path,''), COALESCE(size_bytes,0), started_at, finished_at, COALESCE(status,'') FROM backups WHERE resource_type=$1 AND resource_id=$2 ORDER BY started_at DESC", "database", id)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to list backups")
@@ -696,7 +731,15 @@ func (h *DatabaseHandler) ListBackups(w http.ResponseWriter, r *http.Request) {
 	if backups == nil {
 		backups = []Backup{}
 	}
-	utils.RespondJSON(w, http.StatusOK, backups)
+	paged, pageMeta := paginateSlice(backups, pagination)
+	if pageMeta != nil {
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"data":       paged,
+			"pagination": pageMeta,
+		})
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, paged)
 }
 
 // TriggerBackup runs an actual pg_dump against the database container
