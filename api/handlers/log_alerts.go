@@ -214,7 +214,10 @@ func (h *LogHandler) CreateLogAlert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	comparison := parseLogAlertComparison(fmt.Sprintf("%v", condition["comparison"]))
+	comparison := "greater_than"
+	if raw, exists := condition["comparison"]; exists && raw != nil {
+		comparison = parseLogAlertComparison(strings.TrimSpace(fmt.Sprintf("%v", raw)))
+	}
 	if comparison == "" {
 		utils.RespondError(w, http.StatusBadRequest, "invalid condition.comparison")
 		return
@@ -233,7 +236,10 @@ func (h *LogHandler) CreateLogAlert(w http.ResponseWriter, r *http.Request) {
 		webhookURL = ""
 	}
 
-	priority := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", notification["priority"])))
+	priority := "normal"
+	if raw, exists := notification["priority"]; exists && raw != nil {
+		priority = strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", raw)))
+	}
 	if strings.EqualFold(priority, "<nil>") || priority == "" {
 		priority = "normal"
 	}
@@ -333,12 +339,16 @@ func (h *LogHandler) UpdateLogAlert(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if raw, exists := condition["comparison"]; exists {
-			comparison := parseLogAlertComparison(fmt.Sprintf("%v", raw))
-			if comparison == "" {
-				utils.RespondError(w, http.StatusBadRequest, "invalid condition.comparison")
-				return
+			if raw == nil {
+				alert.Comparison = "greater_than"
+			} else {
+				comparison := parseLogAlertComparison(fmt.Sprintf("%v", raw))
+				if comparison == "" {
+					utils.RespondError(w, http.StatusBadRequest, "invalid condition.comparison")
+					return
+				}
+				alert.Comparison = comparison
 			}
-			alert.Comparison = comparison
 		}
 		if raw, exists := condition["window"]; exists {
 			windowSeconds, err := parseLogAlertDurationSeconds(raw, alert.WindowSeconds)
