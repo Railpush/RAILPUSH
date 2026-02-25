@@ -1,11 +1,15 @@
 package services
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,6 +27,7 @@ type Scheduler struct {
 	lastCleanup   time.Time
 	lastBackup    time.Time
 	lastUsageSync time.Time
+	lastLogAlerts time.Time
 }
 
 func NewScheduler(cfg *config.Config) *Scheduler {
@@ -43,6 +48,7 @@ func (s *Scheduler) Start() {
 				s.cleanupStaleData()
 				s.runNightlyBackups()
 				s.reportMeteredUsage()
+				s.runLogAlertEvaluations()
 			case <-s.stop:
 				ticker.Stop()
 				return
@@ -50,6 +56,263 @@ func (s *Scheduler) Start() {
 		}
 	}()
 	log.Println("Scheduler started")
+}
+
+func containsStringFold(haystack []string, needle string) bool {
+	needle = strings.ToLower(strings.TrimSpace(needle))
+	if needle == "" {
+		return false
+	}
+	for _, item := range haystack {
+		if strings.EqualFold(strings.TrimSpace(item), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Scheduler) runLogAlertEvaluations() {
+	if s.Config == nil {
+		return
+	}
+	if time.Since(s.lastLogAlerts) < time.Minute {
+		return
+	}
+	s.lastLogAlerts = time.Now()
+
+	lokiURL := strings.TrimSpace(s.Config.Logging.LokiURL)
+	if lokiURL == "" {
+		if s.Config.Kubernetes.Enabled {
+			lokiURL = "http://loki-gateway.logging.svc.cluster.local"
+		}
+	}
+	if lokiURL == "" {
+		return
+	}
+
+	rules, err := models.ListEnabledServiceLogAlerts(500)
+	if err != nil {
+		log.Printf("Scheduler: log alerts: list failed: %v", err)
+		return
+	}
+	if len(rules) == 0 {
+		return
+	}
+
+	ns := strings.TrimSpace(s.Config.Kubernetes.Namespace)
+	if ns == "" {
+		ns = "railpush"
+	}
+
+	now := time.Now().UTC()
+	for _, rule := range rules {
+		if err := s.evaluateLogAlertRule(lokiURL, ns, now, &rule); err != nil {
+			_ = models.UpdateServiceLogAlertEvaluationState(rule.ID, "error", 0, nil, nil, err.Error())
+			log.Printf("Scheduler: log alerts: evaluate failed rule=%s err=%v", rule.ID, err)
+		}
+	}
+}
+
+func compareLogAlertThreshold(comparison string, count int, threshold int) bool {
+	switch strings.ToLower(strings.TrimSpace(comparison)) {
+	case "greater_than_or_equal":
+		return count >= threshold
+	case "equal":
+		return count == threshold
+	default:
+		return count > threshold
+	}
+}
+
+func (s *Scheduler) evaluateLogAlertRule(lokiURL string, namespace string, now time.Time, rule *models.ServiceLogAlert) error {
+	if rule == nil {
+		return nil
+	}
+	if strings.TrimSpace(rule.ServiceID) == "" {
+		return fmt.Errorf("missing service_id")
+	}
+	window := time.Duration(rule.WindowSeconds) * time.Second
+	if window <= 0 {
+		window = 5 * time.Minute
+	}
+	if window > 24*time.Hour {
+		window = 24 * time.Hour
+	}
+	start := now.Add(-window)
+
+	servicePodPrefix := regexp.QuoteMeta(kubeServiceName(rule.ServiceID)) + ".*"
+	logQL := fmt.Sprintf(`{namespace=%q,pod=~%q,container="service"}`, namespace, servicePodPrefix)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	lines, err := LokiQueryRange(ctx, lokiURL, logQL, start, now, 5000)
+	cancel()
+	if err != nil {
+		return err
+	}
+
+	filters, err := ParseStructuredFilter(rule.FilterQuery)
+	if err != nil {
+		return fmt.Errorf("invalid filter_query: %w", err)
+	}
+
+	var pattern *regexp.Regexp
+	if strings.TrimSpace(rule.Pattern) != "" {
+		pattern, err = regexp.Compile("(?i)" + strings.TrimSpace(rule.Pattern))
+		if err != nil {
+			return fmt.Errorf("invalid pattern: %w", err)
+		}
+	}
+
+	matches := 0
+	for _, line := range lines {
+		parsed := ParseStructuredLogLine(strings.TrimSpace(line.Line))
+		fields := map[string]string{
+			"message": parsed.Message,
+			"level":   NormalizeLogLevel(parsed.Level),
+		}
+		for k, v := range parsed.Fields {
+			fields[k] = v
+		}
+		if !MatchesStructuredFilter(fields, filters) {
+			continue
+		}
+		if pattern != nil && !pattern.MatchString(parsed.Message) {
+			continue
+		}
+		matches++
+	}
+
+	triggered := compareLogAlertThreshold(rule.Comparison, matches, rule.Threshold)
+	prevStatus := strings.ToLower(strings.TrimSpace(rule.Status))
+	if prevStatus == "" {
+		prevStatus = "ok"
+	}
+
+	shouldNotify := true
+	if triggered && rule.LastTriggeredAt != nil && rule.CooldownSeconds > 0 {
+		if now.Sub(rule.LastTriggeredAt.UTC()) < time.Duration(rule.CooldownSeconds)*time.Second {
+			shouldNotify = false
+		}
+	}
+
+	if triggered {
+		if shouldNotify {
+			s.notifyLogAlert(rule, matches, "firing", now)
+			_ = models.UpdateServiceLogAlertEvaluationState(rule.ID, "firing", matches, &now, nil, "")
+		} else {
+			_ = models.UpdateServiceLogAlertEvaluationState(rule.ID, "firing", matches, nil, nil, "")
+		}
+		return nil
+	}
+
+	if prevStatus == "firing" {
+		s.notifyLogAlert(rule, matches, "resolved", now)
+		_ = models.UpdateServiceLogAlertEvaluationState(rule.ID, "resolved", matches, nil, &now, "")
+		return nil
+	}
+
+	return models.UpdateServiceLogAlertEvaluationState(rule.ID, "ok", matches, nil, nil, "")
+}
+
+func (s *Scheduler) notifyLogAlert(rule *models.ServiceLogAlert, matches int, status string, now time.Time) {
+	if s == nil || s.Config == nil || rule == nil {
+		return
+	}
+	status = strings.ToLower(strings.TrimSpace(status))
+	if status != "firing" && status != "resolved" {
+		return
+	}
+
+	channels := models.NormalizeLogAlertChannels(rule.Channels)
+	isIncident := containsStringFold(channels, "incident")
+	isWebhook := containsStringFold(channels, "webhook")
+	isEmail := containsStringFold(channels, "email")
+
+	if isIncident {
+		payload := map[string]interface{}{
+			"status":   status,
+			"receiver": "railpush-log-alert",
+			"groupKey": "log-alert:" + rule.ID,
+			"commonLabels": map[string]string{
+				"alertname":    rule.Name,
+				"severity":     strings.TrimSpace(rule.Priority),
+				"namespace":    "railpush",
+				"service_id":   rule.ServiceID,
+				"log_alert_id": rule.ID,
+			},
+			"commonAnnotations": map[string]string{
+				"summary":     fmt.Sprintf("Log alert %s (%s)", rule.Name, status),
+				"description": fmt.Sprintf("Rule %q matched %d log lines in the last %s", rule.Name, matches, (time.Duration(rule.WindowSeconds) * time.Second).String()),
+			},
+			"alerts": []map[string]interface{}{{
+				"status": status,
+				"labels": map[string]string{
+					"alertname":    rule.Name,
+					"severity":     strings.TrimSpace(rule.Priority),
+					"service_id":   rule.ServiceID,
+					"log_alert_id": rule.ID,
+				},
+				"annotations": map[string]string{
+					"summary":     fmt.Sprintf("Log alert %s (%s)", rule.Name, status),
+					"description": fmt.Sprintf("Matched log lines: %d", matches),
+				},
+				"startsAt": now.Format(time.RFC3339Nano),
+			}},
+		}
+		payloadJSON, _ := json.Marshal(payload)
+		_ = models.CreateAlertEvent(&models.AlertEvent{
+			Status:    status,
+			Receiver:  "railpush-log-alert",
+			GroupKey:  "log-alert:" + rule.ID,
+			AlertName: rule.Name,
+			Severity:  strings.TrimSpace(rule.Priority),
+			Namespace: "railpush",
+			Payload:   payloadJSON,
+		})
+	}
+
+	if isWebhook && strings.TrimSpace(rule.WebhookURL) != "" {
+		body, _ := json.Marshal(map[string]interface{}{
+			"status":        status,
+			"rule_id":       rule.ID,
+			"rule_name":     rule.Name,
+			"service_id":    rule.ServiceID,
+			"workspace_id":  rule.WorkspaceID,
+			"matched_count": matches,
+			"threshold":     rule.Threshold,
+			"window":        (time.Duration(rule.WindowSeconds) * time.Second).String(),
+			"comparison":    rule.Comparison,
+			"timestamp":     now.Format(time.RFC3339Nano),
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSpace(rule.WebhookURL), strings.NewReader(string(body)))
+		if err == nil {
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err == nil && resp != nil {
+				resp.Body.Close()
+			}
+		}
+		cancel()
+	}
+
+	if isEmail && s.Config.Email.Enabled() {
+		ws, _ := models.GetWorkspace(rule.WorkspaceID)
+		if ws != nil {
+			owner, _ := models.GetUserByID(ws.OwnerID)
+			if owner != nil && strings.TrimSpace(owner.Email) != "" {
+				subject := fmt.Sprintf("[RailPush] Log alert %s: %s", strings.ToUpper(status), strings.TrimSpace(rule.Name))
+				text := fmt.Sprintf("Log alert %q is %s.\nService: %s\nMatches: %d\nThreshold: %d\nWindow: %s\n", rule.Name, status, rule.ServiceID, matches, rule.Threshold, (time.Duration(rule.WindowSeconds) * time.Second).String())
+				html := "<p>Log alert <strong>" + rule.Name + "</strong> is <strong>" + status + "</strong>.</p>" +
+					"<p>Service: <code>" + rule.ServiceID + "</code><br/>" +
+					"Matches: " + fmt.Sprintf("%d", matches) + "<br/>" +
+					"Threshold: " + fmt.Sprintf("%d", rule.Threshold) + "<br/>" +
+					"Window: " + (time.Duration(rule.WindowSeconds) * time.Second).String() + "</p>"
+				dedupe := fmt.Sprintf("log-alert:%s:%s:%s", rule.ID, status, owner.Email)
+				_, _ = models.EnqueueEmail(dedupe, "log_alert", strings.TrimSpace(owner.Email), subject, text, html)
+			}
+		}
+	}
 }
 
 func (s *Scheduler) Stop() { close(s.stop) }

@@ -575,5 +575,4 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 	`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='service_log_alerts_created_by_fkey') THEN ALTER TABLE service_log_alerts ADD CONSTRAINT service_log_alerts_created_by_fkey FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL; END IF; END $$`,
 	`ALTER TABLE service_log_alerts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
 	`ALTER TABLE service_log_alerts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
-
 }

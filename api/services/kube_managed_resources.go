@@ -391,13 +391,13 @@ func (k *KubeDeployer) EnsureManagedDatabase(db *models.ManagedDatabase, passwor
 		return "", fmt.Errorf("get db headless service: %w", err)
 	}
 
-		// 3) StatefulSet
-		replicas := int32(1)
-		requests, limits := kubeResourcesForPlan(db.Plan)
-		fsg := int64(70)
-		rootUID := int64(0)
+	// 3) StatefulSet
+	replicas := int32(1)
+	requests, limits := kubeResourcesForPlan(db.Plan)
+	fsg := int64(70)
+	rootUID := int64(0)
 
-		ss := &appsv1.StatefulSet{
+	ss := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
@@ -412,29 +412,29 @@ func (k *KubeDeployer) EnsureManagedDatabase(db *models.ManagedDatabase, passwor
 					Labels: labels,
 				},
 				Spec: corev1.PodSpec{
-					PriorityClassName:            "railpush-critical",
+					PriorityClassName:             "railpush-critical",
 					TerminationGracePeriodSeconds: func() *int64 { t := int64(60); return &t }(),
 					SecurityContext: &corev1.PodSecurityContext{
-						FSGroup:      &fsg,
+						FSGroup: &fsg,
 					},
-						InitContainers: []corev1.Container{
-							{
-								Name:            "init-postgres-tls",
-								Image:           "busybox:1.36.1",
-								ImagePullPolicy: corev1.PullIfNotPresent,
-								Command: []string{
-									"sh",
-									"-lc",
-									"set -e; cp /tls-src/server.crt /tls/server.crt; cp /tls-src/server.key /tls/server.key; chown 70:70 /tls/server.key /tls/server.crt; chmod 600 /tls/server.key; chmod 644 /tls/server.crt",
-								},
-								SecurityContext: &corev1.SecurityContext{
-									RunAsUser:  &rootUID,
-									RunAsGroup: &rootUID,
-								},
-								VolumeMounts: []corev1.VolumeMount{
-									{Name: "tls-src", MountPath: "/tls-src", ReadOnly: true},
-									{Name: "tls", MountPath: "/tls"},
-								},
+					InitContainers: []corev1.Container{
+						{
+							Name:            "init-postgres-tls",
+							Image:           "busybox:1.36.1",
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Command: []string{
+								"sh",
+								"-lc",
+								"set -e; cp /tls-src/server.crt /tls/server.crt; cp /tls-src/server.key /tls/server.key; chown 70:70 /tls/server.key /tls/server.crt; chmod 600 /tls/server.key; chmod 644 /tls/server.crt",
+							},
+							SecurityContext: &corev1.SecurityContext{
+								RunAsUser:  &rootUID,
+								RunAsGroup: &rootUID,
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "tls-src", MountPath: "/tls-src", ReadOnly: true},
+								{Name: "tls", MountPath: "/tls"},
+							},
 						},
 					},
 					Containers: []corev1.Container{
@@ -518,7 +518,7 @@ func (k *KubeDeployer) EnsureManagedDatabase(db *models.ManagedDatabase, passwor
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
 						StorageClassName: k.storageClassName(),
-						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+						AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: kubeManagedDatabaseStorage(db.Plan),
@@ -682,7 +682,7 @@ func (k *KubeDeployer) EnsureManagedKeyValue(kv *models.ManagedKeyValue, passwor
 					Labels: labels,
 				},
 				Spec: corev1.PodSpec{
-					PriorityClassName:            "railpush-critical",
+					PriorityClassName:             "railpush-critical",
 					TerminationGracePeriodSeconds: func() *int64 { t := int64(30); return &t }(),
 					Containers: []corev1.Container{
 						{
@@ -739,7 +739,7 @@ func (k *KubeDeployer) EnsureManagedKeyValue(kv *models.ManagedKeyValue, passwor
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
 						StorageClassName: k.storageClassName(),
-						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+						AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceStorage: kubeManagedKeyValueStorage(kv.Plan),

@@ -586,6 +586,7 @@ export class RailPushClient {
     search?: string;
     regex?: boolean;
     level?: string;
+    filter?: string;
   }) {
     const query: Record<string, string> = {};
     if (opts?.limit) query.limit = String(opts.limit);
@@ -595,7 +596,24 @@ export class RailPushClient {
     if (opts?.search) query.search = opts.search;
     if (opts?.regex) query.regex = "true";
     if (opts?.level) query.level = opts.level;
+    if (opts?.filter) query.filter = opts.filter;
     return this.request("GET", `/services/${serviceId}/logs`, undefined, query);
+  }
+
+  async listLogAlerts(serviceId: string) {
+    return this.request("GET", `/services/${serviceId}/log-alerts`);
+  }
+
+  async createLogAlert(serviceId: string, data: Record<string, unknown>) {
+    return this.request("POST", `/services/${serviceId}/log-alerts`, data);
+  }
+
+  async updateLogAlert(serviceId: string, alertId: string, data: Record<string, unknown>) {
+    return this.request("PATCH", `/services/${serviceId}/log-alerts/${alertId}`, data);
+  }
+
+  async deleteLogAlert(serviceId: string, alertId: string) {
+    return this.request("DELETE", `/services/${serviceId}/log-alerts/${alertId}`);
   }
 
   async createShellSession(serviceId: string, data?: {

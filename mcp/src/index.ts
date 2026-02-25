@@ -37,7 +37,22 @@ type LogFilterOptions = {
   since?: string;
   until?: string;
   level?: string;
+  filter?: string;
 };
+
+function buildStructuredFilterExpression(filter?: string | Record<string, string>): string | undefined {
+  if (!filter) return undefined;
+  if (typeof filter === "string") {
+    const normalized = filter.trim();
+    return normalized === "" ? undefined : normalized;
+  }
+  const parts = Object.entries(filter)
+    .map(([k, v]) => [k.trim(), String(v ?? "").trim()] as const)
+    .filter(([k, v]) => k !== "" && v !== "")
+    .map(([k, v]) => `${k}:${v}`);
+  if (parts.length === 0) return undefined;
+  return parts.join(" AND ");
+}
 
 function parseFilterTime(raw?: string): Date | null {
   if (!raw) return null;
@@ -1603,7 +1618,7 @@ server.tool(
 
 server.tool(
   "get_logs",
-  "Get runtime or deploy logs for a service. Supports optional text/regex search, time-window filtering, and level filtering.",
+  "Get runtime or deploy logs for a service. Supports text/regex search, time-window filtering, level filtering, and structured field filters.",
   {
     service_id: z.string().describe("Service ID"),
     log_type: z.enum(["runtime", "deploy"]).optional().describe("Log type (default: runtime)"),
@@ -1613,10 +1628,12 @@ server.tool(
     since: z.string().optional().describe("Only include logs at/after this RFC3339 timestamp"),
     until: z.string().optional().describe("Only include logs at/before this RFC3339 timestamp"),
     level: z.enum(["debug", "info", "warn", "error", "warning"]).optional().describe("Filter by log level"),
+    filter: z.union([z.string(), z.record(z.string())]).optional().describe("Structured field filter (e.g. { level: 'error', error_code: 'CARD_DECLINED' })"),
   },
-  async ({ service_id, log_type, limit, search, regex, since, until, level }) => {
+  async ({ service_id, log_type, limit, search, regex, since, until, level, filter }) => {
     try {
       const normalizedLevel = level === "warning" ? "warn" : level;
+      const filterExpr = buildStructuredFilterExpression(filter as string | Record<string, string> | undefined);
       const logs = await client.queryLogs(service_id, {
         type: log_type,
         limit,
@@ -1625,9 +1642,120 @@ server.tool(
         since,
         until,
         level: normalizedLevel,
+        filter: filterExpr,
       });
-      return text(filterLogEntries(logs, { search, regex, since, until, level: normalizedLevel }));
+      return text(filterLogEntries(logs, { search, regex, since, until, level: normalizedLevel, filter: filterExpr }));
     }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "list_log_alerts",
+  "List log-based alert rules configured for a service.",
+  {
+    service_id: z.string().describe("Service ID"),
+  },
+  async ({ service_id }) => {
+    try { return text(await client.listLogAlerts(service_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "create_log_alert",
+  "Create a log-based alert rule for a service. Supports structured filters and/or regex pattern matching with threshold/window/cooldown.",
+  {
+    service_id: z.string().describe("Service ID"),
+    name: z.string().describe("Alert name"),
+    enabled: z.boolean().optional().describe("Whether the alert is enabled (default: true)"),
+    filter: z.union([z.string(), z.record(z.string())]).optional().describe("Structured filter expression or key/value map"),
+    pattern: z.string().optional().describe("Regex pattern against log message"),
+    threshold: z.number().int().positive().optional().describe("Trigger threshold (default: 1)"),
+    window: z.string().optional().describe("Evaluation window duration (e.g. 5m)"),
+    comparison: z.enum(["greater_than", "greater_than_or_equal", "equal"]).optional().describe("Threshold comparison mode"),
+    channels: z.array(z.enum(["incident", "email", "webhook"])).optional().describe("Notification channels"),
+    webhook_url: z.string().optional().describe("Webhook URL when channels includes webhook"),
+    cooldown: z.string().optional().describe("Cooldown duration before re-alerting (e.g. 15m)"),
+    priority: z.string().optional().describe("Priority/severity label"),
+  },
+  async ({ service_id, name, enabled, filter, pattern, threshold, window, comparison, channels, webhook_url, cooldown, priority }) => {
+    try {
+      const filterExpr = buildStructuredFilterExpression(filter as string | Record<string, string> | undefined);
+      return text(await client.createLogAlert(service_id, {
+        name,
+        enabled,
+        condition: {
+          filter: filterExpr,
+          pattern,
+          threshold,
+          window,
+          comparison,
+        },
+        notification: {
+          channels,
+          webhook_url,
+          cooldown,
+          priority,
+        },
+      }));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "update_log_alert",
+  "Update a log-based alert rule for a service.",
+  {
+    service_id: z.string().describe("Service ID"),
+    alert_id: z.string().describe("Log alert ID"),
+    name: z.string().optional().describe("Alert name"),
+    enabled: z.boolean().optional().describe("Enable or disable the alert"),
+    filter: z.union([z.string(), z.record(z.string())]).optional().describe("Structured filter expression or key/value map"),
+    pattern: z.string().optional().describe("Regex pattern against log message"),
+    threshold: z.number().int().positive().optional().describe("Trigger threshold"),
+    window: z.string().optional().describe("Evaluation window duration (e.g. 5m)"),
+    comparison: z.enum(["greater_than", "greater_than_or_equal", "equal"]).optional().describe("Threshold comparison mode"),
+    channels: z.array(z.enum(["incident", "email", "webhook"])).optional().describe("Notification channels"),
+    webhook_url: z.string().optional().describe("Webhook URL when channels includes webhook"),
+    cooldown: z.string().optional().describe("Cooldown duration before re-alerting (e.g. 15m)"),
+    priority: z.string().optional().describe("Priority/severity label"),
+  },
+  async ({ service_id, alert_id, name, enabled, filter, pattern, threshold, window, comparison, channels, webhook_url, cooldown, priority }) => {
+    try {
+      const filterExpr = buildStructuredFilterExpression(filter as string | Record<string, string> | undefined);
+      return text(await client.updateLogAlert(service_id, alert_id, {
+        name,
+        enabled,
+        condition: {
+          filter: filterExpr,
+          pattern,
+          threshold,
+          window,
+          comparison,
+        },
+        notification: {
+          channels,
+          webhook_url,
+          cooldown,
+          priority,
+        },
+      }));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "delete_log_alert",
+  "Delete a log-based alert rule from a service.",
+  {
+    service_id: z.string().describe("Service ID"),
+    alert_id: z.string().describe("Log alert ID"),
+  },
+  async ({ service_id, alert_id }) => {
+    try { return text(await client.deleteLogAlert(service_id, alert_id)); }
     catch (e) { return err(e); }
   },
 );

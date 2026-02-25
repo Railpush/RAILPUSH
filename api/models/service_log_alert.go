@@ -114,6 +114,10 @@ func normalizeLogAlertChannels(channels []string) []string {
 	return out
 }
 
+func NormalizeLogAlertChannels(channels []string) []string {
+	return normalizeLogAlertChannels(channels)
+}
+
 func ListServiceLogAlerts(serviceID string) ([]ServiceLogAlert, error) {
 	rows, err := database.DB.Query(
 		`SELECT id, service_id, workspace_id, name, enabled, COALESCE(filter_query,''), COALESCE(pattern,''),

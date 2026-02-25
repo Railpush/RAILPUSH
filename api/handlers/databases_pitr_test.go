@@ -8,9 +8,9 @@ import (
 
 func TestNormalizeDatabaseRestoreTarget(t *testing.T) {
 	tests := []struct {
-		raw    string
-		want   string
-		valid  bool
+		raw   string
+		want  string
+		valid bool
 	}{
 		{raw: "", want: databaseRestoreTargetNewDatabase, valid: true},
 		{raw: "new_database", want: databaseRestoreTargetNewDatabase, valid: true},
