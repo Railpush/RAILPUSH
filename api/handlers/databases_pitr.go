@@ -396,6 +396,9 @@ func (h *DatabaseHandler) queuePointInTimeRestore(w http.ResponseWriter, r *http
 }
 
 func (h *DatabaseHandler) createRestoredDatabase(source *models.ManagedDatabase, userID, requestedName string) (*models.ManagedDatabase, string, error) {
+	if h == nil || h.Config == nil {
+		return nil, "", fmt.Errorf("database handler is not initialized")
+	}
 	if source == nil {
 		return nil, "", fmt.Errorf("source database is required")
 	}
@@ -569,6 +572,10 @@ func (h *DatabaseHandler) applyBackupToManagedDatabase(db *models.ManagedDatabas
 }
 
 func (h *DatabaseHandler) executePointInTimeRestoreJob(jobID, sourceDatabaseID, targetDatabaseID, targetPassword string, backup *databaseBackupSnapshot, restoreTo, requestedBy string) {
+	if h == nil || h.Config == nil {
+		_ = models.MarkDatabaseRestoreJobFailed(jobID, "database restore handler is unavailable")
+		return
+	}
 	if strings.TrimSpace(jobID) == "" || backup == nil {
 		return
 	}
