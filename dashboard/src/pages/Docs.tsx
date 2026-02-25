@@ -912,11 +912,11 @@ envVarGroups:
               <p className="text-sm text-content-secondary mb-4">
                 Two methods are available for updating env vars via the API:
               </p>
-              <div className="space-y-3 mb-6">
-                <div className="rounded-lg border border-border-primary bg-surface-secondary p-4">
-                  <code className="text-xs font-mono text-brand">PUT /services/:id/env-vars</code>
-                  <span className="text-xs text-content-tertiary ml-2">&mdash; Full replace. Existing vars not in the payload are <strong>deleted</strong>.</span>
-                </div>
+                <div className="space-y-3 mb-6">
+                  <div className="rounded-lg border border-border-primary bg-surface-secondary p-4">
+                    <code className="text-xs font-mono text-brand">PUT /services/:id/env-vars</code>
+                    <span className="text-xs text-content-tertiary ml-2">&mdash; Full replace. Existing vars not in the payload are <strong>deleted</strong>. If any existing key would be removed, confirm with <code className="text-xs bg-surface-tertiary px-1 rounded">"confirm_destructive": true</code>.</span>
+                  </div>
                 <div className="rounded-lg border border-border-primary bg-surface-secondary p-4">
                   <code className="text-xs font-mono text-brand">PATCH /services/:id/env-vars</code>
                   <span className="text-xs text-content-tertiary ml-2">&mdash; Additive upsert. Only the provided keys are created/updated. Missing keys are left untouched. Optionally pass <code className="text-xs bg-surface-tertiary px-1 rounded">"delete": ["KEY"]</code> to remove specific keys.</span>
@@ -928,6 +928,15 @@ envVarGroups:
     { "key": "EXISTING_VAR", "value": "updated" }
   ],
   "delete": ["OLD_UNUSED_VAR"]
+}`} />
+
+              <CodeBlock filename="PUT body (destructive replace)" code={`{
+  "mode": "replace",
+  "confirm_destructive": true,
+  "env_vars": [
+    { "key": "DATABASE_URL", "value": "postgres://...", "is_secret": true },
+    { "key": "NODE_ENV", "value": "production" }
+  ]
 }`} />
 
               <h3 className="text-lg font-semibold mb-3">Env Groups</h3>
@@ -1543,7 +1552,7 @@ curl https://railpush.com/api/v1/services \\
                 ]},
                 { group: 'Env Vars & Domains', endpoints: [
                   { method: 'GET', path: '/services/:id/env-vars', desc: 'List env vars' },
-                  { method: 'PUT', path: '/services/:id/env-vars', desc: 'Bulk replace all env vars' },
+                  { method: 'PUT', path: '/services/:id/env-vars', desc: 'Bulk replace all env vars (confirm required for removals)' },
                   { method: 'PATCH', path: '/services/:id/env-vars', desc: 'Upsert env vars (additive)' },
                   { method: 'GET', path: '/services/:id/custom-domains', desc: 'List custom domains' },
                   { method: 'POST', path: '/services/:id/custom-domains', desc: 'Add custom domain (with optional redirect_target)' },

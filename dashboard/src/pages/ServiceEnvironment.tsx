@@ -14,6 +14,7 @@ const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export function ServiceEnvironment() {
   const { serviceId } = useParams<{ serviceId: string }>();
   const [vars, setVars] = useState<EnvVar[]>([]);
+  const [initialKeys, setInitialKeys] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
@@ -25,8 +26,12 @@ export function ServiceEnvironment() {
     if (!serviceId) return;
     setLoadError(false);
     envVarsApi.list(serviceId)
-      .then((data) => { setVars(data); setLoadError(false); })
-      .catch(() => { setVars([]); setLoadError(true); })
+      .then((data) => {
+        setVars(data);
+        setInitialKeys(data.map((v) => (v.key || '').trim()).filter(Boolean));
+        setLoadError(false);
+      })
+      .catch(() => { setVars([]); setInitialKeys([]); setLoadError(true); })
       .finally(() => setLoading(false));
   }, [serviceId]);
 
@@ -97,8 +102,18 @@ export function ServiceEnvironment() {
       seen.add(k);
     }
 
+    const incomingKeys = new Set(cleaned.map((v) => v.key).filter(Boolean));
+    const removedKeys = initialKeys.filter((k) => !incomingKeys.has(k));
+    const confirmDestructive = removedKeys.length > 0;
+    if (confirmDestructive) {
+      const preview = removedKeys.slice(0, 5).join(', ');
+      const extra = removedKeys.length > 5 ? ` (+${removedKeys.length - 5} more)` : '';
+      const ok = window.confirm(`This will remove ${removedKeys.length} environment variable(s): ${preview}${extra}. Continue?`);
+      if (!ok) return;
+    }
+
     try {
-      await envVarsApi.update(serviceId, cleaned);
+      await envVarsApi.update(serviceId, cleaned, confirmDestructive ? { confirmDestructive: true } : undefined);
       if (action !== 'save') {
         await deploys.trigger(serviceId, {});
       }
@@ -106,6 +121,7 @@ export function ServiceEnvironment() {
       try {
         const fresh = await envVarsApi.list(serviceId);
         setVars(fresh);
+        setInitialKeys(fresh.map((v) => (v.key || '').trim()).filter(Boolean));
         setLoadError(false);
       } catch { /* non-fatal: vars are already saved */ }
       toast.success(action === 'save' ? 'Environment variables saved' : 'Environment variables saved and deploy triggered');

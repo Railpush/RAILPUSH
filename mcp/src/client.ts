@@ -150,8 +150,16 @@ export class RailPushClient {
     return this.request("GET", `/services/${serviceId}/env-vars`);
   }
 
-  async bulkUpdateEnvVars(serviceId: string, vars: Array<{ key: string; value: string; is_secret?: boolean }>) {
-    return this.request("PUT", `/services/${serviceId}/env-vars`, vars);
+  async bulkUpdateEnvVars(
+    serviceId: string,
+    vars: Array<{ key: string; value: string; is_secret?: boolean }>,
+    confirmDestructive?: boolean,
+  ) {
+    return this.request("PUT", `/services/${serviceId}/env-vars`, {
+      mode: "replace",
+      confirm_destructive: Boolean(confirmDestructive),
+      env_vars: vars,
+    });
   }
 
   async mergeEnvVars(serviceId: string, envVars: Array<{ key: string; value: string; is_secret?: boolean }>, deleteKeys?: string[]) {

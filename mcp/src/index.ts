@@ -583,7 +583,7 @@ server.tool(
 
 server.tool(
   "set_env_vars",
-  "Set environment variables for a service. This is a bulk operation — provide all env vars the service should have. Existing vars not in the list will be removed. After updating, you typically need to trigger a new deploy.",
+  "Set environment variables for a service. This is a bulk replace operation — provide all env vars the service should have. Existing vars not in the list are removed. To perform a destructive replace, set confirm_destructive=true. Use upsert_env_vars for additive updates.",
   {
     service_id: z.string().describe("Service ID"),
     env_vars: z.array(z.object({
@@ -591,9 +591,10 @@ server.tool(
       value: z.string().describe("Variable value"),
       is_secret: z.boolean().optional().describe("Mark as secret (masks value in dashboard, default: false)"),
     })).describe("Array of environment variables to set"),
+    confirm_destructive: z.boolean().optional().describe("Required only when this replace removes existing keys"),
   },
-  async ({ service_id, env_vars }) => {
-    try { return text(await client.bulkUpdateEnvVars(service_id, env_vars)); }
+  async ({ service_id, env_vars, confirm_destructive }) => {
+    try { return text(await client.bulkUpdateEnvVars(service_id, env_vars, confirm_destructive)); }
     catch (e) { return err(e); }
   },
 );

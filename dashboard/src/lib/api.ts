@@ -140,8 +140,17 @@ export const aiFix = {
 // Env Vars
 export const envVars = {
   list: (serviceId: string) => request<EnvVar[]>(`/services/${serviceId}/env-vars`),
-  update: (serviceId: string, vars: Array<Pick<EnvVar, 'key' | 'value' | 'is_secret'>>) =>
-    request<{ status: string }>(`/services/${serviceId}/env-vars`, { method: 'PUT', body: JSON.stringify(vars) }),
+  update: (
+    serviceId: string,
+    vars: Array<Pick<EnvVar, 'key' | 'value' | 'is_secret'>>,
+    options?: { confirmDestructive?: boolean },
+  ) =>
+    request<{ status: string; removed?: number }>(`/services/${serviceId}/env-vars`, {
+      method: 'PUT',
+      body: JSON.stringify(options?.confirmDestructive
+        ? { mode: 'replace', confirm_destructive: true, env_vars: vars }
+        : vars),
+    }),
   merge: (serviceId: string, data: { env_vars?: Array<Pick<EnvVar, 'key' | 'value' | 'is_secret'>>; delete?: string[] }) =>
     request<{ status: string; upserted: number; deleted: number }>(`/services/${serviceId}/env-vars`, { method: 'PATCH', body: JSON.stringify(data) }),
 };

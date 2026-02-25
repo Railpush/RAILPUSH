@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 
@@ -154,19 +156,76 @@ func (h *EnvVarHandler) BulkUpdateEnvVars(w http.ResponseWriter, r *http.Request
 		existingByKey[k] = v
 	}
 
-	var req []struct {
+	type envVarInput struct {
 		Key      string `json:"key"`
 		Value    string `json:"value"`
 		IsSecret bool   `json:"is_secret"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	// Guard: reject empty payload when env vars already exist to prevent accidental wipe.
-	// To intentionally remove all env vars, clients should use DELETE or PATCH with explicit deletes.
-	if len(req) == 0 && len(existing) > 0 {
-		utils.RespondError(w, http.StatusBadRequest, "refusing to delete all env vars via empty PUT — use PATCH with explicit deletes instead")
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	confirmDestructive := false
+	mode := ""
+	var req []envVarInput
+	if body[0] == '[' {
+		if err := json.Unmarshal(body, &req); err != nil {
+			utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	} else {
+		var payload struct {
+			EnvVars            []envVarInput `json:"env_vars"`
+			ConfirmDestructive bool          `json:"confirm_destructive"`
+			Mode               string        `json:"mode"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		req = payload.EnvVars
+		confirmDestructive = payload.ConfirmDestructive
+		mode = strings.ToLower(strings.TrimSpace(payload.Mode))
+		if mode != "" && mode != "replace" {
+			utils.RespondError(w, http.StatusBadRequest, "invalid mode (use replace)")
+			return
+		}
+	}
+
+	if len(req) == 0 && len(existing) == 0 {
+		utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+		return
+	}
+
+	incomingKeys := map[string]struct{}{}
+	missingExisting := make([]string, 0)
+
+	for _, item := range req {
+		key := strings.TrimSpace(item.Key)
+		if key == "" {
+			continue
+		}
+		if _, exists := incomingKeys[key]; exists {
+			utils.RespondError(w, http.StatusBadRequest, "duplicate env var key: "+key)
+			return
+		}
+		incomingKeys[key] = struct{}{}
+	}
+	for key := range existingByKey {
+		if _, ok := incomingKeys[key]; !ok {
+			missingExisting = append(missingExisting, key)
+		}
+	}
+	if len(missingExisting) > 0 && !confirmDestructive {
+		utils.RespondError(w, http.StatusBadRequest, "destructive replace detected; resend with {\"mode\":\"replace\",\"confirm_destructive\":true} or use PATCH /env-vars")
 		return
 	}
 
@@ -194,12 +253,16 @@ func (h *EnvVarHandler) BulkUpdateEnvVars(w http.ResponseWriter, r *http.Request
 		}
 		vars = append(vars, models.EnvVar{Key: key, EncryptedValue: encrypted, IsSecret: item.IsSecret})
 	}
+
 	if err := models.BulkUpsertEnvVars("service", serviceID, vars); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to update env vars: "+err.Error())
 		return
 	}
 	services.Audit(svc.WorkspaceID, userID, "service.env_vars_updated", "service", svc.ID, map[string]interface{}{
-		"count": len(vars),
+		"count":                len(vars),
+		"removed":              len(missingExisting),
+		"confirm_destructive":  confirmDestructive,
+		"mode":                 "replace",
 	})
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{"status": "updated", "removed": len(missingExisting)})
 }
