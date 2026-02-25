@@ -493,6 +493,9 @@ DB_NAME=mydb`} />
               <p className="text-content-secondary text-base leading-relaxed mt-4 mb-6">
                 Blueprints are Infrastructure as Code for RailPush. Define your entire stack — services, databases, Redis, environment variables — in a single <code className="px-1.5 py-0.5 rounded bg-surface-tertiary text-content-primary text-xs font-mono">railpush.yaml</code> file. Push to deploy everything at once.
               </p>
+              <p className="text-xs text-content-tertiary mb-6">
+                RailPush checks <code className="text-[11px] bg-surface-tertiary px-1 rounded">railpush.yaml</code> first and falls back to <code className="text-[11px] bg-surface-tertiary px-1 rounded">render.yaml</code> for backward compatibility.
+              </p>
 
               <div className="rounded-xl border border-brand-purple/30 bg-brand-purple/5 p-5 mb-8">
                 <div className="flex items-start gap-3">

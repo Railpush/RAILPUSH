@@ -369,7 +369,7 @@ func rewriteAIGeneratedServiceNamesForWorkspace(bp *models.Blueprint, spec *Rend
 	return nil
 }
 
-// SyncBlueprint clones the repo, parses render.yaml, and creates/updates services
+// SyncBlueprint clones the repo, parses railpush.yaml (fallback: render.yaml), and creates/updates services
 func (h *BlueprintHandler) SyncBlueprint(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 	userID := middleware.GetUserID(r)
@@ -584,6 +584,31 @@ func normalizeBlueprintPathList(items []string) []string {
 		out = append(out, v)
 	}
 	return out
+}
+
+func blueprintFileCandidates(filePath string) []string {
+	basePath := strings.TrimSpace(filePath)
+	if basePath == "" {
+		basePath = "railpush.yaml"
+	}
+
+	basePath = strings.TrimPrefix(basePath, "./")
+	basePath = strings.TrimPrefix(basePath, "/")
+
+	dir := filepath.Dir(basePath)
+	base := filepath.Base(basePath)
+
+	candidates := []string{}
+	if strings.EqualFold(base, "railpush.yaml") || strings.EqualFold(base, "render.yaml") {
+		candidates = append(candidates, filepath.Join(dir, "railpush.yaml"))
+		candidates = append(candidates, filepath.Join(dir, "render.yaml"))
+	} else {
+		candidates = append(candidates, basePath)
+		candidates = append(candidates, filepath.Join(dir, "railpush.yaml"))
+		candidates = append(candidates, filepath.Join(dir, "render.yaml"))
+	}
+
+	return normalizeBlueprintPathList(candidates)
 }
 
 func blueprintBuildFilters(sdef RenderService) (include []string, exclude []string) {
@@ -989,31 +1014,37 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	}
 	logLine("Repository cloned successfully.")
 
-	// Read railpush.yaml (preferred) or render.yaml (fallback).
+	// Read railpush.yaml first, then fall back to render.yaml for compatibility.
 	// If neither exists, use the stored generated YAML if present, otherwise auto-generate via OpenRouter.
-	logLine("Looking for " + bp.FilePath + " in repository...")
-	yamlPath := filepath.Join(tmpDir, bp.FilePath)
-	data, err := os.ReadFile(yamlPath)
-	repoFileExists := err == nil
-	// Fallback: if the primary file doesn't exist, try the other name.
-	if !repoFileExists {
-		var fallback string
-		if strings.HasSuffix(bp.FilePath, "railpush.yaml") {
-			fallback = strings.Replace(bp.FilePath, "railpush.yaml", "render.yaml", 1)
-		} else if strings.HasSuffix(bp.FilePath, "render.yaml") {
-			fallback = strings.Replace(bp.FilePath, "render.yaml", "railpush.yaml", 1)
+	logLine("Looking for blueprint file in repository (railpush.yaml first, render.yaml fallback)...")
+	data := []byte{}
+	repoFileExists := false
+	resolvedBlueprintPath := ""
+	for _, candidate := range blueprintFileCandidates(bp.FilePath) {
+		candidatePath := filepath.Join(tmpDir, candidate)
+		candidateData, readErr := os.ReadFile(candidatePath)
+		if readErr == nil {
+			data = candidateData
+			repoFileExists = true
+			resolvedBlueprintPath = candidate
+			break
 		}
-		if fallback != "" {
-			if fbData, fbErr := os.ReadFile(filepath.Join(tmpDir, fallback)); fbErr == nil {
-				data = fbData
-				repoFileExists = true
-			}
-		}
+	}
+	yamlPath := filepath.Join(tmpDir, "railpush.yaml")
+	if resolvedBlueprintPath != "" {
+		yamlPath = filepath.Join(tmpDir, resolvedBlueprintPath)
+	}
+	displayBlueprintPath := strings.TrimSpace(bp.FilePath)
+	if displayBlueprintPath == "" {
+		displayBlueprintPath = "railpush.yaml"
+	}
+	if resolvedBlueprintPath != "" {
+		displayBlueprintPath = resolvedBlueprintPath
 	}
 	specGeneratedByAI := false
 
 	if repoFileExists {
-		logLine("Found " + bp.FilePath + " in repository.")
+		logLine("Found " + resolvedBlueprintPath + " in repository.")
 	}
 
 	// Prefer the stored generated blueprint when the repo has no yaml.
@@ -1036,7 +1067,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		ai := services.NewBlueprintAIGenerator(h.Config)
 		if !ai.Available() {
 			if !repoFileExists && len(data) == 0 {
-				fail(bp.FilePath + " not found in repository (and automatic blueprint generation isn't configured)")
+				fail(displayBlueprintPath + " not found in repository (and automatic blueprint generation isn't configured)")
 				return
 			}
 		} else {
@@ -1045,7 +1076,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				log.Printf("Blueprint sync: OpenRouter generation failed blueprint=%s err=%v", bp.ID, genErr)
 				logLine("Blueprint AI error: " + genErr.Error())
 				if !repoFileExists && len(data) == 0 {
-					fail("failed to generate " + bp.FilePath + " with Blueprint AI: " + genErr.Error())
+					fail("failed to generate " + displayBlueprintPath + " with Blueprint AI: " + genErr.Error())
 					return
 				}
 			} else {
@@ -1076,25 +1107,25 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 					} else {
 						bp.GeneratedYAML = generated
 					}
-					logLine("Blueprint AI generated " + bp.FilePath + " successfully.")
-				log.Printf("Blueprint sync: generated %s via OpenRouter for blueprint=%s", bp.FilePath, bp.ID)
+					logLine("Blueprint AI generated " + displayBlueprintPath + " successfully.")
+					log.Printf("Blueprint sync: generated %s via OpenRouter for blueprint=%s", displayBlueprintPath, bp.ID)
 				}
 			}
 		}
 	}
 	if len(data) == 0 {
 		if repoFileExists {
-			fail("invalid " + bp.FilePath)
+			fail("invalid " + displayBlueprintPath)
 			return
 		}
-		fail(bp.FilePath + " not found in repository")
+		fail(displayBlueprintPath + " not found in repository")
 		return
 	}
 
 	logLine("Parsing YAML...")
 	var spec RenderYAML
 	if err := yaml.Unmarshal(data, &spec); err != nil {
-		fail("invalid YAML syntax in " + bp.FilePath + ": " + err.Error())
+		fail("invalid YAML syntax in " + displayBlueprintPath + ": " + err.Error())
 		return
 	}
 
@@ -1142,7 +1173,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	}
 
 	if len(spec.Services) == 0 && len(spec.Databases) == 0 && len(spec.KeyValues) == 0 {
-		fail("no services, databases, or key-value stores defined in " + bp.FilePath)
+		fail("no services, databases, or key-value stores defined in " + displayBlueprintPath)
 		return
 	}
 
@@ -1155,7 +1186,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	for _, ddef := range spec.Databases {
 		name := strings.TrimSpace(ddef.Name)
 		if name == "" {
-			fail("database name is required in " + bp.FilePath)
+			fail("database name is required in " + displayBlueprintPath)
 			return
 		}
 		k := strings.ToLower(name)
@@ -1169,7 +1200,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	for _, kvdef := range spec.KeyValues {
 		name := strings.TrimSpace(kvdef.Name)
 		if name == "" {
-			fail("key-value name is required in " + bp.FilePath)
+			fail("key-value name is required in " + displayBlueprintPath)
 			return
 		}
 		k := strings.ToLower(name)
@@ -1183,7 +1214,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	for _, gdef := range spec.EnvVarGroups {
 		name := strings.TrimSpace(gdef.Name)
 		if name == "" {
-			fail("env var group name is required in " + bp.FilePath)
+			fail("env var group name is required in " + displayBlueprintPath)
 			return
 		}
 		k := strings.ToLower(name)
@@ -1200,7 +1231,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	for _, sdef := range spec.Services {
 		name := strings.TrimSpace(sdef.Name)
 		if name == "" {
-			fail("service name is required in " + bp.FilePath)
+			fail("service name is required in " + displayBlueprintPath)
 			return
 		}
 		k := strings.ToLower(name)
@@ -1234,11 +1265,11 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				desiredRepo = strings.TrimSpace(bp.RepoURL)
 			}
 			if strings.TrimSpace(svc.RepoURL) != "" && desiredRepo != "" && strings.TrimSpace(svc.RepoURL) != desiredRepo {
-				fail(fmt.Sprintf("service name conflict: %q already exists in this workspace (repo=%q). Blueprint wants repo=%q. Rename the service in %s or rename/delete the existing service.", name, strings.TrimSpace(svc.RepoURL), desiredRepo, bp.FilePath))
+				fail(fmt.Sprintf("service name conflict: %q already exists in this workspace (repo=%q). Blueprint wants repo=%q. Rename the service in %s or rename/delete the existing service.", name, strings.TrimSpace(svc.RepoURL), desiredRepo, displayBlueprintPath))
 				return
 			}
 			if strings.TrimSpace(svc.Type) != "" && strings.TrimSpace(desiredType) != "" && strings.TrimSpace(svc.Type) != strings.TrimSpace(desiredType) {
-				fail(fmt.Sprintf("service name conflict: %q already exists in this workspace (type=%q). Blueprint wants type=%q. Rename the service in %s or rename/delete the existing service.", name, strings.TrimSpace(svc.Type), strings.TrimSpace(desiredType), bp.FilePath))
+				fail(fmt.Sprintf("service name conflict: %q already exists in this workspace (type=%q). Blueprint wants type=%q. Rename the service in %s or rename/delete the existing service.", name, strings.TrimSpace(svc.Type), strings.TrimSpace(desiredType), displayBlueprintPath))
 				return
 			}
 			// Disk conflicts for adopted services (no updates supported yet; fail early).
@@ -1434,7 +1465,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 	for _, sdef := range spec.Services {
 		serviceName := strings.TrimSpace(sdef.Name)
 		if serviceName == "" {
-			fail("service name is required in " + bp.FilePath)
+			fail("service name is required in " + displayBlueprintPath)
 			return
 		}
 
