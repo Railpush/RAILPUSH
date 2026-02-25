@@ -179,26 +179,88 @@ func (h *KeyValueHandler) GetKeyValue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Decrypt password for response
+	pw := ""
 	if kv.EncryptedPassword != "" {
-		pw, err := utils.Decrypt(kv.EncryptedPassword, h.Config.Crypto.EncryptionKey)
-		if err == nil {
-			type KVResponse struct {
-				models.ManagedKeyValue
-				Password string `json:"password"`
-				RedisURL string `json:"redis_url"`
-			}
-			resp := KVResponse{
-				ManagedKeyValue: *kv,
-				Password:        pw,
-				RedisURL:        "redis://:" + pw + "@" + kv.Host + ":" + intToStr(kv.Port),
-			}
-			utils.RespondJSON(w, http.StatusOK, resp)
-			return
+		if decrypted, derr := utils.Decrypt(kv.EncryptedPassword, h.Config.Crypto.EncryptionKey); derr == nil {
+			pw = decrypted
 		}
 	}
+	resp := h.keyValueResponse(kv, pw, false)
+	utils.RespondJSON(w, http.StatusOK, resp)
+}
 
-	utils.RespondJSON(w, http.StatusOK, kv)
+func (h *KeyValueHandler) RevealKeyValueCredentials(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	kv, err := models.GetManagedKeyValue(id)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if kv == nil {
+		utils.RespondError(w, http.StatusNotFound, "key-value store not found")
+		return
+	}
+
+	userID := middleware.GetUserID(r)
+	if err := services.EnsureWorkspaceAccess(userID, kv.WorkspaceID, models.RoleDeveloper); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	var req struct {
+		AcknowledgeSensitiveOutput bool `json:"acknowledge_sensitive_output"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !req.AcknowledgeSensitiveOutput {
+		utils.RespondError(w, http.StatusBadRequest, "acknowledge_sensitive_output must be true")
+		return
+	}
+
+	if strings.TrimSpace(kv.EncryptedPassword) == "" {
+		utils.RespondError(w, http.StatusNotFound, "key-value credentials unavailable")
+		return
+	}
+	pw, err := utils.Decrypt(kv.EncryptedPassword, h.Config.Crypto.EncryptionKey)
+	if err != nil || strings.TrimSpace(pw) == "" {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to decrypt key-value credentials")
+		return
+	}
+
+	services.Audit(kv.WorkspaceID, userID, "keyvalue.credentials.revealed", "keyvalue", kv.ID, map[string]interface{}{
+		"api_key_id": middleware.GetAPIKeyID(r),
+	})
+
+	resp := h.keyValueResponse(kv, pw, true)
+	utils.RespondJSON(w, http.StatusOK, resp)
+}
+
+func (h *KeyValueHandler) keyValueResponse(kv *models.ManagedKeyValue, password string, revealCredentials bool) map[string]interface{} {
+	passwordForURL := "<redacted>"
+	if revealCredentials && strings.TrimSpace(password) != "" {
+		passwordForURL = password
+	}
+
+	resp := map[string]interface{}{
+		"id":                  kv.ID,
+		"workspace_id":        kv.WorkspaceID,
+		"name":                kv.Name,
+		"plan":                kv.Plan,
+		"container_id":        kv.ContainerID,
+		"host":                kv.Host,
+		"port":                kv.Port,
+		"maxmemory_policy":    kv.MaxmemoryPolicy,
+		"status":              kv.Status,
+		"created_at":          kv.CreatedAt,
+		"redis_url":           "redis://:" + passwordForURL + "@" + kv.Host + ":" + intToStr(kv.Port),
+		"credentials_exposed": revealCredentials,
+	}
+	if revealCredentials {
+		resp["password"] = password
+	}
+	return resp
 }
 
 func (h *KeyValueHandler) UpdateKeyValue(w http.ResponseWriter, r *http.Request) {

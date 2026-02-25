@@ -429,6 +429,9 @@ disable_github_actions_deploy_gate(service_id)`} />
               <p className="text-sm text-content-secondary mb-4">
                 Connection details are available in the database dashboard. Use them as environment variables in your services:
               </p>
+              <p className="text-xs text-content-tertiary mb-3">
+                Security default: <code className="text-[11px] bg-surface-tertiary px-1 rounded">GET /databases/:id</code> and <code className="text-[11px] bg-surface-tertiary px-1 rounded">GET /keyvalue/:id</code> return redacted credentials. Plaintext credentials require explicit reveal endpoints and acknowledgement.
+              </p>
               <CodeBlock language="bash" filename=".env" code={`DATABASE_URL=postgres://mydb:password@localhost:5432/mydb
 
 # Or use individual variables:
@@ -1564,7 +1567,8 @@ curl https://railpush.com/api/v1/services \\
                 { group: 'Databases (PostgreSQL)', endpoints: [
                   { method: 'GET', path: '/databases', desc: 'List databases' },
                   { method: 'POST', path: '/databases', desc: 'Create a database' },
-                  { method: 'GET', path: '/databases/:id', desc: 'Get database details' },
+                  { method: 'GET', path: '/databases/:id', desc: 'Get database details (credentials redacted by default)' },
+                  { method: 'POST', path: '/databases/:id/credentials/reveal', desc: 'Reveal plaintext credentials (explicit acknowledgement required)' },
                   { method: 'PATCH', path: '/databases/:id', desc: 'Update a database' },
                   { method: 'DELETE', path: '/databases/:id', desc: 'Delete a database' },
                   { method: 'GET', path: '/databases/:id/backups', desc: 'List backups' },
@@ -1577,7 +1581,8 @@ curl https://railpush.com/api/v1/services \\
                 { group: 'Key-Value (Redis)', endpoints: [
                   { method: 'GET', path: '/keyvalue', desc: 'List key-value stores' },
                   { method: 'POST', path: '/keyvalue', desc: 'Create a key-value store' },
-                  { method: 'GET', path: '/keyvalue/:id', desc: 'Get key-value details' },
+                  { method: 'GET', path: '/keyvalue/:id', desc: 'Get key-value details (credentials redacted by default)' },
+                  { method: 'POST', path: '/keyvalue/:id/credentials/reveal', desc: 'Reveal plaintext credentials (explicit acknowledgement required)' },
                   { method: 'PATCH', path: '/keyvalue/:id', desc: 'Update plan or eviction policy' },
                   { method: 'DELETE', path: '/keyvalue/:id', desc: 'Delete a key-value store' },
                 ]},
@@ -1685,7 +1690,7 @@ curl https://railpush.com/api/v1/services \\
                   <div>
                     <div className="text-sm font-semibold mb-1">AI-native infrastructure</div>
                     <div className="text-sm text-content-secondary">
-                      With 129 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
+                      With 131 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
                     </div>
                   </div>
                 </div>
@@ -1779,7 +1784,7 @@ npm run build`} />
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Available Tools</h3>
               <p className="text-content-secondary text-sm leading-relaxed mb-4">
-                The MCP server exposes 129 tools organized by category. Agents discover these automatically.
+                The MCP server exposes 131 tools organized by category. Agents discover these automatically.
               </p>
 
               <div className="overflow-x-auto mb-8">
@@ -1798,8 +1803,8 @@ npm run build`} />
                       ['Deploys', 'trigger, list, get, rollback, queue position'],
                       ['Env Vars', 'list, set (bulk replace), upsert (additive), get/set/enable/disable GitHub Actions deploy gate, set workflow allowlist'],
                       ['Custom Domains', 'list, add, delete'],
-                      ['Databases', 'list, create, get, update, delete, backup, list backups, replicas, create replica, promote replica, enable HA'],
-                      ['Key-Value (Redis)', 'list, create, get, update, delete'],
+                      ['Databases', 'list, create, get (redacted), reveal credentials, update, delete, backup, list backups, replicas, create replica, promote replica, enable HA'],
+                      ['Key-Value (Redis)', 'list, create, get (redacted), reveal credentials, update, delete'],
                       ['Logs', 'get runtime logs, get deploy logs'],
                       ['AI Fix', 'start fix session, get fix status'],
                       ['One-Off Jobs', 'run, list, get'],

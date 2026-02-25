@@ -342,6 +342,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/databases", dbH.ListDatabases).Methods("GET")
 	authed.HandleFunc("/databases", dbH.CreateDatabase).Methods("POST")
 	authed.HandleFunc("/databases/{id}", dbH.GetDatabase).Methods("GET")
+	authed.HandleFunc("/databases/{id}/credentials/reveal", dbH.RevealDatabaseCredentials).Methods("POST")
 	authed.HandleFunc("/databases/{id}", dbH.UpdateDatabase).Methods("PATCH")
 	authed.HandleFunc("/databases/{id}", dbH.DeleteDatabase).Methods("DELETE")
 	authed.HandleFunc("/databases/{id}/backups", dbH.ListBackups).Methods("GET")
@@ -357,6 +358,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/keyvalue", kvH.ListKeyValues).Methods("GET")
 	authed.HandleFunc("/keyvalue", kvH.CreateKeyValue).Methods("POST")
 	authed.HandleFunc("/keyvalue/{id}", kvH.GetKeyValue).Methods("GET")
+	authed.HandleFunc("/keyvalue/{id}/credentials/reveal", kvH.RevealKeyValueCredentials).Methods("POST")
 	authed.HandleFunc("/keyvalue/{id}", kvH.UpdateKeyValue).Methods("PATCH")
 	authed.HandleFunc("/keyvalue/{id}", kvH.DeleteKeyValue).Methods("DELETE")
 

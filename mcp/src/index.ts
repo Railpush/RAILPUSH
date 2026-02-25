@@ -716,7 +716,7 @@ server.tool(
 
 server.tool(
   "create_database",
-  "Create a new managed PostgreSQL database. Returns the database credentials including password and connection URL.",
+  "Create a new managed PostgreSQL database.",
   {
     name: z.string().describe("Database name (also used as db_name and username)"),
     plan: z.enum(["free", "starter", "standard", "pro"]).optional().describe("Plan tier (default: starter)"),
@@ -731,10 +731,29 @@ server.tool(
 
 server.tool(
   "get_database",
-  "Get full details of a database, including connection credentials (password, internal/external URLs, psql commands).",
+  "Get database details and redacted connection strings (passwords are not returned by this endpoint).",
   { database_id: z.string().describe("Database ID") },
   async ({ database_id }) => {
     try { return text(await client.getDatabase(database_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "reveal_database_credentials",
+  "Reveal plaintext credentials for a database. Use only when absolutely required; output may be stored in logs/conversation history.",
+  {
+    database_id: z.string().describe("Database ID"),
+    acknowledge_sensitive_output: z.boolean().describe("Must be true to confirm you accept sensitive output exposure"),
+  },
+  async ({ database_id, acknowledge_sensitive_output }) => {
+    if (!acknowledge_sensitive_output) {
+      return text({
+        status: "blocked",
+        reason: "acknowledge_sensitive_output must be true",
+      });
+    }
+    try { return text(await client.revealDatabaseCredentials(database_id)); }
     catch (e) { return err(e); }
   },
 );
@@ -860,10 +879,29 @@ server.tool(
 
 server.tool(
   "get_key_value_store",
-  "Get details of a Redis/key-value store, including connection info.",
+  "Get details of a Redis/key-value store with redacted credentials.",
   { store_id: z.string().describe("Key-value store ID") },
   async ({ store_id }) => {
     try { return text(await client.getKeyValue(store_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "reveal_key_value_credentials",
+  "Reveal plaintext credentials for a Redis/key-value store. Use only when absolutely required; output may be stored in logs/conversation history.",
+  {
+    store_id: z.string().describe("Key-value store ID"),
+    acknowledge_sensitive_output: z.boolean().describe("Must be true to confirm you accept sensitive output exposure"),
+  },
+  async ({ store_id, acknowledge_sensitive_output }) => {
+    if (!acknowledge_sensitive_output) {
+      return text({
+        status: "blocked",
+        reason: "acknowledge_sensitive_output must be true",
+      });
+    }
+    try { return text(await client.revealKeyValueCredentials(store_id)); }
     catch (e) { return err(e); }
   },
 );

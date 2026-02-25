@@ -185,49 +185,120 @@ func (h *DatabaseHandler) GetDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Decrypt password for response
+	pw := ""
 	if db.EncryptedPassword != "" {
-		pw, err := utils.Decrypt(db.EncryptedPassword, h.Config.Crypto.EncryptionKey)
-		if err == nil {
-			externalHost := db.Host
-			if strings.TrimSpace(h.Config.ControlPlane.Domain) != "" {
-				externalHost = h.Config.ControlPlane.Domain
-			}
-			type DatabaseResponse struct {
-				models.ManagedDatabase
-				Password        string `json:"password"`
-				InternalURL     string `json:"internal_url"`
-				ExternalURL     string `json:"external_url"`
-				ExternalPSQL    string `json:"external_psql_command"`
-				PSQLCommand     string `json:"psql_command"`
-			}
-			// External URL uses the allocated TCP proxy port (if available).
-			// DB_EXTERNAL_HOST is a DNS-only record (no Cloudflare proxy) pointing to
-			// the ingress node IP. Falls back to the control plane domain if not set.
-			dbExtHost := strings.TrimSpace(h.Config.ControlPlane.DBExternalHost)
-			if dbExtHost == "" {
-				dbExtHost = externalHost
-			}
-			externalURL := ""
-			externalPSQL := ""
-			if db.ExternalPort > 0 && dbExtHost != "" {
-				externalURL = "postgresql://" + db.Username + ":" + pw + "@" + dbExtHost + ":" + intToStr(db.ExternalPort) + "/" + db.DBName + "?sslmode=require"
-				externalPSQL = "PGPASSWORD=" + pw + " psql -h " + dbExtHost + " -p " + intToStr(db.ExternalPort) + " -U " + db.Username + " " + db.DBName
-			}
-			resp := DatabaseResponse{
-				ManagedDatabase: *db,
-				Password:        pw,
-				InternalURL:     "postgresql://" + db.Username + ":" + pw + "@" + db.Host + ":" + intToStr(db.Port) + "/" + db.DBName,
-				ExternalURL:     externalURL,
-				ExternalPSQL:    externalPSQL,
-				PSQLCommand:     "PGPASSWORD=" + pw + " psql -h " + db.Host + " -p " + intToStr(db.Port) + " -U " + db.Username + " " + db.DBName,
-			}
-			utils.RespondJSON(w, http.StatusOK, resp)
-			return
+		if decrypted, derr := utils.Decrypt(db.EncryptedPassword, h.Config.Crypto.EncryptionKey); derr == nil {
+			pw = decrypted
 		}
 	}
+	resp := h.databaseResponse(db, pw, false)
+	utils.RespondJSON(w, http.StatusOK, resp)
+}
 
-	utils.RespondJSON(w, http.StatusOK, db)
+func (h *DatabaseHandler) RevealDatabaseCredentials(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	db, err := models.GetManagedDatabase(id)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if db == nil {
+		utils.RespondError(w, http.StatusNotFound, "database not found")
+		return
+	}
+
+	userID := middleware.GetUserID(r)
+	if err := services.EnsureWorkspaceAccess(userID, db.WorkspaceID, models.RoleDeveloper); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	var req struct {
+		AcknowledgeSensitiveOutput bool `json:"acknowledge_sensitive_output"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !req.AcknowledgeSensitiveOutput {
+		utils.RespondError(w, http.StatusBadRequest, "acknowledge_sensitive_output must be true")
+		return
+	}
+
+	if strings.TrimSpace(db.EncryptedPassword) == "" {
+		utils.RespondError(w, http.StatusNotFound, "database credentials unavailable")
+		return
+	}
+	pw, err := utils.Decrypt(db.EncryptedPassword, h.Config.Crypto.EncryptionKey)
+	if err != nil || strings.TrimSpace(pw) == "" {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to decrypt database credentials")
+		return
+	}
+
+	services.Audit(db.WorkspaceID, userID, "database.credentials.revealed", "database", db.ID, map[string]interface{}{
+		"api_key_id": middleware.GetAPIKeyID(r),
+	})
+
+	resp := h.databaseResponse(db, pw, true)
+	utils.RespondJSON(w, http.StatusOK, resp)
+}
+
+func (h *DatabaseHandler) databaseResponse(db *models.ManagedDatabase, password string, revealCredentials bool) map[string]interface{} {
+	maskedPassword := "<redacted>"
+	passwordForURL := maskedPassword
+	if revealCredentials && strings.TrimSpace(password) != "" {
+		passwordForURL = password
+	}
+
+	externalHost := db.Host
+	if strings.TrimSpace(h.Config.ControlPlane.Domain) != "" {
+		externalHost = h.Config.ControlPlane.Domain
+	}
+	// DB_EXTERNAL_HOST is a DNS-only record (no Cloudflare proxy) pointing to
+	// the ingress node IP. Falls back to control plane domain if not set.
+	dbExtHost := strings.TrimSpace(h.Config.ControlPlane.DBExternalHost)
+	if dbExtHost == "" {
+		dbExtHost = externalHost
+	}
+
+	internalURL := "postgresql://" + db.Username + ":" + passwordForURL + "@" + db.Host + ":" + intToStr(db.Port) + "/" + db.DBName
+	psqlCommand := "PGPASSWORD=" + passwordForURL + " psql -h " + db.Host + " -p " + intToStr(db.Port) + " -U " + db.Username + " " + db.DBName
+
+	externalURL := ""
+	externalPSQL := ""
+	if db.ExternalPort > 0 && dbExtHost != "" {
+		externalURL = "postgresql://" + db.Username + ":" + passwordForURL + "@" + dbExtHost + ":" + intToStr(db.ExternalPort) + "/" + db.DBName + "?sslmode=require"
+		externalPSQL = "PGPASSWORD=" + passwordForURL + " psql -h " + dbExtHost + " -p " + intToStr(db.ExternalPort) + " -U " + db.Username + " " + db.DBName
+	}
+
+	resp := map[string]interface{}{
+		"id":                 db.ID,
+		"workspace_id":       db.WorkspaceID,
+		"name":               db.Name,
+		"plan":               db.Plan,
+		"pg_version":         db.PGVersion,
+		"container_id":       db.ContainerID,
+		"host":               db.Host,
+		"port":               db.Port,
+		"external_port":      db.ExternalPort,
+		"db_name":            db.DBName,
+		"username":           db.Username,
+		"status":             db.Status,
+		"ha_enabled":         db.HAEnabled,
+		"ha_strategy":        db.HAStrategy,
+		"standby_replica_id": db.StandbyReplicaID,
+		"init_script":        db.InitScript,
+		"created_at":         db.CreatedAt,
+		"internal_url":       internalURL,
+		"external_url":       externalURL,
+		"external_psql_command": externalPSQL,
+		"psql_command":          psqlCommand,
+		"credentials_exposed":   revealCredentials,
+	}
+	if revealCredentials {
+		resp["password"] = password
+	}
+	return resp
 }
 
 func (h *DatabaseHandler) UpdateDatabase(w http.ResponseWriter, r *http.Request) {

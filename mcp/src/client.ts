@@ -210,6 +210,12 @@ export class RailPushClient {
     return this.request("GET", `/databases/${id}`);
   }
 
+  async revealDatabaseCredentials(id: string) {
+    return this.request("POST", `/databases/${id}/credentials/reveal`, {
+      acknowledge_sensitive_output: true,
+    });
+  }
+
   async updateDatabase(id: string, data: Record<string, unknown>) {
     return this.request("PATCH", `/databases/${id}`, data);
   }
@@ -254,6 +260,12 @@ export class RailPushClient {
 
   async getKeyValue(id: string) {
     return this.request("GET", `/keyvalue/${id}`);
+  }
+
+  async revealKeyValueCredentials(id: string) {
+    return this.request("POST", `/keyvalue/${id}/credentials/reveal`, {
+      acknowledge_sensitive_output: true,
+    });
   }
 
   async updateKeyValue(id: string, data: Record<string, unknown>) {
