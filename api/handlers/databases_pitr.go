@@ -196,14 +196,14 @@ func (h *DatabaseHandler) GetRecoveryWindow(w http.ResponseWriter, r *http.Reque
 	}
 
 	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
-		"database_id":              db.ID,
-		"earliest_recovery_point":  earliest,
-		"latest_recovery_point":    latest,
-		"retention_days":           ret.WALArchiveDays,
-		"base_backup_count":        len(backups),
-		"latest_base_backup_at":    latestBaseBackupAt,
-		"restore_precision":        "backup_snapshot",
-		"wal_archiving":            map[string]interface{}{"enabled": true, "retention_days": ret.WALArchiveDays, "enforcement": "best_effort"},
+		"database_id":               db.ID,
+		"earliest_recovery_point":   earliest,
+		"latest_recovery_point":     latest,
+		"retention_days":            ret.WALArchiveDays,
+		"base_backup_count":         len(backups),
+		"latest_base_backup_at":     latestBaseBackupAt,
+		"restore_precision":         "backup_snapshot",
+		"wal_archiving":             map[string]interface{}{"enabled": true, "retention_days": ret.WALArchiveDays, "enforcement": "best_effort"},
 		"supports_in_place_restore": true,
 		"supports_restore_to_new":   true,
 	})
@@ -387,7 +387,7 @@ func (h *DatabaseHandler) queuePointInTimeRestore(w http.ResponseWriter, r *http
 		"target_time":             targetTime.UTC().Format(time.RFC3339),
 		"effective_restore_point": backup.RestorePoint.UTC().Format(time.RFC3339),
 		"backup_id":               backup.ID,
-		"restore_precision":        "backup_snapshot",
+		"restore_precision":       "backup_snapshot",
 	}
 	if restoreTo == databaseRestoreTargetNewDatabase {
 		response["target_database_name"] = target.Name
@@ -507,7 +507,7 @@ func (h *DatabaseHandler) waitForDatabaseReady(databaseID string, timeout time.D
 	}
 }
 
-func truncateOutput(raw string, max int) string {
+func truncateRestoreOutput(raw string, max int) string {
 	raw = strings.TrimSpace(raw)
 	if max <= 0 || len(raw) <= max {
 		return raw
@@ -565,7 +565,7 @@ func (h *DatabaseHandler) applyBackupToManagedDatabase(db *models.ManagedDatabas
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return fmt.Errorf("restore timed out after 20m")
 		}
-		return fmt.Errorf("restore command failed: %s", truncateOutput(string(out), 1200))
+		return fmt.Errorf("restore command failed: %s", truncateRestoreOutput(string(out), 1200))
 	}
 
 	return nil
@@ -590,14 +590,14 @@ func (h *DatabaseHandler) executePointInTimeRestoreJob(jobID, sourceDatabaseID, 
 		if err != nil {
 			msg = msg + ": " + err.Error()
 		}
-		_ = models.MarkDatabaseRestoreJobFailed(jobID, truncateOutput(msg, 1024))
+		_ = models.MarkDatabaseRestoreJobFailed(jobID, truncateRestoreOutput(msg, 1024))
 		return
 	}
 
 	if restoreTo == databaseRestoreTargetNewDatabase {
 		targetDB, err = h.waitForDatabaseReady(targetDatabaseID, 10*time.Minute)
 		if err != nil {
-			_ = models.MarkDatabaseRestoreJobFailed(jobID, truncateOutput(err.Error(), 1024))
+			_ = models.MarkDatabaseRestoreJobFailed(jobID, truncateRestoreOutput(err.Error(), 1024))
 			_ = models.UpdateManagedDatabaseStatus(targetDatabaseID, "restore_failed", targetDB.ContainerID)
 			return
 		}
@@ -618,13 +618,13 @@ func (h *DatabaseHandler) executePointInTimeRestoreJob(jobID, sourceDatabaseID, 
 
 	_ = models.UpdateManagedDatabaseStatus(targetDB.ID, "restoring", targetDB.ContainerID)
 	if err := h.applyBackupToManagedDatabase(targetDB, targetPassword, backup.FilePath); err != nil {
-		_ = models.MarkDatabaseRestoreJobFailed(jobID, truncateOutput(err.Error(), 1024))
+		_ = models.MarkDatabaseRestoreJobFailed(jobID, truncateRestoreOutput(err.Error(), 1024))
 		_ = models.UpdateManagedDatabaseStatus(targetDB.ID, "restore_failed", targetDB.ContainerID)
 		services.Audit(targetDB.WorkspaceID, requestedBy, "database.point_in_time_restore.failed", "database", sourceDatabaseID, map[string]interface{}{
 			"restore_job_id":     jobID,
 			"target_database_id": targetDB.ID,
 			"restore_to":         restoreTo,
-			"error":              truncateOutput(err.Error(), 1024),
+			"error":              truncateRestoreOutput(err.Error(), 1024),
 		})
 		return
 	}
