@@ -9,6 +9,7 @@
 export interface RailPushClientConfig {
   apiUrl: string;
   apiKey: string;
+  apiVersionPin?: string;
 }
 
 export class RailPushAPIError extends Error {
@@ -24,10 +25,12 @@ export class RailPushAPIError extends Error {
 export class RailPushClient {
   private baseUrl: string;
   private apiKey: string;
+  private apiVersionPin: string;
 
   constructor(config: RailPushClientConfig) {
     this.baseUrl = config.apiUrl.replace(/\/+$/, "");
     this.apiKey = config.apiKey;
+    this.apiVersionPin = (config.apiVersionPin ?? "").trim() || "v1";
   }
 
   private async request(
@@ -49,6 +52,9 @@ export class RailPushClient {
       Authorization: `Bearer ${this.apiKey}`,
       Accept: "application/json",
     };
+    if (this.apiVersionPin) {
+      headers["X-RailPush-API-Version"] = this.apiVersionPin;
+    }
     if (body !== undefined) {
       headers["Content-Type"] = "application/json";
     }
@@ -61,7 +67,11 @@ export class RailPushClient {
 
     const text = await res.text();
     if (!res.ok) {
-      throw new RailPushAPIError(res.status, text);
+      const retryAfter = res.headers.get("retry-after");
+      const body = (res.status === 429 && retryAfter)
+        ? `${text || "rate limit exceeded"} (Retry-After: ${retryAfter}s)`
+        : text;
+      throw new RailPushAPIError(res.status, body);
     }
     if (!text) return {};
 
@@ -92,18 +102,64 @@ export class RailPushClient {
     });
   }
 
-  // ── Services ─────────────────────────────────────────────────────────
-
-  async listServices(workspaceId?: string) {
-    return this.request("GET", "/services", undefined, workspaceId ? { workspace_id: workspaceId } : undefined);
+  async getAPIVersionInfo() {
+    return this.request("GET", "/version");
   }
 
-  async searchServices(filters: { type?: string; status?: string; runtime?: string; name?: string; suspended?: string }) {
+  async getAPIVersionChangelog() {
+    return this.request("GET", "/version/changelog");
+  }
+
+  async getRateLimitInfo() {
+    return this.request("GET", "/rate-limit");
+  }
+
+  async searchWorkspaceResources(opts: { q: string; workspace_id?: string; limit?: number }) {
+    const query: Record<string, string> = { q: opts.q };
+    if (opts.workspace_id) query.workspace_id = opts.workspace_id;
+    if (typeof opts.limit === "number" && opts.limit > 0) query.limit = String(opts.limit);
+    return this.request("GET", "/search", undefined, query);
+  }
+
+  // ── Services ─────────────────────────────────────────────────────────
+
+  async listServices(filters?: {
+    workspace_id?: string;
+    type?: string;
+    status?: string;
+    runtime?: string;
+    plan?: string;
+    name?: string;
+    repo_url?: string;
+    project_id?: string;
+    query?: string;
+    suspended?: string;
+  }) {
+    return this.searchServices(filters ?? {});
+  }
+
+  async searchServices(filters: {
+    workspace_id?: string;
+    type?: string;
+    status?: string;
+    runtime?: string;
+    plan?: string;
+    name?: string;
+    repo_url?: string;
+    project_id?: string;
+    query?: string;
+    suspended?: string;
+  }) {
     const query: Record<string, string> = {};
+    if (filters.workspace_id) query.workspace_id = filters.workspace_id;
     if (filters.type) query.type = filters.type;
     if (filters.status) query.status = filters.status;
     if (filters.runtime) query.runtime = filters.runtime;
+    if (filters.plan) query.plan = filters.plan;
     if (filters.name) query.name = filters.name;
+    if (filters.repo_url) query.repo_url = filters.repo_url;
+    if (filters.project_id) query.project_id = filters.project_id;
+    if (filters.query) query.query = filters.query;
     if (filters.suspended) query.suspended = filters.suspended;
     return this.request("GET", "/services", undefined, query);
   }
@@ -168,8 +224,13 @@ export class RailPushClient {
     return this.request("POST", `/services/${serviceId}/deploys`, data ?? {});
   }
 
-  async listDeploys(serviceId: string) {
-    return this.request("GET", `/services/${serviceId}/deploys`);
+  async listDeploys(serviceId: string, opts?: { status?: string; branch?: string; since?: string; until?: string }) {
+    const query: Record<string, string> = {};
+    if (opts?.status) query.status = opts.status;
+    if (opts?.branch) query.branch = opts.branch;
+    if (opts?.since) query.since = opts.since;
+    if (opts?.until) query.until = opts.until;
+    return this.request("GET", `/services/${serviceId}/deploys`, undefined, query);
   }
 
   async getDeploy(serviceId: string, deployId: string) {
@@ -182,6 +243,14 @@ export class RailPushClient {
 
   async getDeployQueuePosition(serviceId: string, deployId: string) {
     return this.request("GET", `/services/${serviceId}/deploys/${deployId}/queue`);
+  }
+
+  async waitForDeploy(serviceId: string, deployId: string, timeoutSeconds?: number) {
+    const query: Record<string, string> = {};
+    if (typeof timeoutSeconds === "number" && timeoutSeconds > 0) {
+      query.timeout = String(timeoutSeconds);
+    }
+    return this.request("POST", `/services/${serviceId}/deploys/${deployId}/wait`, {}, query);
   }
 
   // ── Environment Variables ────────────────────────────────────────────
@@ -260,8 +329,22 @@ export class RailPushClient {
 
   // ── Databases ────────────────────────────────────────────────────────
 
-  async listDatabases(workspaceId?: string) {
-    return this.request("GET", "/databases", undefined, workspaceId ? { workspace_id: workspaceId } : undefined);
+  async listDatabases(filters?: {
+    workspace_id?: string;
+    plan?: string;
+    status?: string;
+    pg_version?: number;
+    name?: string;
+    query?: string;
+  }) {
+    const query: Record<string, string> = {};
+    if (filters?.workspace_id) query.workspace_id = filters.workspace_id;
+    if (filters?.plan) query.plan = filters.plan;
+    if (filters?.status) query.status = filters.status;
+    if (typeof filters?.pg_version === "number") query.pg_version = String(filters.pg_version);
+    if (filters?.name) query.name = filters.name;
+    if (filters?.query) query.query = filters.query;
+    return this.request("GET", "/databases", undefined, query);
   }
 
   async createDatabase(data: Record<string, unknown>) {
@@ -320,8 +403,20 @@ export class RailPushClient {
 
   // ── Key-Value (Redis) ────────────────────────────────────────────────
 
-  async listKeyValues(workspaceId?: string) {
-    return this.request("GET", "/keyvalue", undefined, workspaceId ? { workspace_id: workspaceId } : undefined);
+  async listKeyValues(filters?: {
+    workspace_id?: string;
+    plan?: string;
+    status?: string;
+    name?: string;
+    query?: string;
+  }) {
+    const query: Record<string, string> = {};
+    if (filters?.workspace_id) query.workspace_id = filters.workspace_id;
+    if (filters?.plan) query.plan = filters.plan;
+    if (filters?.status) query.status = filters.status;
+    if (filters?.name) query.name = filters.name;
+    if (filters?.query) query.query = filters.query;
+    return this.request("GET", "/keyvalue", undefined, query);
   }
 
   async createKeyValue(data: Record<string, unknown>) {

@@ -1,10 +1,12 @@
 package middleware
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,9 +23,31 @@ type rateLimiter struct {
 }
 
 type visitor struct {
-	count    int
+	count       int
 	windowStart time.Time
-	lastSeen time.Time
+	lastSeen    time.Time
+}
+
+type RateLimitInfo struct {
+	Limit      int           `json:"limit"`
+	Remaining  int           `json:"remaining"`
+	ResetAt    time.Time     `json:"reset_at"`
+	Window     time.Duration `json:"window"`
+	RetryAfter int           `json:"retry_after,omitempty"`
+}
+
+type rateLimitInfoContextKey struct{}
+
+func GetRateLimitInfo(r *http.Request) (RateLimitInfo, bool) {
+	if r == nil {
+		return RateLimitInfo{}, false
+	}
+	v := r.Context().Value(rateLimitInfoContextKey{})
+	if v == nil {
+		return RateLimitInfo{}, false
+	}
+	info, ok := v.(RateLimitInfo)
+	return info, ok
 }
 
 var generalLimiter = &rateLimiter{
@@ -195,18 +219,51 @@ func (rl *rateLimiter) cleanup() {
 	}
 }
 
-func (rl *rateLimiter) allow(ip string) bool {
+func (rl *rateLimiter) consume(ip string) (bool, RateLimitInfo) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	now := time.Now()
+	now := time.Now().UTC()
 	v, exists := rl.visitors[ip]
-	if !exists || now.Sub(v.windowStart) > rl.window {
-		rl.visitors[ip] = &visitor{count: 1, windowStart: now, lastSeen: now}
-		return true
+	if !exists || now.Sub(v.windowStart) >= rl.window {
+		v = &visitor{count: 0, windowStart: now, lastSeen: now}
+		rl.visitors[ip] = v
 	}
 	v.count++
 	v.lastSeen = now
-	return v.count <= rl.rate
+	remaining := rl.rate - v.count
+	if remaining < 0 {
+		remaining = 0
+	}
+	resetAt := v.windowStart.Add(rl.window)
+	info := RateLimitInfo{
+		Limit:     rl.rate,
+		Remaining: remaining,
+		ResetAt:   resetAt,
+		Window:    rl.window,
+	}
+	allowed := v.count <= rl.rate
+	if !allowed {
+		retry := int(time.Until(resetAt).Seconds())
+		if retry <= 0 {
+			retry = 1
+		}
+		info.RetryAfter = retry
+	}
+	return allowed, info
+}
+
+func writeRateLimitHeaders(w http.ResponseWriter, info RateLimitInfo) {
+	if w == nil {
+		return
+	}
+	w.Header().Set("X-RateLimit-Limit", strconv.Itoa(info.Limit))
+	w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(info.Remaining))
+	w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(info.ResetAt.Unix(), 10))
+	if info.RetryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(info.RetryAfter))
+	} else {
+		w.Header().Del("Retry-After")
+	}
 }
 
 func isPublicAuthEndpoint(path string) bool {
@@ -233,27 +290,30 @@ func limiterForPath(path string) *rateLimiter {
 func RateLimitMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Never rate-limit Kubernetes probes / uptime checks or signed webhooks.
-		switch r.URL.Path {
-		case "/healthz", "/readyz":
-			next.ServeHTTP(w, r)
-			return
-		case "/api/v1/webhooks/stripe", "/api/v1/webhooks/alertmanager":
-			next.ServeHTTP(w, r)
-			return
-		case "/api/v1/webhooks/github":
-			// If signature verification is enabled, don't rate-limit GitHub deliveries.
-			if cfg != nil && strings.TrimSpace(cfg.GitHub.WebhookSecret) != "" {
+			// Never rate-limit Kubernetes probes / uptime checks or signed webhooks.
+			switch r.URL.Path {
+			case "/healthz", "/readyz":
 				next.ServeHTTP(w, r)
 				return
+			case "/api/v1/webhooks/stripe", "/api/v1/webhooks/alertmanager":
+				next.ServeHTTP(w, r)
+				return
+			case "/api/v1/webhooks/github":
+				// If signature verification is enabled, don't rate-limit GitHub deliveries.
+				if cfg != nil && strings.TrimSpace(cfg.GitHub.WebhookSecret) != "" {
+					next.ServeHTTP(w, r)
+					return
+				}
 			}
-		}
-		ip := clientIPString(r)
-		if !limiterForPath(r.URL.Path).allow(ip) {
-			utils.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
-			return
-		}
-		next.ServeHTTP(w, r)
+			ip := clientIPString(r)
+			allowed, info := limiterForPath(r.URL.Path).consume(ip)
+			writeRateLimitHeaders(w, info)
+			r = r.WithContext(context.WithValue(r.Context(), rateLimitInfoContextKey{}, info))
+			if !allowed {
+				utils.RespondError(w, http.StatusTooManyRequests, "rate limit exceeded")
+				return
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }

@@ -10,6 +10,7 @@
  * Environment variables:
  *   RAILPUSH_API_URL  — API base URL  (default: https://apps.railpush.com)
  *   RAILPUSH_API_KEY  — API key       (required)
+ *   RAILPUSH_API_VERSION_PIN — Version pin header value (default: v1)
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -125,13 +126,14 @@ function filterLogEntries(logs: unknown, options: LogFilterOptions): Array<Recor
 
 const apiUrl = process.env.RAILPUSH_API_URL ?? "https://apps.railpush.com";
 const apiKey = process.env.RAILPUSH_API_KEY ?? "";
+const apiVersionPin = process.env.RAILPUSH_API_VERSION_PIN ?? "v1";
 
 if (!apiKey) {
   console.error("RAILPUSH_API_KEY is required. Set it as an environment variable.");
   process.exit(1);
 }
 
-const client = new RailPushClient({ apiUrl, apiKey });
+const client = new RailPushClient({ apiUrl, apiKey, apiVersionPin });
 
 const server = new McpServer({
   name: "railpush",
@@ -152,16 +154,70 @@ server.tool(
   },
 );
 
+server.tool(
+  "get_api_version_info",
+  "Get API version metadata (current version, supported pins, and pinning headers/query parameters).",
+  {},
+  async () => {
+    try { return text(await client.getAPIVersionInfo()); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_api_version_changelog",
+  "Get API version changelog entries used for compatibility planning and migrations.",
+  {},
+  async () => {
+    try { return text(await client.getAPIVersionChangelog()); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_rate_limit",
+  "Get current API rate-limit state for this API key (limit, remaining, reset_at, window).",
+  {},
+  async () => {
+    try { return text(await client.getRateLimitInfo()); }
+    catch (e) { return err(e); }
+  },
+);
+
 // ════════════════════════════════════════════════════════════════════════
 //  SERVICES
 // ════════════════════════════════════════════════════════════════════════
 
 server.tool(
   "list_services",
-  "List all services in the workspace. Returns name, type, runtime, status, and URL for each service.",
-  { workspace_id: z.string().optional().describe("Workspace ID (uses default if omitted)") },
-  async ({ workspace_id }) => {
-    try { return text(await client.listServices(workspace_id)); }
+  "List services in the workspace with optional server-side filters (type/status/runtime/plan/name/repo/project/query/suspended).",
+  {
+    workspace_id: z.string().optional().describe("Workspace ID (uses default if omitted)"),
+    type: z.enum(["web", "worker", "cron", "static", "pserv"]).optional().describe("Filter by service type"),
+    status: z.string().optional().describe("Filter by status (e.g. live, deploy_failed, suspended)"),
+    runtime: z.string().optional().describe("Filter by runtime (e.g. node, python, go, docker)"),
+    plan: z.enum(["free", "starter", "standard", "pro"]).optional().describe("Filter by plan"),
+    name: z.string().optional().describe("Filter by name (substring match)"),
+    repo_url: z.string().optional().describe("Filter by repository URL (substring match)"),
+    project_id: z.string().optional().describe("Filter by project ID"),
+    query: z.string().optional().describe("Generic search over service name/repo/runtime/type/branch"),
+    suspended: z.boolean().optional().describe("Filter by suspension state"),
+  },
+  async ({ workspace_id, type, status, runtime, plan, name, repo_url, project_id, query, suspended }) => {
+    try {
+      return text(await client.listServices({
+        workspace_id,
+        type,
+        status,
+        runtime,
+        plan,
+        name,
+        repo_url,
+        project_id,
+        query,
+        suspended: suspended !== undefined ? String(suspended) : undefined,
+      }));
+    }
     catch (e) { return err(e); }
   },
 );
@@ -317,19 +373,46 @@ server.tool(
   "search_services",
   "Search and filter services. All filters are optional and combined with AND. Name filter uses substring match.",
   {
+    workspace_id: z.string().optional().describe("Workspace ID (uses default if omitted)"),
     type: z.enum(["web", "worker", "cron", "static", "pserv"]).optional().describe("Filter by service type"),
     status: z.string().optional().describe("Filter by status (e.g. live, created, suspended)"),
     runtime: z.string().optional().describe("Filter by runtime (e.g. node, python, go, docker)"),
+    plan: z.enum(["free", "starter", "standard", "pro"]).optional().describe("Filter by plan tier"),
     name: z.string().optional().describe("Filter by name (substring match, case-insensitive)"),
+    repo_url: z.string().optional().describe("Filter by repository URL (substring match, case-insensitive)"),
+    project_id: z.string().optional().describe("Filter by project ID"),
+    query: z.string().optional().describe("Generic search across service name/repo/runtime/type/branch"),
     suspended: z.boolean().optional().describe("Filter by suspension state"),
   },
-  async ({ type, status, runtime, name, suspended }) => {
+  async ({ workspace_id, type, status, runtime, plan, name, repo_url, project_id, query, suspended }) => {
     try {
       return text(await client.searchServices({
-        type, status, runtime, name,
+        workspace_id,
+        type,
+        status,
+        runtime,
+        plan,
+        name,
+        repo_url,
+        project_id,
+        query,
         suspended: suspended !== undefined ? String(suspended) : undefined,
       }));
     }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "search_workspace_resources",
+  "Search services, databases, and key-value stores in one call using a workspace-scoped query.",
+  {
+    q: z.string().describe("Search query text"),
+    workspace_id: z.string().optional().describe("Workspace ID (uses default if omitted)"),
+    limit: z.number().optional().describe("Max matches per resource type (default: 20, max: 100)"),
+  },
+  async ({ q, workspace_id, limit }) => {
+    try { return text(await client.searchWorkspaceResources({ q, workspace_id, limit })); }
     catch (e) { return err(e); }
   },
 );
@@ -476,10 +559,30 @@ server.tool(
 
 server.tool(
   "list_deploys",
-  "List deploy history for a service. Shows status, trigger, commit, timing, and any errors for each deploy.",
-  { service_id: z.string().describe("Service ID") },
-  async ({ service_id }) => {
-    try { return text(await client.listDeploys(service_id)); }
+  "List deploy history for a service with optional status/branch/time filtering.",
+  {
+    service_id: z.string().describe("Service ID"),
+    status: z.string().optional().describe("Filter by deploy status (e.g. pending, building, live, failed)"),
+    branch: z.string().optional().describe("Filter by git branch"),
+    since: z.string().optional().describe("Only include deploys at/after this RFC3339 timestamp"),
+    until: z.string().optional().describe("Only include deploys at/before this RFC3339 timestamp"),
+  },
+  async ({ service_id, status, branch, since, until }) => {
+    try { return text(await client.listDeploys(service_id, { status, branch, since, until })); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "wait_for_deploy",
+  "Block until a deploy reaches a terminal state (live/failed/canceled) or timeout expires.",
+  {
+    service_id: z.string().describe("Service ID"),
+    deploy_id: z.string().describe("Deploy ID"),
+    timeout_seconds: z.number().optional().describe("Wait timeout in seconds (default: 300, max: 1800)"),
+  },
+  async ({ service_id, deploy_id, timeout_seconds }) => {
+    try { return text(await client.waitForDeploy(service_id, deploy_id, timeout_seconds)); }
     catch (e) { return err(e); }
   },
 );
@@ -916,10 +1019,17 @@ server.tool(
 
 server.tool(
   "list_databases",
-  "List all managed PostgreSQL databases in the workspace.",
-  { workspace_id: z.string().optional().describe("Workspace ID") },
-  async ({ workspace_id }) => {
-    try { return text(await client.listDatabases(workspace_id)); }
+  "List managed PostgreSQL databases in the workspace with optional server-side filters.",
+  {
+    workspace_id: z.string().optional().describe("Workspace ID"),
+    plan: z.enum(["free", "starter", "standard", "pro"]).optional().describe("Filter by plan"),
+    status: z.string().optional().describe("Filter by status (e.g. available, creating, failed)"),
+    pg_version: z.number().optional().describe("Filter by PostgreSQL major version (e.g. 16)"),
+    name: z.string().optional().describe("Filter by database name (substring match)"),
+    query: z.string().optional().describe("Generic search over database name/host/status/plan"),
+  },
+  async ({ workspace_id, plan, status, pg_version, name, query }) => {
+    try { return text(await client.listDatabases({ workspace_id, plan, status, pg_version, name, query })); }
     catch (e) { return err(e); }
   },
 );
@@ -1101,10 +1211,16 @@ server.tool(
 
 server.tool(
   "list_key_value_stores",
-  "List all managed Redis/key-value stores in the workspace.",
-  { workspace_id: z.string().optional().describe("Workspace ID") },
-  async ({ workspace_id }) => {
-    try { return text(await client.listKeyValues(workspace_id)); }
+  "List managed Redis/key-value stores in the workspace with optional server-side filters.",
+  {
+    workspace_id: z.string().optional().describe("Workspace ID"),
+    plan: z.enum(["free", "starter", "standard", "pro"]).optional().describe("Filter by plan"),
+    status: z.string().optional().describe("Filter by status (e.g. available, creating, failed)"),
+    name: z.string().optional().describe("Filter by store name (substring match)"),
+    query: z.string().optional().describe("Generic search over store name/host/status/plan/policy"),
+  },
+  async ({ workspace_id, plan, status, name, query }) => {
+    try { return text(await client.listKeyValues({ workspace_id, plan, status, name, query })); }
     catch (e) { return err(e); }
   },
 );

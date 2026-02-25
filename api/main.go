@@ -191,10 +191,16 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	samlH := handlers.NewSamlSSOHandler(cfg)
 	aiFixH := handlers.NewAIFixHandler(cfg, worker)
 	tplH := handlers.NewTemplateHandler(cfg, worker)
+	verH := handlers.NewAPIVersionHandler()
+	searchH := handlers.NewSearchHandler()
+	rateLimitH := handlers.NewRateLimitHandler()
 	regRouter := registrar.NewProviderRouter(cfg.Registrar)
 	rdH := handlers.NewRegisteredDomainHandler(cfg, regRouter)
 
 	api := r.PathPrefix("/api/v1").Subrouter()
+	api.Use(middleware.APIVersionMiddleware())
+	api.HandleFunc("/version", verH.GetVersion).Methods("GET")
+	api.HandleFunc("/version/changelog", verH.GetVersionChangelog).Methods("GET")
 
 	api.HandleFunc("/auth/register", auth.Register).Methods("POST")
 	api.HandleFunc("/auth/login", auth.Login).Methods("POST")
@@ -214,6 +220,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.Use(middleware.AuthMiddleware(cfg))
 
 	authed.HandleFunc("/auth/user", auth.GetCurrentUser).Methods("GET")
+	authed.HandleFunc("/rate-limit", rateLimitH.GetCurrent).Methods("GET")
 	authed.HandleFunc("/settings/blueprint-ai", auth.GetBlueprintAISettings).Methods("GET")
 	authed.HandleFunc("/settings/blueprint-ai", auth.UpdateBlueprintAISettings).Methods("PUT")
 	authed.HandleFunc("/auth/api-keys", auth.ListAPIKeys).Methods("GET")
@@ -288,6 +295,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/templates", tplH.ListTemplates).Methods("GET")
 	authed.HandleFunc("/templates/{id}", tplH.GetTemplate).Methods("GET")
 	authed.HandleFunc("/templates/{id}/deploy", tplH.DeployTemplate).Methods("POST")
+	authed.HandleFunc("/search", searchH.Search).Methods("GET")
 
 	authed.HandleFunc("/services", svcH.ListServices).Methods("GET")
 	authed.HandleFunc("/services", svcH.CreateService).Methods("POST")
@@ -313,6 +321,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/services/{id}/deploys", depH.TriggerDeploy).Methods("POST")
 	authed.HandleFunc("/services/{id}/deploys", depH.ListDeploys).Methods("GET")
 	authed.HandleFunc("/services/{id}/deploys/{deployId}", depH.GetDeploy).Methods("GET")
+	authed.HandleFunc("/services/{id}/deploys/{deployId}/wait", depH.WaitDeploy).Methods("POST")
 	authed.HandleFunc("/services/{id}/deploys/{deployId}/rollback", depH.Rollback).Methods("POST")
 	authed.HandleFunc("/services/{id}/deploys/{deployId}/queue", depH.QueuePosition).Methods("GET")
 
