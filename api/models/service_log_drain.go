@@ -2,6 +2,7 @@ package models
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 
@@ -143,11 +144,37 @@ func ServiceLogDrainWantsType(logTypes []string, logType string) bool {
 	return false
 }
 
+func parseServiceLogDrainTextList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "{}" {
+		return []string{}
+	}
+
+	var arr pq.StringArray
+	if err := arr.Scan(raw); err == nil {
+		return normalizeServiceLogDrainStringList([]string(arr), 50)
+	}
+	if err := arr.Scan([]byte(raw)); err == nil {
+		return normalizeServiceLogDrainStringList([]string(arr), 50)
+	}
+
+	if strings.HasPrefix(raw, "[") && strings.HasSuffix(raw, "]") {
+		trimmed := strings.Trim(raw, "[]")
+		parts := strings.Split(trimmed, ",")
+		return normalizeServiceLogDrainStringList(parts, 50)
+	}
+	if strings.Contains(raw, ",") {
+		parts := strings.Split(raw, ",")
+		return normalizeServiceLogDrainStringList(parts, 50)
+	}
+	return normalizeServiceLogDrainStringList([]string{raw}, 50)
+}
+
 func scanServiceLogDrain(scanner interface{ Scan(dest ...interface{}) error }) (*ServiceLogDrain, error) {
 	var d ServiceLogDrain
-	var types pq.StringArray
-	var include pq.StringArray
-	var exclude pq.StringArray
+	var typesRaw sql.NullString
+	var includeRaw sql.NullString
+	var excludeRaw sql.NullString
 	var createdBy sql.NullString
 	var lastDelivery sql.NullTime
 	var lastCursor sql.NullTime
@@ -160,10 +187,10 @@ func scanServiceLogDrain(scanner interface{ Scan(dest ...interface{}) error }) (
 		&d.Name,
 		&d.Destination,
 		&d.ConfigEncrypted,
-		pq.Array(&types),
+		&typesRaw,
 		&d.FilterMinLevel,
-		pq.Array(&include),
-		pq.Array(&exclude),
+		&includeRaw,
+		&excludeRaw,
 		&d.Enabled,
 		&d.SentCount,
 		&d.FailedCount,
@@ -176,17 +203,29 @@ func scanServiceLogDrain(scanner interface{ Scan(dest ...interface{}) error }) (
 		&d.UpdatedAt,
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("scan service_log_drain: %w", err)
 	}
 
 	d.Destination = NormalizeServiceLogDrainDestination(d.Destination)
-	d.FilterLogTypes = NormalizeServiceLogDrainLogTypes([]string(types))
+	types := []string{}
+	if typesRaw.Valid {
+		types = parseServiceLogDrainTextList(typesRaw.String)
+	}
+	d.FilterLogTypes = NormalizeServiceLogDrainLogTypes(types)
 	d.FilterMinLevel = NormalizeServiceLogDrainLevel(d.FilterMinLevel)
 	if d.FilterMinLevel == "" {
 		d.FilterMinLevel = "info"
 	}
-	d.IncludePatterns = normalizeServiceLogDrainStringList([]string(include), 50)
-	d.ExcludePatterns = normalizeServiceLogDrainStringList([]string(exclude), 50)
+	if includeRaw.Valid {
+		d.IncludePatterns = parseServiceLogDrainTextList(includeRaw.String)
+	} else {
+		d.IncludePatterns = []string{}
+	}
+	if excludeRaw.Valid {
+		d.ExcludePatterns = parseServiceLogDrainTextList(excludeRaw.String)
+	} else {
+		d.ExcludePatterns = []string{}
+	}
 	d.LastError = strings.TrimSpace(d.LastError)
 
 	if lastDelivery.Valid {
@@ -219,10 +258,10 @@ func ListServiceLogDrains(serviceID string) ([]ServiceLogDrain, error) {
 		        COALESCE(name,''),
 		        COALESCE(destination,''),
 		        COALESCE(config_encrypted,''),
-		        COALESCE(filter_log_types, '{app}'::text[]),
+		        COALESCE(filter_log_types::text, '{app}'),
 		        COALESCE(filter_min_level, 'info'),
-		        COALESCE(include_patterns, '{}'::text[]),
-		        COALESCE(exclude_patterns, '{}'::text[]),
+		        COALESCE(include_patterns::text, '{}'),
+		        COALESCE(exclude_patterns::text, '{}'),
 		        COALESCE(enabled, true),
 		        COALESCE(sent_count, 0),
 		        COALESCE(failed_count, 0),
@@ -265,10 +304,10 @@ func GetServiceLogDrainForService(serviceID, drainID string) (*ServiceLogDrain, 
 		        COALESCE(name,''),
 		        COALESCE(destination,''),
 		        COALESCE(config_encrypted,''),
-		        COALESCE(filter_log_types, '{app}'::text[]),
+		        COALESCE(filter_log_types::text, '{app}'),
 		        COALESCE(filter_min_level, 'info'),
-		        COALESCE(include_patterns, '{}'::text[]),
-		        COALESCE(exclude_patterns, '{}'::text[]),
+		        COALESCE(include_patterns::text, '{}'),
+		        COALESCE(exclude_patterns::text, '{}'),
 		        COALESCE(enabled, true),
 		        COALESCE(sent_count, 0),
 		        COALESCE(failed_count, 0),
@@ -376,10 +415,10 @@ func ListEnabledServiceLogDrains(limit int) ([]ServiceLogDrain, error) {
 		        COALESCE(name,''),
 		        COALESCE(destination,''),
 		        COALESCE(config_encrypted,''),
-		        COALESCE(filter_log_types, '{app}'::text[]),
+		        COALESCE(filter_log_types::text, '{app}'),
 		        COALESCE(filter_min_level, 'info'),
-		        COALESCE(include_patterns, '{}'::text[]),
-		        COALESCE(exclude_patterns, '{}'::text[]),
+		        COALESCE(include_patterns::text, '{}'),
+		        COALESCE(exclude_patterns::text, '{}'),
 		        COALESCE(enabled, true),
 		        COALESCE(sent_count, 0),
 		        COALESCE(failed_count, 0),
