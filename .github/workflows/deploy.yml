@@ -72,6 +72,13 @@ jobs:
           ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "mkdir -p /opt/railpush/railpush-api /opt/railpush/dashboard"
 
+          ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" <<'SSH'
+          set -euo pipefail
+          if [ -f /opt/railpush/railpush-api/.env ]; then
+            cp -f /opt/railpush/railpush-api/.env /opt/railpush/.railpush-api.env.backup
+          fi
+          SSH
+
           rsync -az --delete \
             --exclude '.git' \
             --exclude '.github' \
@@ -87,6 +94,17 @@ jobs:
             --exclude 'dist' \
             -e "${RSYNC_SSH}" \
             ./dashboard/ "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/railpush/dashboard/"
+
+          ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" <<'SSH'
+          set -euo pipefail
+          if [ ! -f /opt/railpush/railpush-api/.env ]; then
+            if [ -f /opt/railpush/.railpush-api.env.backup ]; then
+              cp -f /opt/railpush/.railpush-api.env.backup /opt/railpush/railpush-api/.env
+            elif [ -f /opt/railpush/.env ]; then
+              cp -f /opt/railpush/.env /opt/railpush/railpush-api/.env
+            fi
+          fi
+          SSH
 
           ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "test -f /opt/railpush/railpush-api/services/access.go"
@@ -182,8 +200,15 @@ jobs:
           fi
 
           echo "Restarting ${SERVICE_UNIT}"
-          ${SUDO} systemctl restart "${SERVICE_UNIT}"
-          ${SUDO} systemctl is-active --quiet "${SERVICE_UNIT}"
+          if ! ${SUDO} systemctl restart "${SERVICE_UNIT}"; then
+            ${SUDO} systemctl --no-pager --lines=60 status "${SERVICE_UNIT}" || true
+            ${SUDO} journalctl -u "${SERVICE_UNIT}" --no-pager -n 80 || true
+            if [ -f "${PREV_BIN}" ]; then
+              cp -f "${PREV_BIN}" /opt/railpush/railpush-api-bin
+              ${SUDO} systemctl restart "${SERVICE_UNIT}" || true
+            fi
+            exit 1
+          fi
 
           HEALTH_OK=0
           for i in $(seq 1 20); do
@@ -202,6 +227,7 @@ jobs:
               ${SUDO} systemctl restart "${SERVICE_UNIT}"
             fi
             ${SUDO} systemctl --no-pager --lines=60 status "${SERVICE_UNIT}" || true
+            ${SUDO} journalctl -u "${SERVICE_UNIT}" --no-pager -n 80 || true
             exit 1
           fi
 
