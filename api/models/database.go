@@ -9,37 +9,45 @@ import (
 )
 
 type ManagedDatabase struct {
-	ID                string    `json:"id"`
-	WorkspaceID       string    `json:"workspace_id"`
-	Name              string    `json:"name"`
-	Plan              string    `json:"plan"`
-	PGVersion         int       `json:"pg_version"`
-	ContainerID       string    `json:"container_id"`
-	Host              string    `json:"host"`
-	Port              int       `json:"port"`
-	ExternalPort      int       `json:"external_port"`
-	DBName            string    `json:"db_name"`
-	Username          string    `json:"username"`
-	EncryptedPassword string    `json:"-"`
-	Status            string    `json:"status"`
-	HAEnabled         bool      `json:"ha_enabled"`
-	HAStrategy        string    `json:"ha_strategy"`
-	StandbyReplicaID  *string   `json:"standby_replica_id"`
-	InitScript        string    `json:"init_script"`
-	CreatedAt         time.Time `json:"created_at"`
+	ID                string     `json:"id"`
+	WorkspaceID       string     `json:"workspace_id"`
+	Name              string     `json:"name"`
+	Plan              string     `json:"plan"`
+	PGVersion         int        `json:"pg_version"`
+	ContainerID       string     `json:"container_id"`
+	Host              string     `json:"host"`
+	Port              int        `json:"port"`
+	ExternalPort      int        `json:"external_port"`
+	DBName            string     `json:"db_name"`
+	Username          string     `json:"username"`
+	EncryptedPassword string     `json:"-"`
+	Status            string     `json:"status"`
+	HAEnabled         bool       `json:"ha_enabled"`
+	HAStrategy        string     `json:"ha_strategy"`
+	StandbyReplicaID  *string    `json:"standby_replica_id"`
+	InitScript        string     `json:"init_script"`
+	PasswordRotatedAt *time.Time `json:"password_rotated_at,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
 }
 
 func CreateManagedDatabase(d *ManagedDatabase) error {
-	return database.DB.QueryRow("INSERT INTO managed_databases (workspace_id, name, plan, pg_version, host, port, db_name, username, encrypted_password, init_script) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, status, created_at",
-		d.WorkspaceID, d.Name, d.Plan, d.PGVersion, d.Host, d.Port, d.DBName, d.Username, d.EncryptedPassword, d.InitScript).Scan(&d.ID, &d.Status, &d.CreatedAt)
+	var rotatedAt sql.NullTime
+	err := database.DB.QueryRow("INSERT INTO managed_databases (workspace_id, name, plan, pg_version, host, port, db_name, username, encrypted_password, init_script) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, status, created_at, password_rotated_at",
+		d.WorkspaceID, d.Name, d.Plan, d.PGVersion, d.Host, d.Port, d.DBName, d.Username, d.EncryptedPassword, d.InitScript).Scan(&d.ID, &d.Status, &d.CreatedAt, &rotatedAt)
+	if rotatedAt.Valid {
+		t := rotatedAt.Time
+		d.PasswordRotatedAt = &t
+	}
+	return err
 }
 
 func GetManagedDatabase(id string) (*ManagedDatabase, error) {
 	d := &ManagedDatabase{}
 	var standbyReplicaID sql.NullString
 	var externalPort sql.NullInt64
-	err := database.DB.QueryRow("SELECT id, COALESCE(workspace_id::text,''), name, COALESCE(plan,'starter'), COALESCE(pg_version,16), COALESCE(container_id,''), COALESCE(host,'localhost'), COALESCE(port,5432), external_port, COALESCE(db_name,''), COALESCE(username,''), COALESCE(encrypted_password,''), COALESCE(status,'creating'), COALESCE(ha_enabled,false), COALESCE(ha_strategy,'none'), standby_replica_id::text, COALESCE(init_script,''), created_at FROM managed_databases WHERE id=$1", id).Scan(
-		&d.ID, &d.WorkspaceID, &d.Name, &d.Plan, &d.PGVersion, &d.ContainerID, &d.Host, &d.Port, &externalPort, &d.DBName, &d.Username, &d.EncryptedPassword, &d.Status, &d.HAEnabled, &d.HAStrategy, &standbyReplicaID, &d.InitScript, &d.CreatedAt)
+	var passwordRotatedAt sql.NullTime
+	err := database.DB.QueryRow("SELECT id, COALESCE(workspace_id::text,''), name, COALESCE(plan,'starter'), COALESCE(pg_version,16), COALESCE(container_id,''), COALESCE(host,'localhost'), COALESCE(port,5432), external_port, COALESCE(db_name,''), COALESCE(username,''), COALESCE(encrypted_password,''), COALESCE(status,'creating'), COALESCE(ha_enabled,false), COALESCE(ha_strategy,'none'), standby_replica_id::text, COALESCE(init_script,''), created_at, password_rotated_at FROM managed_databases WHERE id=$1", id).Scan(
+		&d.ID, &d.WorkspaceID, &d.Name, &d.Plan, &d.PGVersion, &d.ContainerID, &d.Host, &d.Port, &externalPort, &d.DBName, &d.Username, &d.EncryptedPassword, &d.Status, &d.HAEnabled, &d.HAStrategy, &standbyReplicaID, &d.InitScript, &d.CreatedAt, &passwordRotatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -49,6 +57,10 @@ func GetManagedDatabase(id string) (*ManagedDatabase, error) {
 	if standbyReplicaID.Valid && standbyReplicaID.String != "" {
 		d.StandbyReplicaID = &standbyReplicaID.String
 	}
+	if passwordRotatedAt.Valid {
+		t := passwordRotatedAt.Time
+		d.PasswordRotatedAt = &t
+	}
 	return d, err
 }
 
@@ -57,7 +69,7 @@ func ListManagedDatabases() ([]ManagedDatabase, error) {
 }
 
 func ListManagedDatabasesByWorkspace(workspaceID string) ([]ManagedDatabase, error) {
-	query := "SELECT id, COALESCE(workspace_id::text,''), name, COALESCE(plan,'starter'), COALESCE(pg_version,16), COALESCE(container_id,''), COALESCE(host,'localhost'), COALESCE(port,5432), external_port, COALESCE(db_name,''), COALESCE(username,''), COALESCE(status,'creating'), COALESCE(ha_enabled,false), COALESCE(ha_strategy,'none'), standby_replica_id::text, COALESCE(init_script,''), created_at FROM managed_databases"
+	query := "SELECT id, COALESCE(workspace_id::text,''), name, COALESCE(plan,'starter'), COALESCE(pg_version,16), COALESCE(container_id,''), COALESCE(host,'localhost'), COALESCE(port,5432), external_port, COALESCE(db_name,''), COALESCE(username,''), COALESCE(status,'creating'), COALESCE(ha_enabled,false), COALESCE(ha_strategy,'none'), standby_replica_id::text, COALESCE(init_script,''), created_at, password_rotated_at FROM managed_databases"
 	var (
 		rows *sql.Rows
 		err  error
@@ -76,7 +88,8 @@ func ListManagedDatabasesByWorkspace(workspaceID string) ([]ManagedDatabase, err
 		var d ManagedDatabase
 		var standbyReplicaID sql.NullString
 		var externalPort sql.NullInt64
-		if err := rows.Scan(&d.ID, &d.WorkspaceID, &d.Name, &d.Plan, &d.PGVersion, &d.ContainerID, &d.Host, &d.Port, &externalPort, &d.DBName, &d.Username, &d.Status, &d.HAEnabled, &d.HAStrategy, &standbyReplicaID, &d.InitScript, &d.CreatedAt); err != nil {
+		var passwordRotatedAt sql.NullTime
+		if err := rows.Scan(&d.ID, &d.WorkspaceID, &d.Name, &d.Plan, &d.PGVersion, &d.ContainerID, &d.Host, &d.Port, &externalPort, &d.DBName, &d.Username, &d.Status, &d.HAEnabled, &d.HAStrategy, &standbyReplicaID, &d.InitScript, &d.CreatedAt, &passwordRotatedAt); err != nil {
 			return nil, err
 		}
 		if externalPort.Valid {
@@ -85,9 +98,21 @@ func ListManagedDatabasesByWorkspace(workspaceID string) ([]ManagedDatabase, err
 		if standbyReplicaID.Valid && standbyReplicaID.String != "" {
 			d.StandbyReplicaID = &standbyReplicaID.String
 		}
+		if passwordRotatedAt.Valid {
+			t := passwordRotatedAt.Time
+			d.PasswordRotatedAt = &t
+		}
 		dbs = append(dbs, d)
 	}
 	return dbs, nil
+}
+
+func UpdateManagedDatabasePassword(id, encryptedPassword string, rotatedAt time.Time) error {
+	if rotatedAt.IsZero() {
+		rotatedAt = time.Now().UTC()
+	}
+	_, err := database.DB.Exec("UPDATE managed_databases SET encrypted_password=$1, password_rotated_at=$2 WHERE id=$3", encryptedPassword, rotatedAt, id)
+	return err
 }
 
 func DeleteManagedDatabase(id string) error {

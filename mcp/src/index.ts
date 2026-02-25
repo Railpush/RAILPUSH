@@ -310,6 +310,39 @@ server.tool(
 );
 
 server.tool(
+  "get_service_retention",
+  "Get retention policy for service logs. Build log retention is enforced; runtime/request retention values are stored for policy tracking.",
+  {
+    service_id: z.string().describe("Service ID"),
+  },
+  async ({ service_id }) => {
+    try { return text(await client.getServiceRetention(service_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "set_service_retention",
+  "Update service log retention windows. Values accept day numbers (e.g. 30) or strings like 30d, 12w, 6m, 1y.",
+  {
+    service_id: z.string().describe("Service ID"),
+    runtime_logs: z.union([z.number().int().positive(), z.string()]).optional().describe("Runtime log retention (e.g. 30d)"),
+    build_logs: z.union([z.number().int().positive(), z.string()]).optional().describe("Build log retention (e.g. 90d)"),
+    request_logs: z.union([z.number().int().positive(), z.string()]).optional().describe("Request log retention (e.g. 14d)"),
+  },
+  async ({ service_id, runtime_logs, build_logs, request_logs }) => {
+    try {
+      return text(await client.setServiceRetention(service_id, {
+        runtime_logs,
+        build_logs,
+        request_logs,
+      }));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
   "delete_service",
   "Delete a service using a safeguarded flow. First confirmation soft-deletes the service into a 72-hour recovery window. Optional hard_delete=true is only for permanent deletion after that window.",
   {
@@ -1188,6 +1221,31 @@ server.tool(
 );
 
 server.tool(
+  "rotate_database_password",
+  "Rotate a managed PostgreSQL database password. Returns the new plaintext password once and updates linked service connection URLs.",
+  {
+    database_id: z.string().describe("Database ID"),
+    password: z.string().optional().describe("Optional custom password (min 16 chars). If omitted, RailPush generates one."),
+    acknowledge_sensitive_output: z.boolean().describe("Must be true to confirm you accept sensitive output exposure"),
+  },
+  async ({ database_id, password, acknowledge_sensitive_output }) => {
+    if (!acknowledge_sensitive_output) {
+      return text({
+        status: "blocked",
+        reason: "acknowledge_sensitive_output must be true",
+      });
+    }
+    try {
+      return text(await client.rotateDatabasePassword(database_id, {
+        password,
+        acknowledge_sensitive_output: true,
+      }));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
   "query_database",
   "Run SQL against a managed PostgreSQL database. Default mode is read-only; set allow_write=true with acknowledge_risky_query=true for write-capable execution.",
   {
@@ -1206,6 +1264,39 @@ server.tool(
         acknowledge_risky_query,
         max_rows,
         timeout_ms,
+      }));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_database_retention",
+  "Get backup retention policy for a managed database.",
+  {
+    database_id: z.string().describe("Database ID"),
+  },
+  async ({ database_id }) => {
+    try { return text(await client.getDatabaseRetention(database_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "set_database_retention",
+  "Update backup retention windows for a managed database. Values accept day numbers or strings like 30d, 12w, 6m, 1y.",
+  {
+    database_id: z.string().describe("Database ID"),
+    automated_backups: z.union([z.number().int().positive(), z.string()]).optional().describe("Automated backup retention (e.g. 30d)"),
+    manual_backups: z.union([z.number().int().positive(), z.string()]).optional().describe("Manual backup retention (e.g. 365d)"),
+    wal_archives: z.union([z.number().int().positive(), z.string()]).optional().describe("WAL archive retention policy (e.g. 7d)"),
+  },
+  async ({ database_id, automated_backups, manual_backups, wal_archives }) => {
+    try {
+      return text(await client.setDatabaseRetention(database_id, {
+        automated_backups,
+        manual_backups,
+        wal_archives,
       }));
     }
     catch (e) { return err(e); }
@@ -1260,15 +1351,16 @@ server.tool(
     database_id: z.string().describe("Database ID"),
     confirm_destructive: z.boolean().describe("Must be true to proceed with delete"),
     hard_delete: z.boolean().optional().describe("Set true only when you intend permanent deletion after recovery window"),
+    confirm_linked_services: z.boolean().optional().describe("Set true to confirm deletion when services still reference this database"),
   },
-  async ({ database_id, confirm_destructive, hard_delete }) => {
+  async ({ database_id, confirm_destructive, hard_delete, confirm_linked_services }) => {
     if (!confirm_destructive) {
       return text({
         status: "blocked",
         reason: "confirm_destructive must be true",
       });
     }
-    try { return text(await client.deleteDatabase(database_id, hard_delete)); }
+    try { return text(await client.deleteDatabase(database_id, hard_delete, confirm_linked_services)); }
     catch (e) { return err(e); }
   },
 );
@@ -2558,6 +2650,39 @@ server.tool(
   },
   async ({ workspace_id, user_id }) => {
     try { return text(await client.removeWorkspaceMember(workspace_id, user_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_workspace_retention",
+  "Get workspace-level retention policy for audit logs, deploy history, and metric history.",
+  {
+    workspace_id: z.string().describe("Workspace ID"),
+  },
+  async ({ workspace_id }) => {
+    try { return text(await client.getWorkspaceRetention(workspace_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "set_workspace_retention",
+  "Update workspace retention windows. Values accept day numbers or strings like 30d, 12w, 6m, 1y.",
+  {
+    workspace_id: z.string().describe("Workspace ID"),
+    audit_logs: z.union([z.number().int().positive(), z.string()]).optional().describe("Audit log retention (e.g. 1y)"),
+    deploy_history: z.union([z.number().int().positive(), z.string()]).optional().describe("Deploy history retention (e.g. 180d)"),
+    metric_history: z.union([z.number().int().positive(), z.string()]).optional().describe("Metric history retention (e.g. 90d)"),
+  },
+  async ({ workspace_id, audit_logs, deploy_history, metric_history }) => {
+    try {
+      return text(await client.setWorkspaceRetention(workspace_id, {
+        audit_logs,
+        deploy_history,
+        metric_history,
+      }));
+    }
     catch (e) { return err(e); }
   },
 );

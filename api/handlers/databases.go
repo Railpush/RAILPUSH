@@ -9,10 +9,11 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/url"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -320,6 +321,137 @@ func (h *DatabaseHandler) RevealDatabaseCredentials(w http.ResponseWriter, r *ht
 	utils.RespondJSON(w, http.StatusOK, resp)
 }
 
+func (h *DatabaseHandler) RotateDatabasePassword(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	db, err := models.GetManagedDatabase(id)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if db == nil || strings.EqualFold(strings.TrimSpace(db.Status), "soft_deleted") {
+		utils.RespondError(w, http.StatusNotFound, "database not found")
+		return
+	}
+
+	userID := middleware.GetUserID(r)
+	if err := services.EnsureWorkspaceAccess(userID, db.WorkspaceID, models.RoleDeveloper); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	var req struct {
+		Password                   string `json:"password"`
+		AcknowledgeSensitiveOutput bool   `json:"acknowledge_sensitive_output"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !req.AcknowledgeSensitiveOutput {
+		utils.RespondError(w, http.StatusBadRequest, "acknowledge_sensitive_output must be true")
+		return
+	}
+
+	apiKeyID := middleware.GetAPIKeyID(r)
+	apiKeyScopes := middleware.GetAPIKeyScopes(r)
+	if apiKeyID != "" && !models.HasAnyAPIKeyScope(apiKeyScopes, models.APIKeyScopeAdmin) {
+		utils.RespondError(w, http.StatusForbidden, "database password rotation via API key requires admin scope")
+		return
+	}
+
+	if strings.TrimSpace(db.EncryptedPassword) == "" {
+		utils.RespondError(w, http.StatusBadRequest, "database credentials are not ready yet")
+		return
+	}
+	currentPassword, err := utils.Decrypt(db.EncryptedPassword, h.Config.Crypto.EncryptionKey)
+	if err != nil || strings.TrimSpace(currentPassword) == "" {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to decrypt database credentials")
+		return
+	}
+
+	newPassword := strings.TrimSpace(req.Password)
+	if newPassword == "" {
+		generated, err := utils.GenerateRandomString(24)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to generate password")
+			return
+		}
+		newPassword = generated
+	}
+	if len(newPassword) < 16 {
+		utils.RespondError(w, http.StatusBadRequest, "password must be at least 16 characters")
+		return
+	}
+
+	alterSQL, err := buildAlterRolePasswordSQL(db.Username, newPassword)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if h.Config != nil && h.Config.Kubernetes.Enabled && strings.HasPrefix(strings.TrimSpace(db.ContainerID), "k8s:") {
+		if h.Worker == nil {
+			utils.RespondError(w, http.StatusBadGateway, "kubernetes rotation executor unavailable")
+			return
+		}
+		kd, err := h.Worker.GetKubeDeployer()
+		if err != nil || kd == nil {
+			utils.RespondError(w, http.StatusBadGateway, "failed to initialize kubernetes rotation executor")
+			return
+		}
+		_, stderr, err := kd.RunDatabaseQuery(db, currentPassword, alterSQL, 30*time.Second, false)
+		if err != nil {
+			details := strings.TrimSpace(stderr)
+			if details == "" {
+				details = err.Error()
+			}
+			utils.RespondJSON(w, http.StatusBadGateway, map[string]interface{}{
+				"error":   "failed to rotate database password",
+				"details": details,
+			})
+			return
+		}
+	} else {
+		if err := rotateDatabasePasswordDirect(r.Context(), db, currentPassword, alterSQL); err != nil {
+			utils.RespondJSON(w, http.StatusBadGateway, map[string]interface{}{
+				"error":   "failed to rotate database password",
+				"details": err.Error(),
+			})
+			return
+		}
+	}
+
+	encrypted, err := utils.Encrypt(newPassword, h.Config.Crypto.EncryptionKey)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to encrypt new password")
+		return
+	}
+
+	rotatedAt := time.Now().UTC()
+	if err := models.UpdateManagedDatabasePassword(db.ID, encrypted, rotatedAt); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to persist rotated password")
+		return
+	}
+	db.EncryptedPassword = encrypted
+	db.PasswordRotatedAt = &rotatedAt
+
+	linkedServicesUpdated := 0
+	if links, err := models.ListServiceDatabaseLinksByDatabase(db.ID); err == nil {
+		linkedServicesUpdated = len(links)
+	}
+	h.syncDatabaseLinks(db.ID)
+
+	services.Audit(db.WorkspaceID, userID, "database.password_rotated", "database", db.ID, map[string]interface{}{
+		"api_key_id":              apiKeyID,
+		"linked_services_updated": linkedServicesUpdated,
+	})
+
+	resp := h.databaseResponse(db, newPassword, true)
+	resp["status"] = "rotated"
+	resp["linked_services_updated"] = linkedServicesUpdated
+	utils.RespondJSON(w, http.StatusOK, resp)
+}
+
 func (h *DatabaseHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 	db, err := models.GetManagedDatabase(id)
@@ -339,11 +471,11 @@ func (h *DatabaseHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var req struct {
-		Query                string `json:"query"`
-		AllowWrite           bool   `json:"allow_write"`
+		Query                 string `json:"query"`
+		AllowWrite            bool   `json:"allow_write"`
 		AcknowledgeRiskyQuery bool   `json:"acknowledge_risky_query"`
-		MaxRows              int    `json:"max_rows"`
-		TimeoutMS            int    `json:"timeout_ms"`
+		MaxRows               int    `json:"max_rows"`
+		TimeoutMS             int    `json:"timeout_ms"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024)).Decode(&req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
@@ -372,9 +504,9 @@ func (h *DatabaseHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) 
 	firstKeyword := sqlFirstKeyword(req.Query)
 	if !req.AllowWrite && !isReadOnlySQLKeyword(firstKeyword) {
 		utils.RespondJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"error":        "query blocked in read-only mode",
+			"error":         "query blocked in read-only mode",
 			"first_keyword": firstKeyword,
-			"hint":         "set allow_write=true and acknowledge_risky_query=true for write-capable execution",
+			"hint":          "set allow_write=true and acknowledge_risky_query=true for write-capable execution",
 		})
 		return
 	}
@@ -423,11 +555,11 @@ func (h *DatabaseHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) 
 
 		columns, parsedRows, truncated, parsed := parsePSQLCSVOutput(stdout, req.MaxRows)
 		auditDetails := map[string]interface{}{
-			"allow_write":   req.AllowWrite,
-			"first_keyword": firstKeyword,
-			"max_rows":      req.MaxRows,
-			"duration_ms":   time.Since(startedAt).Milliseconds(),
-			"api_key_id":    apiKeyID,
+			"allow_write":    req.AllowWrite,
+			"first_keyword":  firstKeyword,
+			"max_rows":       req.MaxRows,
+			"duration_ms":    time.Since(startedAt).Milliseconds(),
+			"api_key_id":     apiKeyID,
 			"execution_mode": "k8s_exec",
 		}
 		if parsed {
@@ -648,6 +780,7 @@ func (h *DatabaseHandler) databaseResponse(db *models.ManagedDatabase, password 
 		"ha_strategy":           db.HAStrategy,
 		"standby_replica_id":    db.StandbyReplicaID,
 		"init_script":           db.InitScript,
+		"password_rotated_at":   db.PasswordRotatedAt,
 		"created_at":            db.CreatedAt,
 		"internal_url":          internalURL,
 		"external_url":          "",
@@ -846,7 +979,52 @@ func (h *DatabaseHandler) DeleteDatabase(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var req destructiveDeleteRequest
+	type dependentService struct {
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		EnvVarName string `json:"env_var_name"`
+	}
+	dependentServices := make([]dependentService, 0)
+	if links, err := models.ListServiceDatabaseLinksByDatabase(db.ID); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to inspect database dependencies")
+		return
+	} else {
+		seen := map[string]struct{}{}
+		for _, link := range links {
+			svc, err := models.GetService(link.ServiceID)
+			if err != nil || svc == nil {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(svc.Status), "soft_deleted") {
+				continue
+			}
+			key := svc.ID + "|" + strings.TrimSpace(link.EnvVarName)
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			dependentServices = append(dependentServices, dependentService{
+				ID:         svc.ID,
+				Name:       svc.Name,
+				EnvVarName: link.EnvVarName,
+			})
+		}
+	}
+	if len(dependentServices) > 1 {
+		sort.Slice(dependentServices, func(i, j int) bool {
+			left := strings.ToLower(strings.TrimSpace(dependentServices[i].Name))
+			right := strings.ToLower(strings.TrimSpace(dependentServices[j].Name))
+			if left == right {
+				return dependentServices[i].ID < dependentServices[j].ID
+			}
+			return left < right
+		})
+	}
+
+	var req struct {
+		destructiveDeleteRequest
+		ConfirmLinkedServices bool `json:"confirm_linked_services"`
+	}
 	if err := decodeOptionalJSONBody(w, r, &req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -858,13 +1036,19 @@ func (h *DatabaseHandler) DeleteDatabase(w http.ResponseWriter, r *http.Request)
 			utils.RespondError(w, http.StatusInternalServerError, "failed to issue confirmation token")
 			return
 		}
-		utils.RespondJSON(w, http.StatusAccepted, map[string]interface{}{
+		response := map[string]interface{}{
 			"status":                     "confirmation_required",
 			"confirmation_token":         confirmationToken,
 			"confirmation_token_expires": expiresAt,
 			"hard_delete":                false,
 			"recovery_window_hours":      int(softDeleteRecoveryWindow / time.Hour),
-		})
+		}
+		if len(dependentServices) > 0 {
+			response["dependent_service_count"] = len(dependentServices)
+			response["dependent_services"] = dependentServices
+			response["requires_dependency_confirmation"] = true
+		}
+		utils.RespondJSON(w, http.StatusAccepted, response)
 		return
 	}
 	if err := models.VerifyResourceDeletionToken("database", db.ID, token); err != nil {
@@ -876,6 +1060,15 @@ func (h *DatabaseHandler) DeleteDatabase(w http.ResponseWriter, r *http.Request)
 		default:
 			utils.RespondError(w, http.StatusBadRequest, "confirmation token required")
 		}
+		return
+	}
+
+	if len(dependentServices) > 0 && !req.ConfirmLinkedServices {
+		utils.RespondJSON(w, http.StatusConflict, map[string]interface{}{
+			"error":                   "database has dependent services; resend with confirm_linked_services=true",
+			"dependent_service_count": len(dependentServices),
+			"dependent_services":      dependentServices,
+		})
 		return
 	}
 
@@ -1009,7 +1202,7 @@ func (h *DatabaseHandler) ListBackups(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	rows, err := database.DB.Query("SELECT id, resource_type, resource_id, COALESCE(file_path,''), COALESCE(size_bytes,0), started_at, finished_at, COALESCE(status,'') FROM backups WHERE resource_type=$1 AND resource_id=$2 ORDER BY started_at DESC", "database", id)
+	rows, err := database.DB.Query("SELECT id, resource_type, resource_id, COALESCE(file_path,''), COALESCE(size_bytes,0), started_at, finished_at, COALESCE(status,''), COALESCE(NULLIF(trigger_type,''),'manual') FROM backups WHERE resource_type=$1 AND resource_id=$2 ORDER BY started_at DESC", "database", id)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to list backups")
 		return
@@ -1024,11 +1217,12 @@ func (h *DatabaseHandler) ListBackups(w http.ResponseWriter, r *http.Request) {
 		StartedAt    *time.Time `json:"started_at"`
 		FinishedAt   *time.Time `json:"finished_at"`
 		Status       string     `json:"status"`
+		TriggerType  string     `json:"trigger_type"`
 	}
 	var backups []Backup
 	for rows.Next() {
 		var b Backup
-		if err := rows.Scan(&b.ID, &b.ResourceType, &b.ResourceID, &b.FilePath, &b.SizeBytes, &b.StartedAt, &b.FinishedAt, &b.Status); err != nil {
+		if err := rows.Scan(&b.ID, &b.ResourceType, &b.ResourceID, &b.FilePath, &b.SizeBytes, &b.StartedAt, &b.FinishedAt, &b.Status, &b.TriggerType); err != nil {
 			continue
 		}
 		backups = append(backups, b)
@@ -1062,7 +1256,7 @@ func (h *DatabaseHandler) TriggerBackup(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var backupID string
-	err = database.DB.QueryRow("INSERT INTO backups (resource_type, resource_id, status, started_at) VALUES ($1, $2, $3, NOW()) RETURNING id", "database", id, "running").Scan(&backupID)
+	err = database.DB.QueryRow("INSERT INTO backups (resource_type, resource_id, status, trigger_type, started_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING id", "database", id, "running", "manual").Scan(&backupID)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to create backup record")
 		return
@@ -1124,6 +1318,106 @@ func (h *DatabaseHandler) TriggerBackup(w http.ResponseWriter, r *http.Request) 
 
 func intToStr(i int) string {
 	return fmt.Sprintf("%d", i)
+}
+
+func quoteSQLIdentifier(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
+}
+
+func quoteSQLLiteral(value string) string {
+	return `'` + strings.ReplaceAll(value, `'`, `''`) + `'`
+}
+
+func buildAlterRolePasswordSQL(username, newPassword string) (string, error) {
+	user := strings.TrimSpace(username)
+	if user == "" {
+		return "", fmt.Errorf("database username is missing")
+	}
+	if strings.TrimSpace(newPassword) == "" {
+		return "", fmt.Errorf("new password is required")
+	}
+	return "ALTER ROLE " + quoteSQLIdentifier(user) + " WITH PASSWORD " + quoteSQLLiteral(newPassword), nil
+}
+
+func rotateDatabasePasswordDirect(ctx context.Context, db *models.ManagedDatabase, currentPassword, alterSQL string) error {
+	if db == nil {
+		return fmt.Errorf("database is nil")
+	}
+	host := strings.TrimSpace(db.Host)
+	if host == "" || db.Port <= 0 || strings.TrimSpace(db.Username) == "" || strings.TrimSpace(db.DBName) == "" {
+		return fmt.Errorf("database endpoint is not ready")
+	}
+	if strings.TrimSpace(currentPassword) == "" {
+		return fmt.Errorf("current password is missing")
+	}
+	if strings.TrimSpace(alterSQL) == "" {
+		return fmt.Errorf("rotation SQL is missing")
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	hostCandidates := []string{host}
+	if !strings.Contains(host, ".") {
+		hostCandidates = append(hostCandidates, host+".railpush.svc.cluster.local")
+	}
+	sslModes := []string{"disable", "require"}
+
+	var conn *stdsql.DB
+	var tx *stdsql.Tx
+	var connectErr error
+
+	for _, candidateHost := range hostCandidates {
+		for _, sslMode := range sslModes {
+			dsn := buildPostgresDSN(candidateHost, db.Port, strings.TrimSpace(db.DBName), strings.TrimSpace(db.Username), currentPassword, sslMode)
+			candidateConn, err := stdsql.Open("postgres", dsn)
+			if err != nil {
+				connectErr = err
+				continue
+			}
+			candidateConn.SetMaxOpenConns(1)
+			candidateConn.SetMaxIdleConns(0)
+
+			candidateTx, err := candidateConn.BeginTx(ctx, &stdsql.TxOptions{ReadOnly: false})
+			if err != nil {
+				connectErr = err
+				candidateConn.Close()
+				continue
+			}
+
+			conn = candidateConn
+			tx = candidateTx
+			connectErr = nil
+			break
+		}
+		if tx != nil {
+			break
+		}
+	}
+
+	if connectErr != nil || tx == nil || conn == nil {
+		if connectErr != nil {
+			return connectErr
+		}
+		return fmt.Errorf("failed to connect to database")
+	}
+	defer conn.Close()
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, "SET LOCAL statement_timeout = 15000"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, alterSQL); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func isReadOnlySQLKeyword(keyword string) bool {
@@ -1410,18 +1704,101 @@ func (h *DatabaseHandler) linkedDatabaseURL(db *models.ManagedDatabase, password
 	if db == nil {
 		return ""
 	}
-	host := strings.TrimSpace(db.Host)
-	port := db.Port
+	host, port, dbName, username := linkedDatabaseConnectionParts(db, useInternal)
+	if host == "" || port <= 0 || dbName == "" || username == "" {
+		return ""
+	}
+	url := "postgresql://" + username + ":" + password + "@" + host + ":" + intToStr(port) + "/" + dbName
+	return url
+}
+
+func linkedDatabaseConnectionParts(db *models.ManagedDatabase, useInternal bool) (host string, port int, dbName string, username string) {
+	if db == nil {
+		return "", 0, "", ""
+	}
+	host = strings.TrimSpace(db.Host)
+	port = db.Port
 	if !useInternal {
 		// External managed database endpoints are currently disabled platform-wide
 		// until IP allowlisting is available.
 		useInternal = true
 	}
-	if host == "" || port <= 0 {
-		return ""
+	dbName = strings.TrimSpace(db.DBName)
+	if dbName == "" {
+		dbName = strings.TrimSpace(db.Name)
 	}
-	url := "postgresql://" + db.Username + ":" + password + "@" + host + ":" + intToStr(port) + "/" + db.DBName
-	return url
+	username = strings.TrimSpace(db.Username)
+	if username == "" {
+		username = strings.TrimSpace(db.Name)
+	}
+	return host, port, dbName, username
+}
+
+func linkedDatabaseExtraEnvKeys(envVar string) []string {
+	if !strings.EqualFold(strings.TrimSpace(envVar), "DATABASE_URL") {
+		return nil
+	}
+	return []string{"DATABASE_HOST", "DATABASE_PORT", "DATABASE_NAME", "DATABASE_USER", "DATABASE_PASSWORD"}
+}
+
+func (h *DatabaseHandler) linkedDatabaseEnvVars(db *models.ManagedDatabase, password, envVar string, useInternal bool) ([]models.EnvVar, error) {
+	envVar = strings.ToUpper(strings.TrimSpace(envVar))
+	if envVar == "" {
+		envVar = "DATABASE_URL"
+	}
+	host, port, dbName, username := linkedDatabaseConnectionParts(db, useInternal)
+	if host == "" || port <= 0 || dbName == "" || username == "" {
+		return nil, fmt.Errorf("database endpoint is not ready yet")
+	}
+
+	items := []struct {
+		key    string
+		value  string
+		secret bool
+	}{
+		{key: envVar, value: fmt.Sprintf("postgresql://%s:%s@%s:%d/%s", username, password, host, port, dbName), secret: true},
+	}
+
+	if strings.EqualFold(envVar, "DATABASE_URL") {
+		items = append(items,
+			struct {
+				key    string
+				value  string
+				secret bool
+			}{key: "DATABASE_HOST", value: host, secret: false},
+			struct {
+				key    string
+				value  string
+				secret bool
+			}{key: "DATABASE_PORT", value: strconv.Itoa(port), secret: false},
+			struct {
+				key    string
+				value  string
+				secret bool
+			}{key: "DATABASE_NAME", value: dbName, secret: false},
+			struct {
+				key    string
+				value  string
+				secret bool
+			}{key: "DATABASE_USER", value: username, secret: false},
+			struct {
+				key    string
+				value  string
+				secret bool
+			}{key: "DATABASE_PASSWORD", value: password, secret: true},
+		)
+	}
+
+	vars := make([]models.EnvVar, 0, len(items))
+	for _, item := range items {
+		encrypted, err := utils.Encrypt(item.value, h.Config.Crypto.EncryptionKey)
+		if err != nil {
+			return nil, err
+		}
+		vars = append(vars, models.EnvVar{Key: item.key, EncryptedValue: encrypted, IsSecret: item.secret})
+	}
+
+	return vars, nil
 }
 
 func (h *DatabaseHandler) syncDatabaseLinks(dbID string) {
@@ -1445,19 +1822,11 @@ func (h *DatabaseHandler) syncDatabaseLinks(dbID string) {
 		if svc.WorkspaceID != db.WorkspaceID {
 			continue
 		}
-		url := h.linkedDatabaseURL(db, pw, l.UseInternalURL)
-		if strings.TrimSpace(url) == "" {
-			continue
-		}
-		encrypted, err := utils.Encrypt(url, h.Config.Crypto.EncryptionKey)
+		vars, err := h.linkedDatabaseEnvVars(db, pw, l.EnvVarName, l.UseInternalURL)
 		if err != nil {
 			continue
 		}
-		_ = models.MergeUpsertEnvVars("service", svc.ID, []models.EnvVar{{
-			Key:            l.EnvVarName,
-			EncryptedValue: encrypted,
-			IsSecret:       true,
-		}})
+		_ = models.MergeUpsertEnvVars("service", svc.ID, vars)
 	}
 }
 
@@ -1512,21 +1881,12 @@ func (h *DatabaseHandler) LinkDatabaseToService(w http.ResponseWriter, r *http.R
 		utils.RespondError(w, http.StatusInternalServerError, "failed to decrypt database credentials")
 		return
 	}
-	url := h.linkedDatabaseURL(db, pw, useInternal)
-	if strings.TrimSpace(url) == "" {
-		utils.RespondError(w, http.StatusBadRequest, "database endpoint is not ready yet")
-		return
-	}
-	encrypted, err := utils.Encrypt(url, h.Config.Crypto.EncryptionKey)
+	vars, err := h.linkedDatabaseEnvVars(db, pw, envVar, useInternal)
 	if err != nil {
-		utils.RespondError(w, http.StatusInternalServerError, "failed to store database link")
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := models.MergeUpsertEnvVars("service", svc.ID, []models.EnvVar{{
-		Key:            envVar,
-		EncryptedValue: encrypted,
-		IsSecret:       true,
-	}}); err != nil {
+	if err := models.MergeUpsertEnvVars("service", svc.ID, vars); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to inject env var")
 		return
 	}
@@ -1590,7 +1950,8 @@ func (h *DatabaseHandler) UnlinkDatabaseFromService(w http.ResponseWriter, r *ht
 		utils.RespondError(w, http.StatusInternalServerError, "failed to delete link")
 		return
 	}
-	_ = models.DeleteEnvVarsByKeys("service", serviceID, []string{envVar})
+	keysToDelete := append([]string{envVar}, linkedDatabaseExtraEnvKeys(envVar)...)
+	_ = models.DeleteEnvVarsByKeys("service", serviceID, keysToDelete)
 
 	services.Audit(svc.WorkspaceID, userID, "database.unlinked", "service", svc.ID, map[string]interface{}{
 		"database_id":  databaseID,

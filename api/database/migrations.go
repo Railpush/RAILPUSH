@@ -388,6 +388,8 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 	// External access: unique TCP port per database proxied by nginx ingress controller.
 	`ALTER TABLE managed_databases ADD COLUMN IF NOT EXISTS external_port INT`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_databases_external_port ON managed_databases(external_port) WHERE external_port IS NOT NULL`,
+	`ALTER TABLE managed_databases ADD COLUMN IF NOT EXISTS password_rotated_at TIMESTAMPTZ`,
+	`UPDATE managed_databases SET password_rotated_at = COALESCE(password_rotated_at, created_at, NOW()) WHERE password_rotated_at IS NULL`,
 
 	// Support ticket category (support, feature_request, bug_report).
 	`ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'support'`,
@@ -462,4 +464,17 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_resource_deletion_states_workspace ON resource_deletion_states(workspace_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_resource_deletion_states_deleted ON resource_deletion_states(resource_type, deleted_at)`,
+
+	// Data retention policies (workspace-, service-, and database-level).
+	`ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audit_log_retention_days INT NOT NULL DEFAULT 365`,
+	`ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS deploy_history_retention_days INT NOT NULL DEFAULT 180`,
+	`ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS metric_history_retention_days INT NOT NULL DEFAULT 90`,
+	`ALTER TABLE services ADD COLUMN IF NOT EXISTS runtime_log_retention_days INT NOT NULL DEFAULT 30`,
+	`ALTER TABLE services ADD COLUMN IF NOT EXISTS build_log_retention_days INT NOT NULL DEFAULT 90`,
+	`ALTER TABLE services ADD COLUMN IF NOT EXISTS request_log_retention_days INT NOT NULL DEFAULT 14`,
+	`ALTER TABLE managed_databases ADD COLUMN IF NOT EXISTS backup_retention_automated_days INT NOT NULL DEFAULT 30`,
+	`ALTER TABLE managed_databases ADD COLUMN IF NOT EXISTS backup_retention_manual_days INT NOT NULL DEFAULT 365`,
+	`ALTER TABLE managed_databases ADD COLUMN IF NOT EXISTS wal_retention_days INT NOT NULL DEFAULT 7`,
+	`ALTER TABLE backups ADD COLUMN IF NOT EXISTS trigger_type TEXT NOT NULL DEFAULT 'manual'`,
+	`UPDATE backups SET trigger_type='manual' WHERE COALESCE(trigger_type,'')=''`,
 }

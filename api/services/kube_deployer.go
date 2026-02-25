@@ -410,6 +410,16 @@ func kubeServiceLabels(svc *models.Service) map[string]string {
 		if strings.TrimSpace(svc.WorkspaceID) != "" {
 			labels["railpush.com/workspace-id"] = svc.WorkspaceID
 		}
+		if svc.ProjectID != nil {
+			if pid := strings.TrimSpace(*svc.ProjectID); pid != "" {
+				labels["railpush.com/project-id"] = pid
+			}
+		}
+		if svc.EnvironmentID != nil {
+			if eid := strings.TrimSpace(*svc.EnvironmentID); eid != "" {
+				labels["railpush.com/environment-id"] = eid
+			}
+		}
 	}
 	return labels
 }

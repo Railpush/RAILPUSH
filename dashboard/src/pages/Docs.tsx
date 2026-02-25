@@ -942,6 +942,21 @@ envVarGroups:
   ]
 }`} />
 
+              <h3 className="text-lg font-semibold mt-8 mb-3">Database Template References</h3>
+              <p className="text-sm text-content-secondary mb-4">
+                Env var values can reference managed database connection fields using template syntax. References resolve when writing env vars and work with database ID or unique database name.
+              </p>
+              <CodeBlock filename="database references" code={`{
+  "env_vars": [
+    { "key": "PGHOST", "value": "${"${{ databases.my-db.host }}"}" },
+    { "key": "PGPORT", "value": "${"${{ databases.my-db.port }}"}" },
+    { "key": "PGDATABASE", "value": "${"${{ databases.my-db.db_name }}"}" },
+    { "key": "PGUSER", "value": "${"${{ databases.my-db.username }}"}" },
+    { "key": "PGPASSWORD", "value": "${"${{ databases.my-db.password }}"}", "is_secret": true },
+    { "key": "DATABASE_URL", "value": "${"${{ databases.my-db.internal_url }}"}", "is_secret": true }
+  ]
+}`}/>
+
               <h3 className="text-lg font-semibold mb-3">Env Groups</h3>
               <p className="text-sm text-content-secondary mb-4">
                 Env groups let you share configuration across multiple services. Define them in your blueprint or create them in the dashboard. When a group is updated, all linked services receive the changes.
@@ -1550,6 +1565,8 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'PUT', path: '/services/:id/event-webhook', desc: 'Set deploy event webhook config' },
                   { method: 'POST', path: '/services/:id/event-webhook/test', desc: 'Send deploy.test webhook payload' },
                   { method: 'PATCH', path: '/services/:id', desc: 'Update a service (supports deletion_protection)' },
+                  { method: 'GET', path: '/services/:id/retention', desc: 'Get service log retention policy' },
+                  { method: 'PUT', path: '/services/:id/retention', desc: 'Set service log retention policy' },
                   { method: 'GET', path: '/services/:id/disks', desc: 'List persistent disk attachment' },
                   { method: 'PUT', path: '/services/:id/disks', desc: 'Create/replace persistent disk attachment' },
                   { method: 'DELETE', path: '/services/:id/disks', desc: 'Delete persistent disk attachment' },
@@ -1598,9 +1615,12 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'POST', path: '/databases/bulk-update', desc: 'Apply a partial update payload to multiple databases (supports dry_run, transaction_mode)' },
                   { method: 'GET', path: '/databases/:id', desc: 'Get database details (credentials redacted by default)' },
                   { method: 'POST', path: '/databases/:id/credentials/reveal', desc: 'Reveal plaintext credentials (explicit acknowledgement required)' },
+                  { method: 'POST', path: '/databases/:id/rotate-password', desc: 'Rotate database password and sync linked service references' },
                   { method: 'POST', path: '/databases/:id/query', desc: 'Execute SQL (default read-only; optional write mode requires explicit acknowledgement)' },
+                  { method: 'GET', path: '/databases/:id/retention', desc: 'Get database backup retention policy' },
+                  { method: 'PUT', path: '/databases/:id/retention', desc: 'Set database backup retention policy' },
                   { method: 'PATCH', path: '/databases/:id', desc: 'Update a database (supports deletion_protection)' },
-                  { method: 'DELETE', path: '/databases/:id', desc: 'Delete flow (token challenge -> soft-delete; optional hard_delete after recovery window)' },
+                  { method: 'DELETE', path: '/databases/:id', desc: 'Delete flow (token challenge -> soft-delete; optional confirm_linked_services and hard_delete after recovery window)' },
                   { method: 'POST', path: '/databases/:id/restore', desc: 'Restore a soft-deleted database' },
                   { method: 'GET', path: '/databases/:id/backups', desc: 'List backups (pagination: limit,cursor)' },
                   { method: 'POST', path: '/databases/:id/backups', desc: 'Trigger a backup' },
@@ -1678,6 +1698,8 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'POST', path: '/workspaces/:id/members', desc: 'Invite a member' },
                   { method: 'PATCH', path: '/workspaces/:id/members/:userId', desc: 'Update member role' },
                   { method: 'DELETE', path: '/workspaces/:id/members/:userId', desc: 'Remove a member' },
+                  { method: 'GET', path: '/workspaces/:id/retention', desc: 'Get workspace retention policy (audit/deploy/metrics)' },
+                  { method: 'PUT', path: '/workspaces/:id/retention', desc: 'Set workspace retention policy (audit/deploy/metrics)' },
                   { method: 'GET', path: '/workspaces/:id/audit-logs', desc: 'List audit logs (pagination: limit,cursor)' },
                   { method: 'GET', path: '/billing', desc: 'Get billing overview' },
                 ]},
@@ -1842,13 +1864,13 @@ npm run build`} />
                   <tbody className="text-content-secondary">
                     {[
                       ['Auth', 'whoami, get_rate_limit'],
-                      ['Services', 'list (with server-side filters + limit/cursor pagination), get, create, update, delete (token-confirmed soft delete), restore, restart, suspend, resume, search/filter'],
+                      ['Services', 'list (with server-side filters + limit/cursor pagination), get, create, update, get/set retention policy, delete (token-confirmed soft delete), restore, restart, suspend, resume, search/filter'],
                       ['Bulk Operations', 'bulk update services, bulk deploy, bulk restart, bulk set env vars, bulk update databases, plus bulk suspend/resume helpers'],
                       ['Deploys', 'trigger, list (status/branch/since/until + limit/cursor pagination), get, wait_for_deploy, rollback, queue position'],
                       ['Env Vars', 'list (limit/cursor pagination), set (bulk replace), upsert (additive), get/set/enable/disable GitHub Actions deploy gate, set workflow allowlist'],
                       ['Disks', 'list service disks, set/replace disk attachment, delete disk attachment'],
                       ['Custom Domains', 'list (limit/cursor pagination), add, delete'],
-                      ['Databases', 'list (plan/status/version/name/query filters + limit/cursor pagination), create, get (redacted), reveal credentials, query_database (read-only by default, optional write mode), update, delete (token-confirmed soft delete), restore, backup, list backups (limit/cursor pagination), replicas, create replica, promote replica, enable HA'],
+                      ['Databases', 'list (plan/status/version/name/query filters + limit/cursor pagination), create, get (redacted), reveal credentials, rotate password, query_database (read-only by default, optional write mode), get/set retention policy, update, delete (token-confirmed soft delete with optional linked-service confirmation), restore, backup, list backups (limit/cursor pagination), replicas, create replica, promote replica, enable HA'],
                       ['Key-Value (Redis)', 'list (plan/status/name/query filters + limit/cursor pagination), create, get (redacted), reveal credentials, update, delete (token-confirmed soft delete), restore'],
                       ['Logs', 'get runtime/deploy logs with text search, regex, since/until, and level filtering'],
                       ['AI Fix', 'start fix session, get fix status'],
@@ -1870,6 +1892,7 @@ npm run build`} />
                       ['Registered Domains', 'list, register, get, delete'],
                       ['DNS Records', 'list, create, update, delete'],
                       ['Workspace Members', 'list, invite, update role, remove'],
+                      ['Retention Policies', 'get/set service retention, get/set database retention, get/set workspace retention'],
                       ['Audit Logs', 'list events (limit/cursor pagination)'],
                       ['GitHub', 'list repos, list branches, list workflows, list service workflows, webhook status/repair'],
                       ['Event Webhooks', 'get/set/test service deploy event webhooks'],

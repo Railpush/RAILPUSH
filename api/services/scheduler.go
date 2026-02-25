@@ -87,7 +87,7 @@ func (s *Scheduler) shouldRun(schedule string, now time.Time) bool {
 	return !next.After(windowEnd)
 }
 
-// cleanupStaleData runs once per day to purge old webhook events (30-day retention).
+// cleanupStaleData runs once per day to enforce data retention policies.
 func (s *Scheduler) cleanupStaleData() {
 	if time.Since(s.lastCleanup) < 24*time.Hour {
 		return
@@ -96,14 +96,17 @@ func (s *Scheduler) cleanupStaleData() {
 	if database.DB == nil {
 		return
 	}
+
 	res, err := database.DB.Exec("DELETE FROM stripe_webhook_events WHERE received_at < NOW() - INTERVAL '30 days'")
 	if err != nil {
 		log.Printf("Scheduler: webhook events cleanup failed: %v", err)
-		return
-	}
-	if n, _ := res.RowsAffected(); n > 0 {
+	} else if n, _ := res.RowsAffected(); n > 0 {
 		log.Printf("Scheduler: cleaned up %d old webhook events", n)
 	}
+
+	s.cleanupAuditLogRetention()
+	s.cleanupDeployHistoryRetention()
+	s.cleanupBuildLogRetention()
 }
 
 // reportMeteredUsage reports accumulated usage minutes to Stripe for all active metered billing items.
@@ -173,7 +176,7 @@ func (s *Scheduler) reportMeteredUsage() {
 }
 
 // runNightlyBackups runs pg_dump for all managed databases once per day (between 2:00-2:59 AM server time).
-// Retention: keep last 7 daily backups per database, plus 4 weekly (Sunday) backups.
+// Retention cleanup is applied afterwards using per-database policies.
 func (s *Scheduler) runNightlyBackups() {
 	now := time.Now()
 
@@ -215,8 +218,8 @@ func (s *Scheduler) runNightlyBackups() {
 func (s *Scheduler) backupDatabase(db models.ManagedDatabase, backupDir string, now time.Time) {
 	var backupID string
 	err := database.DB.QueryRow(
-		"INSERT INTO backups (resource_type, resource_id, status, started_at) VALUES ($1, $2, $3, NOW()) RETURNING id",
-		"database", db.ID, "running",
+		"INSERT INTO backups (resource_type, resource_id, status, trigger_type, started_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING id",
+		"database", db.ID, "running", "automated",
 	).Scan(&backupID)
 	if err != nil {
 		log.Printf("Scheduler: backup: failed to create record for %s: %v", db.Name, err)
@@ -265,12 +268,19 @@ func (s *Scheduler) backupDatabase(db models.ManagedDatabase, backupDir string, 
 	log.Printf("Scheduler: nightly backup completed for %s: %s (%d bytes)", db.Name, filePath, size)
 }
 
-// cleanupOldBackups enforces retention: keep 7 daily + 4 weekly (most recent) per database.
+// cleanupOldBackups enforces per-database retention policies for completed backups.
 func (s *Scheduler) cleanupOldBackups() {
 	rows, err := database.DB.Query(
-		`SELECT id, resource_id, file_path, started_at FROM backups
-		 WHERE resource_type='database' AND status='completed'
-		 ORDER BY resource_id, started_at DESC`)
+		`SELECT b.id,
+		        b.resource_id,
+		        COALESCE(b.file_path, ''),
+		        COALESCE(b.started_at, b.finished_at, NOW()),
+		        COALESCE(NULLIF(b.trigger_type, ''), 'manual'),
+		        COALESCE(d.backup_retention_automated_days, 30),
+		        COALESCE(d.backup_retention_manual_days, 365)
+		   FROM backups b
+		   LEFT JOIN managed_databases d ON d.id = b.resource_id
+		  WHERE b.resource_type='database' AND b.status='completed'`)
 	if err != nil {
 		log.Printf("Scheduler: backup cleanup query failed: %v", err)
 		return
@@ -278,47 +288,111 @@ func (s *Scheduler) cleanupOldBackups() {
 	defer rows.Close()
 
 	type backupRow struct {
-		id         string
-		resourceID string
-		filePath   string
-		startedAt  time.Time
+		id                     string
+		resourceID             string
+		filePath               string
+		startedAt              time.Time
+		triggerType            string
+		automatedRetentionDays int
+		manualRetentionDays    int
 	}
 
-	grouped := map[string][]backupRow{}
+	toDelete := make([]backupRow, 0)
+	now := time.Now()
 	for rows.Next() {
 		var b backupRow
-		if err := rows.Scan(&b.id, &b.resourceID, &b.filePath, &b.startedAt); err != nil {
+		if err := rows.Scan(
+			&b.id,
+			&b.resourceID,
+			&b.filePath,
+			&b.startedAt,
+			&b.triggerType,
+			&b.automatedRetentionDays,
+			&b.manualRetentionDays,
+		); err != nil {
 			continue
 		}
-		grouped[b.resourceID] = append(grouped[b.resourceID], b)
-	}
 
-	now := time.Now()
-	for _, backups := range grouped {
-		var toDelete []backupRow
-		dailyKept := 0
-		weeklyKept := 0
-		for _, b := range backups {
-			age := now.Sub(b.startedAt)
-			isSunday := b.startedAt.Weekday() == time.Sunday
-
-			if age < 7*24*time.Hour && dailyKept < 7 {
-				dailyKept++
-				continue
-			}
-			if isSunday && age < 28*24*time.Hour && weeklyKept < 4 {
-				weeklyKept++
-				continue
-			}
+		retentionDays := b.manualRetentionDays
+		if strings.EqualFold(strings.TrimSpace(b.triggerType), "automated") {
+			retentionDays = b.automatedRetentionDays
+		}
+		if retentionDays <= 0 {
+			retentionDays = 1
+		}
+		if now.Sub(b.startedAt) >= (time.Duration(retentionDays) * 24 * time.Hour) {
 			toDelete = append(toDelete, b)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("Scheduler: backup cleanup row scan failed: %v", err)
+		return
+	}
 
-		for _, b := range toDelete {
-			os.Remove(b.filePath)
-			database.DB.Exec("DELETE FROM backups WHERE id=$1", b.id)
+	deletedByDatabase := map[string]int{}
+	for _, b := range toDelete {
+		if strings.TrimSpace(b.filePath) != "" {
+			_ = os.Remove(b.filePath)
 		}
-		if len(toDelete) > 0 {
-			log.Printf("Scheduler: cleaned up %d old backups for database %s", len(toDelete), backups[0].resourceID)
+		if _, err := database.DB.Exec("DELETE FROM backups WHERE id=$1", b.id); err == nil {
+			deletedByDatabase[b.resourceID]++
 		}
+	}
+	for dbID, count := range deletedByDatabase {
+		log.Printf("Scheduler: cleaned up %d expired backups for database %s", count, dbID)
+	}
+}
+
+func (s *Scheduler) cleanupAuditLogRetention() {
+	res, err := database.DB.Exec(
+		`DELETE FROM audit_log a
+		  USING workspaces w
+		 WHERE a.workspace_id = w.id
+		   AND a.created_at < NOW() - make_interval(days => GREATEST(COALESCE(w.audit_log_retention_days, 365), 1))`,
+	)
+	if err != nil {
+		log.Printf("Scheduler: audit log retention cleanup failed: %v", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("Scheduler: cleaned up %d expired audit log rows", n)
+	}
+}
+
+func (s *Scheduler) cleanupDeployHistoryRetention() {
+	res, err := database.DB.Exec(
+		`DELETE FROM deploys d
+		  USING services s, workspaces w
+		 WHERE d.service_id = s.id
+		   AND s.workspace_id = w.id
+		   AND LOWER(COALESCE(d.status, '')) IN ('live', 'failed', 'canceled', 'cancelled')
+		   AND COALESCE(d.finished_at, d.started_at) IS NOT NULL
+		   AND COALESCE(d.finished_at, d.started_at) < NOW() - make_interval(days => GREATEST(COALESCE(w.deploy_history_retention_days, 180), 1))`,
+	)
+	if err != nil {
+		log.Printf("Scheduler: deploy history retention cleanup failed: %v", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("Scheduler: cleaned up %d expired deploy history rows", n)
+	}
+}
+
+func (s *Scheduler) cleanupBuildLogRetention() {
+	res, err := database.DB.Exec(
+		`UPDATE deploys d
+		    SET build_log = ''
+		   FROM services s
+		  WHERE d.service_id = s.id
+		    AND COALESCE(d.build_log, '') <> ''
+		    AND COALESCE(d.started_at, d.finished_at) IS NOT NULL
+		    AND COALESCE(d.started_at, d.finished_at) < NOW() - make_interval(days => GREATEST(COALESCE(s.build_log_retention_days, 90), 1))`,
+	)
+	if err != nil {
+		log.Printf("Scheduler: build log retention cleanup failed: %v", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("Scheduler: redacted build logs for %d expired deploy rows", n)
 	}
 }

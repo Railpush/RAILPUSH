@@ -134,7 +134,12 @@ func (h *EnvVarHandler) MergeEnvVars(w http.ResponseWriter, r *http.Request) {
 			if key == "" {
 				continue
 			}
-			encrypted, err := utils.Encrypt(item.Value, h.Config.Crypto.EncryptionKey)
+			resolvedValue, err := resolveDatabaseTemplateReferences(h.Config, svc.WorkspaceID, item.Value)
+			if err != nil {
+				utils.RespondError(w, http.StatusBadRequest, "invalid database reference for "+key+": "+err.Error())
+				return
+			}
+			encrypted, err := utils.Encrypt(resolvedValue, h.Config.Crypto.EncryptionKey)
 			if err != nil {
 				utils.RespondError(w, http.StatusInternalServerError, "encryption failed")
 				return
@@ -290,7 +295,13 @@ func (h *EnvVarHandler) BulkUpdateEnvVars(w http.ResponseWriter, r *http.Request
 			return
 		}
 
-		encrypted, err := utils.Encrypt(item.Value, h.Config.Crypto.EncryptionKey)
+		resolvedValue, err := resolveDatabaseTemplateReferences(h.Config, svc.WorkspaceID, item.Value)
+		if err != nil {
+			utils.RespondError(w, http.StatusBadRequest, "invalid database reference for "+key+": "+err.Error())
+			return
+		}
+
+		encrypted, err := utils.Encrypt(resolvedValue, h.Config.Crypto.EncryptionKey)
 		if err != nil {
 			utils.RespondError(w, http.StatusInternalServerError, "encryption failed")
 			return

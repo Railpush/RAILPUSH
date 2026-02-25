@@ -299,22 +299,72 @@ func (w *Worker) syncDatabaseServiceLinks(databaseID string) {
 				port = db.ExternalPort
 			}
 		}
-		if host == "" || port <= 0 {
+		dbName := strings.TrimSpace(db.DBName)
+		if dbName == "" {
+			dbName = strings.TrimSpace(db.Name)
+		}
+		username := strings.TrimSpace(db.Username)
+		if username == "" {
+			username = strings.TrimSpace(db.Name)
+		}
+		if host == "" || port <= 0 || dbName == "" || username == "" {
 			continue
 		}
-		url := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s", db.Username, pw, host, port, db.DBName)
+		url := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s", username, pw, host, port, dbName)
 		if !l.UseInternalURL && db.ExternalPort > 0 {
 			url += "?sslmode=require"
 		}
-		encrypted, err := utils.Encrypt(url, w.Config.Crypto.EncryptionKey)
-		if err != nil {
+
+		items := []struct {
+			key    string
+			value  string
+			secret bool
+		}{
+			{key: strings.ToUpper(strings.TrimSpace(l.EnvVarName)), value: url, secret: true},
+		}
+		if strings.EqualFold(strings.TrimSpace(l.EnvVarName), "DATABASE_URL") {
+			items = append(items,
+				struct {
+					key    string
+					value  string
+					secret bool
+				}{key: "DATABASE_HOST", value: host, secret: false},
+				struct {
+					key    string
+					value  string
+					secret bool
+				}{key: "DATABASE_PORT", value: strconv.Itoa(port), secret: false},
+				struct {
+					key    string
+					value  string
+					secret bool
+				}{key: "DATABASE_NAME", value: dbName, secret: false},
+				struct {
+					key    string
+					value  string
+					secret bool
+				}{key: "DATABASE_USER", value: username, secret: false},
+				struct {
+					key    string
+					value  string
+					secret bool
+				}{key: "DATABASE_PASSWORD", value: pw, secret: true},
+			)
+		}
+
+		vars := make([]models.EnvVar, 0, len(items))
+		for _, item := range items {
+			encrypted, err := utils.Encrypt(item.value, w.Config.Crypto.EncryptionKey)
+			if err != nil {
+				vars = nil
+				break
+			}
+			vars = append(vars, models.EnvVar{Key: item.key, EncryptedValue: encrypted, IsSecret: item.secret})
+		}
+		if len(vars) == 0 {
 			continue
 		}
-		_ = models.MergeUpsertEnvVars("service", svc.ID, []models.EnvVar{{
-			Key:            l.EnvVarName,
-			EncryptedValue: encrypted,
-			IsSecret:       true,
-		}})
+		_ = models.MergeUpsertEnvVars("service", svc.ID, vars)
 	}
 }
 
@@ -1393,6 +1443,9 @@ func (w *Worker) reconcileManagedDatabases() {
 	}
 	for _, d := range dbs {
 		status := strings.ToLower(strings.TrimSpace(d.Status))
+		if status == "soft_deleted" {
+			continue
+		}
 		name := kubeManagedDatabaseName(d.ID)
 		tlsSecName := name + "-tls"
 		shouldEnsure := status != "available"
@@ -1497,7 +1550,7 @@ func (w *Worker) reconcileManagedKeyValues() {
 	}
 	for _, kv := range kvs {
 		status := strings.ToLower(strings.TrimSpace(kv.Status))
-		if status == "available" {
+		if status == "available" || status == "soft_deleted" {
 			continue
 		}
 

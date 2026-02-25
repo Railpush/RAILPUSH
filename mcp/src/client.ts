@@ -88,7 +88,7 @@ export class RailPushClient {
     }
   }
 
-  private async performConfirmedDelete(path: string, hardDelete?: boolean): Promise<unknown> {
+  private async performConfirmedDelete(path: string, hardDelete?: boolean, extraPayload?: Record<string, unknown>): Promise<unknown> {
     const initiated = await this.request("DELETE", path, {});
     const token = (typeof initiated === "object" && initiated !== null && typeof (initiated as { confirmation_token?: unknown }).confirmation_token === "string")
       ? (initiated as { confirmation_token: string }).confirmation_token
@@ -99,6 +99,7 @@ export class RailPushClient {
     return this.request("DELETE", path, {
       confirmation_token: token,
       hard_delete: Boolean(hardDelete),
+      ...(extraPayload ?? {}),
     });
   }
 
@@ -180,6 +181,18 @@ export class RailPushClient {
 
   async updateService(id: string, data: Record<string, unknown>) {
     return this.request("PATCH", `/services/${id}`, data);
+  }
+
+  async getServiceRetention(id: string) {
+    return this.request("GET", `/services/${id}/retention`);
+  }
+
+  async setServiceRetention(id: string, data: {
+    runtime_logs?: string | number;
+    build_logs?: string | number;
+    request_logs?: string | number;
+  }) {
+    return this.request("PUT", `/services/${id}/retention`, data);
   }
 
   async deleteService(id: string, hardDelete?: boolean) {
@@ -400,6 +413,13 @@ export class RailPushClient {
     });
   }
 
+  async rotateDatabasePassword(id: string, data?: { password?: string; acknowledge_sensitive_output?: boolean }) {
+    return this.request("POST", `/databases/${id}/rotate-password`, {
+      acknowledge_sensitive_output: true,
+      ...(data ?? {}),
+    });
+  }
+
   async queryDatabase(id: string, data: {
     query: string;
     allow_write?: boolean;
@@ -408,6 +428,18 @@ export class RailPushClient {
     timeout_ms?: number;
   }) {
     return this.request("POST", `/databases/${id}/query`, data);
+  }
+
+  async getDatabaseRetention(id: string) {
+    return this.request("GET", `/databases/${id}/retention`);
+  }
+
+  async setDatabaseRetention(id: string, data: {
+    automated_backups?: string | number;
+    manual_backups?: string | number;
+    wal_archives?: string | number;
+  }) {
+    return this.request("PUT", `/databases/${id}/retention`, data);
   }
 
   async updateDatabase(id: string, data: Record<string, unknown>) {
@@ -424,8 +456,11 @@ export class RailPushClient {
     return this.request("POST", "/databases/bulk-update", data);
   }
 
-  async deleteDatabase(id: string, hardDelete?: boolean) {
-    return this.performConfirmedDelete(`/databases/${id}`, hardDelete);
+  async deleteDatabase(id: string, hardDelete?: boolean, confirmLinkedServices?: boolean) {
+    const extraPayload = confirmLinkedServices
+      ? { confirm_linked_services: true }
+      : undefined;
+    return this.performConfirmedDelete(`/databases/${id}`, hardDelete, extraPayload);
   }
 
   async restoreDatabase(id: string) {
@@ -911,6 +946,18 @@ export class RailPushClient {
     if (typeof opts?.limit === "number" && opts.limit > 0) query.limit = String(opts.limit);
     if (opts?.cursor) query.cursor = opts.cursor;
     return this.request("GET", `/workspaces/${workspaceId}/audit-logs`, undefined, query);
+  }
+
+  async getWorkspaceRetention(workspaceId: string) {
+    return this.request("GET", `/workspaces/${workspaceId}/retention`);
+  }
+
+  async setWorkspaceRetention(workspaceId: string, data: {
+    audit_logs?: string | number;
+    deploy_history?: string | number;
+    metric_history?: string | number;
+  }) {
+    return this.request("PUT", `/workspaces/${workspaceId}/retention`, data);
   }
 
   // ── Preview Environments ────────────────────────────────────────────

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/railpush/api/models"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -19,6 +20,9 @@ const (
 	rpLabelManagedBy   = "app.kubernetes.io/managed-by"
 	rpLabelComponent   = "app.kubernetes.io/component"
 	rpLabelWorkspaceID = "railpush.com/workspace-id"
+	rpLabelProjectID   = "railpush.com/project-id"
+	rpLabelServiceID   = "railpush.com/service-id"
+	rpLabelDatabaseID  = "railpush.com/database-id"
 	rpManagedByValue   = "railpush"
 )
 
@@ -45,6 +49,58 @@ func kubeNetpolNameWorkspaceIsolation(workspaceID string) string {
 	}
 	if name == "" {
 		name = "rp-ws-unknown-isolation"
+	}
+	return name
+}
+
+func kubeNetpolNameProjectIsolation(workspaceID, projectID string) string {
+	ws := strings.ToLower(strings.TrimSpace(workspaceID))
+	if ws == "" {
+		ws = "unknown"
+	}
+	pid := strings.ToLower(strings.TrimSpace(projectID))
+	if pid == "" {
+		pid = "unknown"
+	}
+	replacer := strings.NewReplacer("_", "-", ".", "-", " ", "-")
+	ws = kubeNameInvalidChars.ReplaceAllString(replacer.Replace(ws), "-")
+	ws = strings.Trim(ws, "-")
+	if ws == "" {
+		ws = "unknown"
+	}
+	pid = kubeNameInvalidChars.ReplaceAllString(replacer.Replace(pid), "-")
+	pid = strings.Trim(pid, "-")
+	if pid == "" {
+		pid = "unknown"
+	}
+	name := "rp-ws-" + ws + "-proj-" + pid + "-isolation"
+	if len(name) > 63 {
+		name = name[:63]
+		name = strings.Trim(name, "-")
+	}
+	if name == "" {
+		name = "rp-ws-proj-isolation"
+	}
+	return name
+}
+
+func kubeNetpolNameDatabaseAccess(databaseID string) string {
+	id := strings.ToLower(strings.TrimSpace(databaseID))
+	if id == "" {
+		id = "unknown"
+	}
+	id = strings.NewReplacer("_", "-", ".", "-", " ", "-").Replace(id)
+	id = kubeNameInvalidChars.ReplaceAllString(id, "-")
+	id = strings.Trim(id, "-")
+	if id == "" {
+		id = "unknown"
+	}
+	name := "rp-db-" + id + "-access"
+	if len(name) > 63 {
+		name = strings.Trim(name[:63], "-")
+	}
+	if name == "" {
+		name = "rp-db-access"
 	}
 	return name
 }
@@ -309,7 +365,12 @@ func (k *KubeDeployer) ensureTenantNetpolWorkspace(ctx context.Context, workspac
 				MatchLabels: map[string]string{
 					rpLabelManagedBy:   rpManagedByValue,
 					rpLabelWorkspaceID: workspaceID,
+					rpLabelComponent:   "service",
 				},
+				MatchExpressions: []metav1.LabelSelectorRequirement{{
+					Key:      rpLabelProjectID,
+					Operator: metav1.LabelSelectorOpDoesNotExist,
+				}},
 			},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
 			Ingress: []networkingv1.NetworkPolicyIngressRule{
@@ -320,7 +381,12 @@ func (k *KubeDeployer) ensureTenantNetpolWorkspace(ctx context.Context, workspac
 								MatchLabels: map[string]string{
 									rpLabelManagedBy:   rpManagedByValue,
 									rpLabelWorkspaceID: workspaceID,
+									rpLabelComponent:   "service",
 								},
+								MatchExpressions: []metav1.LabelSelectorRequirement{{
+									Key:      rpLabelProjectID,
+									Operator: metav1.LabelSelectorOpDoesNotExist,
+								}},
 							},
 						},
 					},
@@ -330,6 +396,161 @@ func (k *KubeDeployer) ensureTenantNetpolWorkspace(ctx context.Context, workspac
 	}
 
 	return k.upsertNetworkPolicy(ctx, ns, np)
+}
+
+func (k *KubeDeployer) ensureTenantNetpolProject(ctx context.Context, workspaceID, projectID string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	if workspaceID == "" || projectID == "" {
+		return nil
+	}
+	ns := k.namespace()
+	npName := kubeNetpolNameProjectIsolation(workspaceID, projectID)
+
+	np := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      npName,
+			Namespace: ns,
+			Labels: map[string]string{
+				rpLabelManagedBy:   rpManagedByValue,
+				rpLabelComponent:   "tenant-isolation",
+				rpLabelWorkspaceID: workspaceID,
+				rpLabelProjectID:   projectID,
+			},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					rpLabelManagedBy:   rpManagedByValue,
+					rpLabelComponent:   "service",
+					rpLabelWorkspaceID: workspaceID,
+					rpLabelProjectID:   projectID,
+				},
+			},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+			Ingress: []networkingv1.NetworkPolicyIngressRule{{
+				From: []networkingv1.NetworkPolicyPeer{{
+					PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
+						rpLabelManagedBy:   rpManagedByValue,
+						rpLabelWorkspaceID: workspaceID,
+						rpLabelProjectID:   projectID,
+					}},
+				}},
+			}},
+		},
+	}
+
+	return k.upsertNetworkPolicy(ctx, ns, np)
+}
+
+func uniqueNonEmpty(items []string) []string {
+	set := map[string]struct{}{}
+	for _, raw := range items {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			continue
+		}
+		set[v] = struct{}{}
+	}
+	out := make([]string, 0, len(set))
+	for v := range set {
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (k *KubeDeployer) ensureTenantNetpolDatabaseAccess(ctx context.Context, workspaceID, databaseID string, serviceIDs []string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	databaseID = strings.TrimSpace(databaseID)
+	if workspaceID == "" || databaseID == "" {
+		return nil
+	}
+	ns := k.namespace()
+	npName := kubeNetpolNameDatabaseAccess(databaseID)
+
+	allowedServiceIDs := uniqueNonEmpty(serviceIDs)
+	from := make([]networkingv1.NetworkPolicyPeer, 0, len(allowedServiceIDs))
+	for _, serviceID := range allowedServiceIDs {
+		from = append(from, networkingv1.NetworkPolicyPeer{
+			PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
+				rpLabelManagedBy:   rpManagedByValue,
+				rpLabelWorkspaceID: workspaceID,
+				rpLabelServiceID:   serviceID,
+			}},
+		})
+	}
+
+	np := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      npName,
+			Namespace: ns,
+			Labels: map[string]string{
+				rpLabelManagedBy:   rpManagedByValue,
+				rpLabelComponent:   "tenant-isolation",
+				rpLabelWorkspaceID: workspaceID,
+				rpLabelDatabaseID:  databaseID,
+			},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{
+				rpLabelManagedBy:   rpManagedByValue,
+				rpLabelComponent:   "managed-database",
+				rpLabelWorkspaceID: workspaceID,
+				rpLabelDatabaseID:  databaseID,
+			}},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+			Ingress:     []networkingv1.NetworkPolicyIngressRule{{From: from}},
+		},
+	}
+
+	return k.upsertNetworkPolicy(ctx, ns, np)
+}
+
+func (k *KubeDeployer) ensureTenantWorkspaceScopedPolicies(ctx context.Context, workspaceID string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return fmt.Errorf("missing workspace id")
+	}
+	if err := k.ensureTenantNetpolWorkspace(ctx, workspaceID); err != nil {
+		return err
+	}
+
+	services, err := models.ListServices(workspaceID)
+	if err != nil {
+		return fmt.Errorf("list workspace services: %w", err)
+	}
+	projectIDs := make([]string, 0, len(services))
+	for _, svc := range services {
+		if svc.ProjectID != nil {
+			projectIDs = append(projectIDs, strings.TrimSpace(*svc.ProjectID))
+		}
+	}
+	for _, projectID := range uniqueNonEmpty(projectIDs) {
+		if err := k.ensureTenantNetpolProject(ctx, workspaceID, projectID); err != nil {
+			return err
+		}
+	}
+
+	dbs, err := models.ListManagedDatabasesByWorkspace(workspaceID)
+	if err != nil {
+		return fmt.Errorf("list workspace databases: %w", err)
+	}
+	for _, db := range dbs {
+		links, lerr := models.ListServiceDatabaseLinksByDatabase(db.ID)
+		if lerr != nil {
+			return fmt.Errorf("list database links for %s: %w", db.ID, lerr)
+		}
+		serviceIDs := make([]string, 0, len(links))
+		for _, link := range links {
+			serviceIDs = append(serviceIDs, link.ServiceID)
+		}
+		if err := k.ensureTenantNetpolDatabaseAccess(ctx, workspaceID, db.ID, serviceIDs); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // EnsureTenantNetworkPolicies ensures:
@@ -353,7 +574,7 @@ func (k *KubeDeployer) EnsureTenantNetworkPolicies(ctx context.Context, workspac
 	if err := k.ensureTenantNetpolDatabaseExternal(ctx); err != nil {
 		return err
 	}
-	return k.ensureTenantNetpolWorkspace(ctx, workspaceID)
+	return k.ensureTenantWorkspaceScopedPolicies(ctx, workspaceID)
 }
 
 // ReconcileTenantNetworkPolicies backfills policies for any existing workspaces found
@@ -368,6 +589,9 @@ func (k *KubeDeployer) ReconcileTenantNetworkPolicies(ctx context.Context) error
 		return k.ReconcileTenantNetworkPolicies(cctx)
 	}
 	if err := k.ensureTenantNetpolGlobal(ctx); err != nil {
+		return err
+	}
+	if err := k.ensureTenantNetpolDatabaseExternal(ctx); err != nil {
 		return err
 	}
 
@@ -400,7 +624,7 @@ func (k *KubeDeployer) ReconcileTenantNetworkPolicies(ctx context.Context) error
 
 	var errs []string
 	for ws := range wsIDs {
-		if err := k.ensureTenantNetpolWorkspace(ctx, ws); err != nil {
+		if err := k.ensureTenantWorkspaceScopedPolicies(ctx, ws); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}
