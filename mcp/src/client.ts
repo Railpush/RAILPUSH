@@ -662,4 +662,21 @@ export class RailPushClient {
   async repairServiceGitHubWebhook(serviceId: string) {
     return this.request("POST", `/services/${serviceId}/github/webhook/repair`);
   }
+
+  async getServiceEventWebhook(serviceId: string) {
+    return this.request("GET", `/services/${serviceId}/event-webhook`);
+  }
+
+  async setServiceEventWebhook(serviceId: string, data: {
+    enabled: boolean;
+    url?: string;
+    events?: string[];
+    secret?: string;
+  }) {
+    return this.request("PUT", `/services/${serviceId}/event-webhook`, data);
+  }
+
+  async testServiceEventWebhook(serviceId: string) {
+    return this.request("POST", `/services/${serviceId}/event-webhook/test`);
+  }
 }

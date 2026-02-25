@@ -347,6 +347,9 @@ export function Docs() {
                 Workflow-name suggestions in Service Detail and Service Settings use service-scoped GitHub lookup so team members can still see suggestions even if their personal GitHub account is not connected.
               </p>
               <p className="text-sm text-content-secondary mb-4">
+                RailPush also supports signed deploy event webhooks per service (foundation event system). You can subscribe to <code className="text-xs bg-surface-tertiary px-1 rounded">deploy.started</code>, <code className="text-xs bg-surface-tertiary px-1 rounded">deploy.success</code>, <code className="text-xs bg-surface-tertiary px-1 rounded">deploy.failed</code>, and <code className="text-xs bg-surface-tertiary px-1 rounded">deploy.rollback</code>.
+              </p>
+              <p className="text-sm text-content-secondary mb-4">
                 For API or MCP automation, configure the same service env vars directly:
               </p>
               <CodeBlock language="bash" filename="service env vars" code={`# Enable deploys from GitHub workflow_run success events
@@ -354,6 +357,14 @@ RAILPUSH_GITHUB_ACTIONS_AUTO_DEPLOY=true
 
 # Optional: only allow specific workflow names (comma-separated)
 RAILPUSH_GITHUB_ACTIONS_WORKFLOWS=CI, Release Build`} />
+              <CodeBlock language="bash" filename="event webhook env vars" code={`# Enable deploy event webhooks for this service
+RAILPUSH_EVENT_WEBHOOK_URL=https://example.com/webhooks/railpush
+
+# Optional: HMAC SHA-256 signing secret (header: X-RailPush-Signature)
+RAILPUSH_EVENT_WEBHOOK_SECRET=super-secret
+
+# Optional: comma-separated events (defaults to all deploy events)
+RAILPUSH_EVENT_WEBHOOK_EVENTS=deploy.started,deploy.success,deploy.failed`} />
               <CodeBlock language="text" filename="MCP tools" code={`get_github_actions_deploy_gate(service_id)
 set_deploy_automation_mode(service_id, mode, workflows?)
 set_github_actions_deploy_workflows(service_id, workflows)
@@ -361,6 +372,9 @@ list_github_workflows(owner, repo)
 list_service_github_workflows(service_id)
 get_service_github_webhook_status(service_id)
 repair_service_github_webhook(service_id)
+get_service_event_webhook(service_id)
+set_service_event_webhook(service_id, enabled, url?, events?, secret?)
+test_service_event_webhook(service_id)
 enable_github_actions_deploy_gate(service_id, workflows?)
 disable_github_actions_deploy_gate(service_id)`} />
               <p className="text-xs text-content-tertiary mb-1">
@@ -380,6 +394,9 @@ disable_github_actions_deploy_gate(service_id)`} />
               </p>
               <p className="text-xs text-content-tertiary mb-1">
                 Use <code className="text-[11px] bg-surface-tertiary px-1 rounded">repair_service_github_webhook</code> to re-create or update webhook events when status is missing.
+              </p>
+              <p className="text-xs text-content-tertiary mb-1">
+                Use <code className="text-[11px] bg-surface-tertiary px-1 rounded">set_service_event_webhook</code> and <code className="text-[11px] bg-surface-tertiary px-1 rounded">test_service_event_webhook</code> to configure and validate deploy event notifications.
               </p>
             </section>
 
@@ -1506,6 +1523,9 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'GET', path: '/services', desc: 'List services (filter: ?type=web&status=live&runtime=node&name=api&suspended=false)' },
                   { method: 'POST', path: '/services', desc: 'Create a service' },
                   { method: 'GET', path: '/services/:id', desc: 'Get service details' },
+                  { method: 'GET', path: '/services/:id/event-webhook', desc: 'Get deploy event webhook config' },
+                  { method: 'PUT', path: '/services/:id/event-webhook', desc: 'Set deploy event webhook config' },
+                  { method: 'POST', path: '/services/:id/event-webhook/test', desc: 'Send deploy.test webhook payload' },
                   { method: 'PATCH', path: '/services/:id', desc: 'Update a service' },
                   { method: 'DELETE', path: '/services/:id', desc: 'Delete a service' },
                   { method: 'POST', path: '/services/:id/restart', desc: 'Restart a service' },
@@ -1665,7 +1685,7 @@ curl https://railpush.com/api/v1/services \\
                   <div>
                     <div className="text-sm font-semibold mb-1">AI-native infrastructure</div>
                     <div className="text-sm text-content-secondary">
-                      With 123 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
+                      With 126 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
                     </div>
                   </div>
                 </div>
@@ -1756,7 +1776,7 @@ npm run build`} />
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Available Tools</h3>
               <p className="text-content-secondary text-sm leading-relaxed mb-4">
-                The MCP server exposes 123 tools organized by category. Agents discover these automatically.
+                The MCP server exposes 126 tools organized by category. Agents discover these automatically.
               </p>
 
               <div className="overflow-x-auto mb-8">
@@ -1796,7 +1816,8 @@ npm run build`} />
                       ['DNS Records', 'list, create, update, delete'],
                       ['Workspace Members', 'list, invite, update role, remove'],
                       ['Audit Logs', 'list events'],
-                      ['GitHub', 'list repos, list branches, list workflows, list service workflows'],
+                      ['GitHub', 'list repos, list branches, list workflows, list service workflows, webhook status/repair'],
+                      ['Event Webhooks', 'get/set/test service deploy event webhooks'],
                     ].map(([cat, tools]) => (
                       <tr key={cat} className="border-b border-border-subtle">
                         <td className="py-2 pr-4 font-semibold text-content-primary text-xs">{cat}</td>

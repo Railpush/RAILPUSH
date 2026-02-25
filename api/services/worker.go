@@ -375,12 +375,30 @@ func deployErrorMessage(logText string) string {
 	return ""
 }
 
+func normalizeDeployWebhookEventKey(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "started", "deploy.started":
+		return "started"
+	case "success", "succeeded", "deploy.success", "deploy.succeeded":
+		return "success"
+	case "failed", "failure", "deploy.failed":
+		return "failed"
+	case "rollback", "rolled_back", "deploy.rollback", "deploy.rolled_back":
+		return "rollback"
+	default:
+		return ""
+	}
+}
+
 func (w *Worker) notifyDeployWebhook(svc *models.Service, deploy *models.Deploy, phase string, ok bool) {
 	if w == nil || w.Config == nil || svc == nil || deploy == nil {
 		return
 	}
 
-	url := w.getServiceEnvValue(svc, "DEPLOY_WEBHOOK_URL")
+	url := w.getServiceEnvValue(svc, "RAILPUSH_EVENT_WEBHOOK_URL")
+	if url == "" {
+		url = w.getServiceEnvValue(svc, "DEPLOY_WEBHOOK_URL")
+	}
 	if url == "" {
 		url = w.getServiceEnvValue(svc, "RAILPUSH_DEPLOY_WEBHOOK_URL")
 	}
@@ -388,17 +406,23 @@ func (w *Worker) notifyDeployWebhook(svc *models.Service, deploy *models.Deploy,
 		return
 	}
 
-	eventsRaw := w.getServiceEnvValue(svc, "DEPLOY_WEBHOOK_EVENTS")
+	eventsRaw := w.getServiceEnvValue(svc, "RAILPUSH_EVENT_WEBHOOK_EVENTS")
+	if eventsRaw == "" {
+		eventsRaw = w.getServiceEnvValue(svc, "DEPLOY_WEBHOOK_EVENTS")
+	}
 	allowed := map[string]bool{}
 	if strings.TrimSpace(eventsRaw) != "" {
 		for _, p := range strings.Split(eventsRaw, ",") {
-			e := strings.ToLower(strings.TrimSpace(p))
+			e := normalizeDeployWebhookEventKey(p)
 			if e != "" {
 				allowed[e] = true
 			}
 		}
 	}
-	event := strings.ToLower(strings.TrimSpace(phase))
+	event := normalizeDeployWebhookEventKey(phase)
+	if event == "" {
+		return
+	}
 	if len(allowed) > 0 && !allowed[event] {
 		return
 	}
@@ -455,7 +479,10 @@ func (w *Worker) notifyDeployWebhook(svc *models.Service, deploy *models.Deploy,
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", "railpush-deploy-webhook/1.0")
-		secret := w.getServiceEnvValue(svc, "DEPLOY_WEBHOOK_SECRET")
+		secret := w.getServiceEnvValue(svc, "RAILPUSH_EVENT_WEBHOOK_SECRET")
+		if secret == "" {
+			secret = w.getServiceEnvValue(svc, "DEPLOY_WEBHOOK_SECRET")
+		}
 		if secret == "" {
 			secret = w.getServiceEnvValue(svc, "RAILPUSH_DEPLOY_WEBHOOK_SECRET")
 		}

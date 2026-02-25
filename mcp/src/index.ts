@@ -1483,6 +1483,48 @@ server.tool(
   },
 );
 
+server.tool(
+  "get_service_event_webhook",
+  "Get deploy-event webhook configuration for a service, including enabled status, selected events, and whether a secret is configured.",
+  {
+    service_id: z.string().describe("Service ID"),
+  },
+  async ({ service_id }) => {
+    try { return text(await client.getServiceEventWebhook(service_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "set_service_event_webhook",
+  "Enable/disable and configure deploy-event webhook delivery for a service.",
+  {
+    service_id: z.string().describe("Service ID"),
+    enabled: z.boolean().describe("Enable or disable event webhook delivery"),
+    url: z.string().optional().describe("Destination webhook URL (required when enabled=true)"),
+    events: z.array(z.enum(["deploy.started", "deploy.success", "deploy.failed", "deploy.rollback"]))
+      .optional()
+      .describe("Events to deliver (defaults to all supported events)"),
+    secret: z.string().optional().describe("Optional HMAC secret. Provide empty string to clear existing secret."),
+  },
+  async ({ service_id, enabled, url, events, secret }) => {
+    try { return text(await client.setServiceEventWebhook(service_id, { enabled, url, events, secret })); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "test_service_event_webhook",
+  "Send a signed test payload (`deploy.test`) to the configured service event webhook endpoint.",
+  {
+    service_id: z.string().describe("Service ID"),
+  },
+  async ({ service_id }) => {
+    try { return text(await client.testServiceEventWebhook(service_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
 // ════════════════════════════════════════════════════════════════════════
 //  SUPPORT TICKETS
 // ════════════════════════════════════════════════════════════════════════

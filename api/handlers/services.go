@@ -1,6 +1,11 @@
 package handlers
 
 import (
+	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/railpush/api/config"
@@ -24,6 +30,38 @@ type ServiceHandler struct {
 }
 
 var requiredGitHubWebhookEvents = []string{"push", "workflow_run"}
+
+var supportedServiceEventWebhookEvents = []string{
+	"deploy.started",
+	"deploy.success",
+	"deploy.failed",
+	"deploy.rollback",
+}
+
+const (
+	serviceEventWebhookURLKey    = "RAILPUSH_EVENT_WEBHOOK_URL"
+	serviceEventWebhookEventsKey = "RAILPUSH_EVENT_WEBHOOK_EVENTS"
+	serviceEventWebhookSecretKey = "RAILPUSH_EVENT_WEBHOOK_SECRET"
+
+	legacyDeployWebhookURLKey     = "DEPLOY_WEBHOOK_URL"
+	legacyAltDeployWebhookURLKey  = "RAILPUSH_DEPLOY_WEBHOOK_URL"
+	legacyDeployWebhookEventsKey  = "DEPLOY_WEBHOOK_EVENTS"
+	legacyDeployWebhookSecretKey  = "DEPLOY_WEBHOOK_SECRET"
+	legacyAltDeployWebhookSecretKey = "RAILPUSH_DEPLOY_WEBHOOK_SECRET"
+)
+
+type ServiceEventWebhookConfig struct {
+	Enabled         bool     `json:"enabled"`
+	URL             string   `json:"url,omitempty"`
+	Events          []string `json:"events"`
+	SecretSet       bool     `json:"secret_set"`
+	SupportedEvents []string `json:"supported_events"`
+}
+
+type serviceEventWebhookResolved struct {
+	Config ServiceEventWebhookConfig
+	Secret string
+}
 
 type ServiceGitHubWebhookStatus struct {
 	Supported     bool     `json:"supported"`
@@ -134,6 +172,113 @@ func missingWebhookEvents(events []string, required []string) []string {
 		missing = append(missing, r)
 	}
 	return missing
+}
+
+func normalizeServiceEventWebhookEventName(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "deploy.started", "started":
+		return "deploy.started"
+	case "deploy.success", "deploy.succeeded", "success", "succeeded":
+		return "deploy.success"
+	case "deploy.failed", "failed", "failure":
+		return "deploy.failed"
+	case "deploy.rollback", "deploy.rolled_back", "rollback", "rolled_back":
+		return "deploy.rollback"
+	default:
+		return ""
+	}
+}
+
+func parseServiceEventWebhookEvents(raw string) []string {
+	out := make([]string, 0, len(supportedServiceEventWebhookEvents))
+	seen := map[string]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		norm := normalizeServiceEventWebhookEventName(part)
+		if norm == "" || seen[norm] {
+			continue
+		}
+		seen[norm] = true
+		out = append(out, norm)
+	}
+	if len(out) == 0 {
+		out = append([]string{}, supportedServiceEventWebhookEvents...)
+	}
+	return out
+}
+
+func firstNonEmptyEnvValue(values map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if v := strings.TrimSpace(values[key]); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func firstSecretSet(secretSet map[string]bool, keys ...string) bool {
+	for _, key := range keys {
+		if secretSet[key] {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *ServiceHandler) loadServiceEventWebhookResolved(serviceID string) (serviceEventWebhookResolved, error) {
+	resolved := serviceEventWebhookResolved{
+		Config: ServiceEventWebhookConfig{
+			Enabled:         false,
+			Events:          append([]string{}, supportedServiceEventWebhookEvents...),
+			SupportedEvents: append([]string{}, supportedServiceEventWebhookEvents...),
+		},
+	}
+	vars, err := models.ListEnvVars("service", serviceID)
+	if err != nil {
+		return resolved, err
+	}
+	values := map[string]string{}
+	secretSet := map[string]bool{}
+	for _, ev := range vars {
+		key := strings.TrimSpace(ev.Key)
+		if key == "" || strings.TrimSpace(ev.EncryptedValue) == "" {
+			continue
+		}
+		if ev.IsSecret {
+			secretSet[key] = true
+		}
+		decrypted, decErr := utils.Decrypt(ev.EncryptedValue, h.Config.Crypto.EncryptionKey)
+		if decErr != nil {
+			continue
+		}
+		values[key] = strings.TrimSpace(decrypted)
+	}
+
+	url := firstNonEmptyEnvValue(values,
+		serviceEventWebhookURLKey,
+		legacyDeployWebhookURLKey,
+		legacyAltDeployWebhookURLKey,
+	)
+	eventsRaw := firstNonEmptyEnvValue(values,
+		serviceEventWebhookEventsKey,
+		legacyDeployWebhookEventsKey,
+	)
+	secret := firstNonEmptyEnvValue(values,
+		serviceEventWebhookSecretKey,
+		legacyDeployWebhookSecretKey,
+		legacyAltDeployWebhookSecretKey,
+	)
+
+	resolved.Secret = secret
+	resolved.Config.URL = url
+	resolved.Config.Enabled = url != ""
+	resolved.Config.Events = parseServiceEventWebhookEvents(eventsRaw)
+	resolved.Config.SecretSet = firstSecretSet(secretSet,
+		serviceEventWebhookSecretKey,
+		legacyDeployWebhookSecretKey,
+		legacyAltDeployWebhookSecretKey,
+	) || strings.TrimSpace(secret) != ""
+
+	return resolved, nil
 }
 
 func (h *ServiceHandler) getServiceGitHubWebhookStatus(userID string, svc *models.Service) ServiceGitHubWebhookStatus {
@@ -571,6 +716,242 @@ func (h *ServiceHandler) RepairServiceGitHubWebhook(w http.ResponseWriter, r *ht
 
 	status := h.getServiceGitHubWebhookStatus(userID, svc)
 	utils.RespondJSON(w, http.StatusOK, status)
+}
+
+func (h *ServiceHandler) GetServiceEventWebhookConfig(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	id := mux.Vars(r)["id"]
+
+	svc, err := models.GetService(id)
+	if err != nil || svc == nil {
+		utils.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleViewer) {
+		return
+	}
+
+	resolved, err := h.loadServiceEventWebhookResolved(svc.ID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to load event webhook config")
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, resolved.Config)
+}
+
+func (h *ServiceHandler) UpdateServiceEventWebhookConfig(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	id := mux.Vars(r)["id"]
+
+	svc, err := models.GetService(id)
+	if err != nil || svc == nil {
+		utils.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleDeveloper) {
+		return
+	}
+
+	var req struct {
+		Enabled bool     `json:"enabled"`
+		URL     string   `json:"url"`
+		Events  []string `json:"events"`
+		Secret  *string  `json:"secret"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128*1024)).Decode(&req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	envVars := make([]models.EnvVar, 0, 3)
+	deleteKeys := make([]string, 0, 8)
+	deleteSeen := map[string]bool{}
+	addDeleteKey := func(key string) {
+		key = strings.TrimSpace(key)
+		if key == "" || deleteSeen[key] {
+			return
+		}
+		deleteSeen[key] = true
+		deleteKeys = append(deleteKeys, key)
+	}
+
+	if req.Enabled {
+		url := strings.TrimSpace(req.URL)
+		if url == "" {
+			utils.RespondError(w, http.StatusBadRequest, "url is required when enabled=true")
+			return
+		}
+		events := append([]string{}, supportedServiceEventWebhookEvents...)
+		if len(req.Events) > 0 {
+			normalized := make([]string, 0, len(req.Events))
+			seen := map[string]bool{}
+			for _, raw := range req.Events {
+				norm := normalizeServiceEventWebhookEventName(raw)
+				if norm == "" || seen[norm] {
+					continue
+				}
+				seen[norm] = true
+				normalized = append(normalized, norm)
+			}
+			if len(normalized) == 0 {
+				utils.RespondError(w, http.StatusBadRequest, "events contains no supported event names")
+				return
+			}
+			events = normalized
+		}
+
+		encURL, err := utils.Encrypt(url, h.Config.Crypto.EncryptionKey)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to encrypt webhook url")
+			return
+		}
+		envVars = append(envVars,
+			models.EnvVar{Key: serviceEventWebhookURLKey, EncryptedValue: encURL, IsSecret: false},
+		)
+
+		encEvents, err := utils.Encrypt(strings.Join(events, ","), h.Config.Crypto.EncryptionKey)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to encrypt webhook events")
+			return
+		}
+		envVars = append(envVars,
+			models.EnvVar{Key: serviceEventWebhookEventsKey, EncryptedValue: encEvents, IsSecret: false},
+		)
+
+		addDeleteKey(legacyDeployWebhookURLKey)
+		addDeleteKey(legacyAltDeployWebhookURLKey)
+		addDeleteKey(legacyDeployWebhookEventsKey)
+
+		if req.Secret != nil {
+			secret := strings.TrimSpace(*req.Secret)
+			if secret == "" {
+				addDeleteKey(serviceEventWebhookSecretKey)
+				addDeleteKey(legacyDeployWebhookSecretKey)
+				addDeleteKey(legacyAltDeployWebhookSecretKey)
+			} else {
+				encSecret, err := utils.Encrypt(secret, h.Config.Crypto.EncryptionKey)
+				if err != nil {
+					utils.RespondError(w, http.StatusInternalServerError, "failed to encrypt webhook secret")
+					return
+				}
+				envVars = append(envVars,
+					models.EnvVar{Key: serviceEventWebhookSecretKey, EncryptedValue: encSecret, IsSecret: true},
+				)
+				addDeleteKey(legacyDeployWebhookSecretKey)
+				addDeleteKey(legacyAltDeployWebhookSecretKey)
+			}
+		}
+	} else {
+		addDeleteKey(serviceEventWebhookURLKey)
+		addDeleteKey(serviceEventWebhookEventsKey)
+		addDeleteKey(serviceEventWebhookSecretKey)
+		addDeleteKey(legacyDeployWebhookURLKey)
+		addDeleteKey(legacyAltDeployWebhookURLKey)
+		addDeleteKey(legacyDeployWebhookEventsKey)
+		addDeleteKey(legacyDeployWebhookSecretKey)
+		addDeleteKey(legacyAltDeployWebhookSecretKey)
+	}
+
+	if len(envVars) > 0 {
+		if err := models.MergeUpsertEnvVars("service", svc.ID, envVars); err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to save event webhook config")
+			return
+		}
+	}
+	if len(deleteKeys) > 0 {
+		if err := models.DeleteEnvVarsByKeys("service", svc.ID, deleteKeys); err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to clean up legacy event webhook config")
+			return
+		}
+	}
+
+	services.Audit(svc.WorkspaceID, userID, "service.event_webhook.updated", "service", svc.ID, map[string]interface{}{
+		"enabled": req.Enabled,
+		"events":  req.Events,
+	})
+
+	resolved, err := h.loadServiceEventWebhookResolved(svc.ID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "event webhook config updated but failed to reload")
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, resolved.Config)
+}
+
+func (h *ServiceHandler) TestServiceEventWebhook(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	id := mux.Vars(r)["id"]
+
+	svc, err := models.GetService(id)
+	if err != nil || svc == nil {
+		utils.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleDeveloper) {
+		return
+	}
+
+	resolved, err := h.loadServiceEventWebhookResolved(svc.ID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to load event webhook config")
+		return
+	}
+	if !resolved.Config.Enabled || strings.TrimSpace(resolved.Config.URL) == "" {
+		utils.RespondError(w, http.StatusBadRequest, "event webhook is not enabled")
+		return
+	}
+
+	payload := map[string]interface{}{
+		"event":        "deploy.test",
+		"service_id":   svc.ID,
+		"service_name": svc.Name,
+		"timestamp":    time.Now().UTC().Format(time.RFC3339),
+		"test":         true,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to encode test payload")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, resolved.Config.URL, bytes.NewReader(body))
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid webhook url")
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "railpush-event-webhook/1.0")
+	if strings.TrimSpace(resolved.Secret) != "" {
+		mac := hmac.New(sha256.New, []byte(resolved.Secret))
+		mac.Write(body)
+		req.Header.Set("X-RailPush-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadGateway, "test delivery failed: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	preview := strings.TrimSpace(string(respBody))
+
+	services.Audit(svc.WorkspaceID, userID, "service.event_webhook.tested", "service", svc.ID, map[string]interface{}{
+		"http_status": resp.StatusCode,
+	})
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		utils.RespondError(w, http.StatusBadGateway, fmt.Sprintf("test delivery failed with HTTP %d", resp.StatusCode))
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"status":           "sent",
+		"webhook_http_code": resp.StatusCode,
+		"response_preview": preview,
+	})
 }
 
 func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
