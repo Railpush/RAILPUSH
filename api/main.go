@@ -287,6 +287,8 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/services", svcH.CreateService).Methods("POST")
 	authed.HandleFunc("/services/{id}", svcH.GetService).Methods("GET")
 	authed.HandleFunc("/services/{id}/github/workflows", svcH.ListServiceGitHubWorkflows).Methods("GET")
+	authed.HandleFunc("/services/{id}/github/webhook/status", svcH.GetServiceGitHubWebhookStatus).Methods("GET")
+	authed.HandleFunc("/services/{id}/github/webhook/repair", svcH.RepairServiceGitHubWebhook).Methods("POST")
 	authed.HandleFunc("/services/{id}", svcH.UpdateService).Methods("PATCH")
 	authed.HandleFunc("/services/{id}", svcH.DeleteService).Methods("DELETE")
 	authed.HandleFunc("/services/{id}/restart", svcH.RestartService).Methods("POST")

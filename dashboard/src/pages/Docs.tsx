@@ -341,6 +341,9 @@ export function Docs() {
                 This webhook registration works for both HTTPS and SSH GitHub repository URL formats.
               </p>
               <p className="text-sm text-content-secondary mb-4">
+                Service Detail now surfaces GitHub webhook health as <strong>Installed</strong>, <strong>Missing</strong>, or <strong>Permission denied</strong>, and provides a one-click <strong>Repair Webhook</strong> action when a fix can be applied automatically.
+              </p>
+              <p className="text-sm text-content-secondary mb-4">
                 Workflow-name suggestions in Service Detail and Service Settings use service-scoped GitHub lookup so team members can still see suggestions even if their personal GitHub account is not connected.
               </p>
               <p className="text-sm text-content-secondary mb-4">
@@ -356,6 +359,8 @@ set_deploy_automation_mode(service_id, mode, workflows?)
 set_github_actions_deploy_workflows(service_id, workflows)
 list_github_workflows(owner, repo)
 list_service_github_workflows(service_id)
+get_service_github_webhook_status(service_id)
+repair_service_github_webhook(service_id)
 enable_github_actions_deploy_gate(service_id, workflows?)
 disable_github_actions_deploy_gate(service_id)`} />
               <p className="text-xs text-content-tertiary mb-1">
@@ -369,6 +374,12 @@ disable_github_actions_deploy_gate(service_id)`} />
               </p>
               <p className="text-xs text-content-tertiary mb-1">
                 Use <code className="text-[11px] bg-surface-tertiary px-1 rounded">list_service_github_workflows</code> when you only know a service ID and want workflow names for its configured repo.
+              </p>
+              <p className="text-xs text-content-tertiary mb-1">
+                Use <code className="text-[11px] bg-surface-tertiary px-1 rounded">get_service_github_webhook_status</code> to verify whether a service webhook is installed, missing, or permission denied.
+              </p>
+              <p className="text-xs text-content-tertiary mb-1">
+                Use <code className="text-[11px] bg-surface-tertiary px-1 rounded">repair_service_github_webhook</code> to re-create or update webhook events when status is missing.
               </p>
             </section>
 
@@ -1653,7 +1664,7 @@ curl https://railpush.com/api/v1/services \\
                   <div>
                     <div className="text-sm font-semibold mb-1">AI-native infrastructure</div>
                     <div className="text-sm text-content-secondary">
-                      With 118 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
+                      With 120 tools covering every platform capability, agents can deploy apps, debug failures, scale services, and manage databases&mdash;all autonomously.
                     </div>
                   </div>
                 </div>
@@ -1744,7 +1755,7 @@ npm run build`} />
 
               <h3 className="text-lg font-semibold mt-8 mb-3">Available Tools</h3>
               <p className="text-content-secondary text-sm leading-relaxed mb-4">
-                The MCP server exposes 118 tools organized by category. Agents discover these automatically.
+                The MCP server exposes 120 tools organized by category. Agents discover these automatically.
               </p>
 
               <div className="overflow-x-auto mb-8">

@@ -11,7 +11,7 @@ import { deriveDeployAutomationState, parseWorkflowNames, type DeployAutomationM
 import { serviceTypeLabel, timeAgo, formatDuration } from '../lib/utils';
 import { buildDefaultServiceUrl } from '../lib/serviceUrl';
 import { services as servicesApi, deploys as deploysApi, envVars as envVarsApi, connectBuildStream } from '../lib/api';
-import type { Service, Deploy } from '../types';
+import type { Service, Deploy, ServiceGitHubWebhookStatus } from '../types';
 import { toast } from 'sonner';
 
 interface QuickMetrics { cpu_percent: string; memory_used: string; memory_percent: string }
@@ -46,6 +46,8 @@ export function ServiceDetail() {
   const [knownGitHubWorkflows, setKnownGitHubWorkflows] = useState<string[]>([]);
   const [loadingGitHubWorkflows, setLoadingGitHubWorkflows] = useState(false);
   const [githubWorkflowLoadError, setGitHubWorkflowLoadError] = useState<string | null>(null);
+  const [githubWebhookStatus, setGitHubWebhookStatus] = useState<ServiceGitHubWebhookStatus | null>(null);
+  const [repairingWebhook, setRepairingWebhook] = useState(false);
   const buildWsRef = useRef<WebSocket | null>(null);
   const buildLogEndRef = useRef<HTMLDivElement>(null);
 
@@ -88,9 +90,11 @@ export function ServiceDetail() {
       servicesApi.get(serviceId).catch(() => null),
       deploysApi.list(serviceId).catch(() => []),
       envVarsApi.list(serviceId).catch(() => null),
-    ]).then(([s, d, env]) => {
+      servicesApi.getGitHubWebhookStatus(serviceId).catch(() => null),
+    ]).then(([s, d, env, webhookStatus]) => {
       setService(s);
       setDeployList(d);
+      setGitHubWebhookStatus(webhookStatus);
       if (s) {
         const state = deriveDeployAutomationState(Boolean(s.auto_deploy), env || []);
         setDeployAutomationMode(state.mode);
@@ -102,6 +106,7 @@ export function ServiceDetail() {
         setKnownGitHubWorkflows([]);
         setGitHubWorkflowLoadError(null);
         setLoadingGitHubWorkflows(false);
+        setGitHubWebhookStatus(null);
       }
       setLoading(false);
     });
@@ -169,6 +174,18 @@ export function ServiceDetail() {
   const unknownDraftWorkflows = knownGitHubWorkflows.length > 0
     ? draftWorkflowNames.filter((name) => !knownWorkflowSet.has(name.toLowerCase()))
     : [];
+  const githubWebhookLabel = !githubWebhookStatus?.supported
+    ? ''
+    : (githubWebhookStatus.status === 'installed'
+      ? 'Installed'
+      : (githubWebhookStatus.status === 'missing' ? 'Missing' : 'Permission denied'));
+  const githubWebhookTone = !githubWebhookStatus?.supported
+    ? ''
+    : (githubWebhookStatus.status === 'installed'
+      ? 'bg-status-success/10 border-status-success/30 text-status-success'
+      : (githubWebhookStatus.status === 'missing'
+        ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+        : 'bg-status-error/10 border-status-error/30 text-status-error'));
 
   const runAction = async (label: string, action: () => Promise<unknown>) => {
     setActionInProgress(label);
@@ -177,6 +194,20 @@ export function ServiceDetail() {
       setTimeout(refresh, 1000);
     } catch { /* ignore */ }
     setActionInProgress(null);
+  };
+
+  const repairGitHubWebhook = async () => {
+    if (!serviceId || !githubWebhookStatus?.supported) return;
+    setRepairingWebhook(true);
+    try {
+      const next = await servicesApi.repairGitHubWebhook(serviceId);
+      setGitHubWebhookStatus(next);
+      toast.success('GitHub webhook repaired');
+      setTimeout(refresh, 600);
+    } catch {
+      toast.error('Failed to repair GitHub webhook');
+    }
+    setRepairingWebhook(false);
   };
 
   const setDeployAutomationModeQuick = async (nextMode: DeployAutomationMode) => {
@@ -519,6 +550,35 @@ export function ServiceDetail() {
                       Edit
                     </button>
                   </div>
+                </div>
+              )}
+              {githubWebhookStatus?.supported && (
+                <div className="rounded-md border border-border-default/60 bg-surface-tertiary/20 px-3 py-2 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-content-secondary text-sm">GitHub Webhook</span>
+                    <span className={`text-[11px] px-2 py-0.5 rounded border ${githubWebhookTone}`}>
+                      {githubWebhookLabel}
+                    </span>
+                  </div>
+                  {githubWebhookStatus.message && (
+                    <p className="text-[11px] text-content-tertiary leading-relaxed">{githubWebhookStatus.message}</p>
+                  )}
+                  {githubWebhookStatus.status !== 'installed' && githubWebhookStatus.can_repair && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="h-7 px-2.5 text-[11px]"
+                      onClick={repairGitHubWebhook}
+                      disabled={repairingWebhook}
+                    >
+                      {repairingWebhook ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                          Repairing...
+                        </>
+                      ) : 'Repair Webhook'}
+                    </Button>
+                  )}
                 </div>
               )}
             </div>

@@ -1459,6 +1459,30 @@ server.tool(
   },
 );
 
+server.tool(
+  "get_service_github_webhook_status",
+  "Get GitHub webhook installation status for a service (installed, missing, or permission_denied), including repair eligibility.",
+  {
+    service_id: z.string().describe("Service ID"),
+  },
+  async ({ service_id }) => {
+    try { return text(await client.getServiceGitHubWebhookStatus(service_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "repair_service_github_webhook",
+  "Repair (create or update) the GitHub webhook for a service's repository so RailPush receives push and workflow_run events.",
+  {
+    service_id: z.string().describe("Service ID"),
+  },
+  async ({ service_id }) => {
+    try { return text(await client.repairServiceGitHubWebhook(service_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
 // ════════════════════════════════════════════════════════════════════════
 //  SUPPORT TICKETS
 // ════════════════════════════════════════════════════════════════════════

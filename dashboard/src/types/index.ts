@@ -341,6 +341,19 @@ export interface GitHubWorkflow {
   state: string;
 }
 
+export interface ServiceGitHubWebhookStatus {
+  supported: boolean;
+  status: 'installed' | 'missing' | 'permission_denied';
+  message?: string;
+  owner?: string;
+  repo?: string;
+  webhook_url?: string;
+  active: boolean;
+  events?: string[];
+  missing_events?: string[];
+  can_repair: boolean;
+}
+
 export interface DatabaseReplica {
   id: string;
   primary_database_id: string;

@@ -595,4 +595,12 @@ export class RailPushClient {
   async listServiceGitHubWorkflows(serviceId: string) {
     return this.request("GET", `/services/${serviceId}/github/workflows`);
   }
+
+  async getServiceGitHubWebhookStatus(serviceId: string) {
+    return this.request("GET", `/services/${serviceId}/github/webhook/status`);
+  }
+
+  async repairServiceGitHubWebhook(serviceId: string) {
+    return this.request("POST", `/services/${serviceId}/github/webhook/repair`);
+  }
 }

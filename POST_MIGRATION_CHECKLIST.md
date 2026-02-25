@@ -1,6 +1,6 @@
 # RailPush Post-Migration Checklist (Product + Ops)
 
-Last updated: 2026-02-15
+Last updated: 2026-02-25
 
 This is the follow-on checklist after the Kubernetes migration is stable.
 
@@ -37,8 +37,8 @@ Checklist:
 - [x] Verified end-to-end: create service -> webhook exists -> push commit triggers deploy -> worker runs -> service updates.
 - [x] Set `GITHUB_WEBHOOK_SECRET` in `railpush/railpush-secrets` (signature verification enabled).
 - [x] Default `auto_deploy=true` for all services (new + existing backfilled).
-- [ ] (GitHub UX) Surface “webhook installed / missing / permission denied” on the service page.
-- [ ] (GitHub UX) Provide “Repair webhook” action (calls GitHub API).
+- [x] (GitHub UX) Surface “webhook installed / missing / permission denied” on the service page.
+- [x] (GitHub UX) Provide “Repair webhook” action (calls GitHub API).
 - [ ] (GitHub Backfill) One-off admin job: iterate GitHub services and attempt to create webhooks.
 - [ ] (GitHub Hardening) Rate limit webhook endpoint by IP + signature-required once secret is set.
 - [ ] (GitHub Hardening) Persist webhook delivery audit events (minimal: timestamp, repo, branch, matched services, result).

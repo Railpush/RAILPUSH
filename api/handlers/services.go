@@ -23,6 +23,21 @@ type ServiceHandler struct {
 	Stripe *services.StripeService
 }
 
+var requiredGitHubWebhookEvents = []string{"push", "workflow_run"}
+
+type ServiceGitHubWebhookStatus struct {
+	Supported     bool     `json:"supported"`
+	Status        string   `json:"status"`
+	Message       string   `json:"message,omitempty"`
+	Owner         string   `json:"owner,omitempty"`
+	Repo          string   `json:"repo,omitempty"`
+	WebhookURL    string   `json:"webhook_url,omitempty"`
+	Active        bool     `json:"active"`
+	Events        []string `json:"events,omitempty"`
+	MissingEvents []string `json:"missing_events,omitempty"`
+	CanRepair     bool     `json:"can_repair"`
+}
+
 func NewServiceHandler(cfg *config.Config, worker *services.Worker, stripe *services.StripeService) *ServiceHandler {
 	return &ServiceHandler{Config: cfg, Worker: worker, Stripe: stripe}
 }
@@ -63,6 +78,145 @@ func (h *ServiceHandler) ensureAccess(w http.ResponseWriter, userID, workspaceID
 		return false
 	}
 	return true
+}
+
+func (h *ServiceHandler) webhookEndpointURL() string {
+	domain := strings.TrimSpace(h.Config.ControlPlane.Domain)
+	if domain == "" {
+		return ""
+	}
+	return "https://" + domain + "/api/v1/webhooks/github"
+}
+
+func (h *ServiceHandler) resolveServiceGitHubToken(userID, workspaceID string) string {
+	if ws, err := models.GetWorkspace(workspaceID); err == nil && ws != nil {
+		if encToken, err := models.GetUserGitHubToken(ws.OwnerID); err == nil && encToken != "" {
+			if t, err := utils.Decrypt(encToken, h.Config.Crypto.EncryptionKey); err == nil {
+				return t
+			}
+		}
+	}
+
+	if encToken, err := models.GetUserGitHubToken(userID); err == nil && encToken != "" {
+		if t, err := utils.Decrypt(encToken, h.Config.Crypto.EncryptionKey); err == nil {
+			return t
+		}
+	}
+
+	return ""
+}
+
+func normalizeWebhookEvents(events []string) []string {
+	normalized := make([]string, 0, len(events))
+	seen := map[string]bool{}
+	for _, raw := range events {
+		e := strings.TrimSpace(raw)
+		if e == "" || seen[e] {
+			continue
+		}
+		seen[e] = true
+		normalized = append(normalized, e)
+	}
+	return normalized
+}
+
+func missingWebhookEvents(events []string, required []string) []string {
+	have := map[string]bool{}
+	for _, e := range normalizeWebhookEvents(events) {
+		have[e] = true
+	}
+	missing := make([]string, 0, len(required))
+	for _, req := range required {
+		r := strings.TrimSpace(req)
+		if r == "" || have[r] {
+			continue
+		}
+		missing = append(missing, r)
+	}
+	return missing
+}
+
+func (h *ServiceHandler) getServiceGitHubWebhookStatus(userID string, svc *models.Service) ServiceGitHubWebhookStatus {
+	status := ServiceGitHubWebhookStatus{
+		Supported: false,
+		Status:    "missing",
+		CanRepair: false,
+	}
+	if svc == nil {
+		status.Message = "service not found"
+		return status
+	}
+
+	owner, repo := ParseGitHubOwnerRepo(svc.RepoURL)
+	if owner == "" || repo == "" {
+		status.Message = "service repository is not a GitHub repository URL"
+		return status
+	}
+	status.Supported = true
+	status.Owner = owner
+	status.Repo = repo
+	status.WebhookURL = h.webhookEndpointURL()
+
+	ghToken := h.resolveServiceGitHubToken(userID, svc.WorkspaceID)
+	if ghToken == "" {
+		status.Status = "permission_denied"
+		status.Message = "no GitHub account connected for this workspace"
+		return status
+	}
+
+	if status.WebhookURL == "" {
+		status.Status = "missing"
+		status.Message = "control plane domain is not configured"
+		return status
+	}
+
+	gh := services.NewGitHub(h.Config)
+	hooks, err := gh.ListWebhooks(ghToken, owner, repo)
+	if err != nil {
+		var ghErr *services.GitHubAPIError
+		if errors.As(err, &ghErr) {
+			switch ghErr.StatusCode {
+			case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+				status.Status = "permission_denied"
+				status.Message = "GitHub token cannot read repository webhooks (requires repo admin access)"
+				return status
+			}
+		}
+		status.Status = "permission_denied"
+		status.Message = "failed to query GitHub webhooks"
+		return status
+	}
+
+	targetURL := strings.TrimRight(strings.TrimSpace(status.WebhookURL), "/")
+	for _, hook := range hooks {
+		if strings.TrimRight(strings.TrimSpace(hook.Config.URL), "/") != targetURL {
+			continue
+		}
+
+		status.Active = hook.Active
+		status.Events = normalizeWebhookEvents(hook.Events)
+		status.MissingEvents = missingWebhookEvents(status.Events, requiredGitHubWebhookEvents)
+		status.CanRepair = true
+
+		if hook.Active && len(status.MissingEvents) == 0 {
+			status.Status = "installed"
+			status.Message = "GitHub webhook installed and healthy"
+			return status
+		}
+
+		status.Status = "missing"
+		if !hook.Active {
+			status.Message = "GitHub webhook exists but is inactive"
+			return status
+		}
+		status.Message = "GitHub webhook exists but is missing required events"
+		return status
+	}
+
+	status.Status = "missing"
+	status.Message = "GitHub webhook not installed"
+	status.CanRepair = true
+	return status
 }
 
 func (h *ServiceHandler) isProtectedEnvironment(environmentID *string) bool {
@@ -332,21 +486,7 @@ func (h *ServiceHandler) ListServiceGitHubWorkflows(w http.ResponseWriter, r *ht
 		return
 	}
 
-	var ghToken string
-	if ws, err := models.GetWorkspace(svc.WorkspaceID); err == nil && ws != nil {
-		if encToken, err := models.GetUserGitHubToken(ws.OwnerID); err == nil && encToken != "" {
-			if t, err := utils.Decrypt(encToken, h.Config.Crypto.EncryptionKey); err == nil {
-				ghToken = t
-			}
-		}
-	}
-	if ghToken == "" {
-		if encToken, err := models.GetUserGitHubToken(userID); err == nil && encToken != "" {
-			if t, err := utils.Decrypt(encToken, h.Config.Crypto.EncryptionKey); err == nil {
-				ghToken = t
-			}
-		}
-	}
+	ghToken := h.resolveServiceGitHubToken(userID, svc.WorkspaceID)
 	if ghToken == "" {
 		utils.RespondError(w, http.StatusBadRequest, "no GitHub account connected")
 		return
@@ -359,6 +499,78 @@ func (h *ServiceHandler) ListServiceGitHubWorkflows(w http.ResponseWriter, r *ht
 		return
 	}
 	utils.RespondJSON(w, http.StatusOK, workflows)
+}
+
+func (h *ServiceHandler) GetServiceGitHubWebhookStatus(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	id := mux.Vars(r)["id"]
+
+	svc, err := models.GetService(id)
+	if err != nil || svc == nil {
+		utils.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleViewer) {
+		return
+	}
+
+	status := h.getServiceGitHubWebhookStatus(userID, svc)
+	utils.RespondJSON(w, http.StatusOK, status)
+}
+
+func (h *ServiceHandler) RepairServiceGitHubWebhook(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	id := mux.Vars(r)["id"]
+
+	svc, err := models.GetService(id)
+	if err != nil || svc == nil {
+		utils.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleDeveloper) {
+		return
+	}
+
+	owner, repo := ParseGitHubOwnerRepo(svc.RepoURL)
+	if owner == "" || repo == "" {
+		utils.RespondError(w, http.StatusBadRequest, "service repository is not a GitHub repository URL")
+		return
+	}
+
+	ghToken := h.resolveServiceGitHubToken(userID, svc.WorkspaceID)
+	if ghToken == "" {
+		utils.RespondError(w, http.StatusBadRequest, "no GitHub account connected")
+		return
+	}
+
+	webhookURL := h.webhookEndpointURL()
+	if webhookURL == "" {
+		utils.RespondError(w, http.StatusBadRequest, "control plane domain is not configured")
+		return
+	}
+
+	gh := services.NewGitHub(h.Config)
+	if err := gh.CreateWebhook(ghToken, owner, repo, webhookURL, h.Config.GitHub.WebhookSecret); err != nil {
+		var ghErr *services.GitHubAPIError
+		if errors.As(err, &ghErr) {
+			switch ghErr.StatusCode {
+			case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+				utils.RespondError(w, http.StatusBadRequest, "GitHub token lacks permission to manage repository webhooks")
+				return
+			}
+		}
+		utils.RespondError(w, http.StatusBadGateway, "failed to repair webhook: "+err.Error())
+		return
+	}
+
+	services.Audit(svc.WorkspaceID, userID, "service.github_webhook.repaired", "service", svc.ID, map[string]interface{}{
+		"repo_url": svc.RepoURL,
+		"owner":    owner,
+		"repo":     repo,
+	})
+
+	status := h.getServiceGitHubWebhookStatus(userID, svc)
+	utils.RespondJSON(w, http.StatusOK, status)
 }
 
 func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {

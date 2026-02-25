@@ -1,6 +1,7 @@
 import type {
   Service, Deploy, EnvVar, ManagedDatabase, ManagedKeyValue, Blueprint, BlueprintResource, EnvGroup, CustomDomain, RewriteRule, User, Backup, LogEntry, BillingOverview,
   GitHubRepo, GitHubBranch, GitHubWorkflow, RegisteredDomain, DnsRecord, DomainSearchResult, Project, ProjectFolder, Environment, PreviewEnvironment, OneOffJob, AutoscalingPolicy,
+  ServiceGitHubWebhookStatus,
   DatabaseReplica, WorkspaceMember, AuditLogEntry, SamlSSOConfig, Incident, IncidentDetail, OpsOverview, OpsUserItem, OpsWorkspaceItem, OpsServiceItem, OpsDeployItem,
   OpsEmailOutboxItem, OpsBillingCustomerItem, OpsBillingCustomerDetail, OpsTicketItem, OpsTicketDetail, OpsWorkspaceCreditItem, OpsWorkspaceCreditDetail,
   OpsKubeSummary, OpsClusterSummary, OpsPerformanceSummary, OpsDatastoreItem, OpsAuditLogEntry, SupportTicket, SupportTicketMessage, BlueprintAISettings, AIFixSession,
@@ -77,6 +78,8 @@ export const services = {
   list: () => request<Service[]>('/services'),
   get: (id: string) => request<Service>(`/services/${id}`),
   listGitHubWorkflows: (id: string) => request<GitHubWorkflow[]>(`/services/${id}/github/workflows`),
+  getGitHubWebhookStatus: (id: string) => request<ServiceGitHubWebhookStatus>(`/services/${id}/github/webhook/status`),
+  repairGitHubWebhook: (id: string) => request<ServiceGitHubWebhookStatus>(`/services/${id}/github/webhook/repair`, { method: 'POST' }),
   create: (data: Partial<Service>) => request<Service>('/services', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: string, data: Partial<Service>) => request<Service>(`/services/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (id: string) => request<void>(`/services/${id}`, { method: 'DELETE' }),
