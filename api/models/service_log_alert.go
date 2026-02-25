@@ -114,6 +114,26 @@ func normalizeLogAlertChannels(channels []string) []string {
 	return out
 }
 
+func pgTextArrayLiteral(values []string) string {
+	if len(values) == 0 {
+		return "{}"
+	}
+	parts := make([]string, 0, len(values))
+	for _, raw := range values {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			continue
+		}
+		v = strings.ReplaceAll(v, `\`, `\\`)
+		v = strings.ReplaceAll(v, `"`, `\"`)
+		parts = append(parts, `"`+v+`"`)
+	}
+	if len(parts) == 0 {
+		return "{}"
+	}
+	return "{" + strings.Join(parts, ",") + "}"
+}
+
 func NormalizeLogAlertChannels(channels []string) []string {
 	return normalizeLogAlertChannels(channels)
 }
@@ -170,6 +190,7 @@ func CreateServiceLogAlert(alert *ServiceLogAlert) error {
 		return fmt.Errorf("missing alert")
 	}
 	channels := normalizeLogAlertChannels(alert.Channels)
+	channelsLiteral := pgTextArrayLiteral(channels)
 	return database.DB.QueryRow(
 		`INSERT INTO service_log_alerts
 			(service_id, workspace_id, name, enabled, filter_query, pattern, threshold, window_seconds, comparison,
@@ -187,7 +208,7 @@ func CreateServiceLogAlert(alert *ServiceLogAlert) error {
 		alert.WindowSeconds,
 		strings.TrimSpace(alert.Comparison),
 		alert.CooldownSeconds,
-		channels,
+		channelsLiteral,
 		strings.TrimSpace(alert.WebhookURL),
 		strings.TrimSpace(alert.Priority),
 	).Scan(&alert.ID, &alert.CreatedAt, &alert.UpdatedAt)
@@ -198,6 +219,7 @@ func UpdateServiceLogAlert(alert *ServiceLogAlert) error {
 		return fmt.Errorf("missing alert id")
 	}
 	channels := normalizeLogAlertChannels(alert.Channels)
+	channelsLiteral := pgTextArrayLiteral(channels)
 	return database.DB.QueryRow(
 		`UPDATE service_log_alerts
 		    SET name=$2,
@@ -223,7 +245,7 @@ func UpdateServiceLogAlert(alert *ServiceLogAlert) error {
 		alert.WindowSeconds,
 		strings.TrimSpace(alert.Comparison),
 		alert.CooldownSeconds,
-		channels,
+		channelsLiteral,
 		strings.TrimSpace(alert.WebhookURL),
 		strings.TrimSpace(alert.Priority),
 	).Scan(&alert.UpdatedAt)
