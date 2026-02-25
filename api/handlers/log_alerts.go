@@ -68,7 +68,7 @@ func (h *LogHandler) serviceForLogAlertAccess(w http.ResponseWriter, r *http.Req
 	}
 	required := models.RoleViewer
 	if mutation {
-		required = models.RoleEditor
+		required = models.RoleDeveloper
 	}
 	if err := services.EnsureWorkspaceAccess(userID, svc.WorkspaceID, required); err != nil {
 		utils.RespondError(w, http.StatusForbidden, "forbidden")
