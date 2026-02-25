@@ -80,23 +80,13 @@ jobs:
           ${SUDO} mkdir -p /opt/railpush/railpush-api /opt/railpush/dashboard
           SSH
 
-          ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" <<'SSH'
-          set -euo pipefail
-          if [ "$(id -u)" -eq 0 ]; then
-            SUDO=""
-          else
-            SUDO="sudo"
-          fi
-          if [ -f /opt/railpush/railpush-api/.env ]; then
-            ${SUDO} cp -f /opt/railpush/railpush-api/.env /opt/railpush/.railpush-api.env.backup || true
-          fi
-          SSH
-
           rsync -az --delete \
             --exclude '.git' \
             --exclude '.github' \
             --exclude 'node_modules' \
             --exclude 'dist' \
+            --exclude '.env' \
+            --exclude '.env.*' \
             --rsync-path "${RSYNC_REMOTE}" \
             -e "${RSYNC_SSH}" \
             ./api/ "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/railpush/railpush-api/"
@@ -106,25 +96,11 @@ jobs:
             --exclude '.github' \
             --exclude 'node_modules' \
             --exclude 'dist' \
+            --exclude '.env' \
+            --exclude '.env.*' \
             --rsync-path "${RSYNC_REMOTE}" \
             -e "${RSYNC_SSH}" \
             ./dashboard/ "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/railpush/dashboard/"
-
-          ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" <<'SSH'
-          set -euo pipefail
-          if [ "$(id -u)" -eq 0 ]; then
-            SUDO=""
-          else
-            SUDO="sudo"
-          fi
-          if [ ! -f /opt/railpush/railpush-api/.env ]; then
-            if [ -f /opt/railpush/.railpush-api.env.backup ]; then
-              ${SUDO} cp -f /opt/railpush/.railpush-api.env.backup /opt/railpush/railpush-api/.env || true
-            elif [ -f /opt/railpush/.env ]; then
-              ${SUDO} cp -f /opt/railpush/.env /opt/railpush/railpush-api/.env || true
-            fi
-          fi
-          SSH
 
           ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "test -f /opt/railpush/railpush-api/services/access.go"
@@ -136,6 +112,13 @@ jobs:
             SUDO=""
           else
             SUDO="sudo"
+          fi
+
+          ENV_FILE="/etc/railpush/railpush-api.env"
+          ${SUDO} mkdir -p /etc/railpush
+          if [ ! -f "${ENV_FILE}" ]; then
+            echo "Missing ${ENV_FILE}. Create it with DB/JWT/crypto secrets before deploy."
+            exit 1
           fi
 
           cd /opt/railpush/dashboard
@@ -204,8 +187,7 @@ jobs:
               printf '%s\n' '[Service]'
               printf '%s\n' 'Type=simple'
               printf '%s\n' 'WorkingDirectory=/opt/railpush/railpush-api'
-              printf '%s\n' 'EnvironmentFile=-/opt/railpush/railpush-api/.env'
-              printf '%s\n' 'EnvironmentFile=-/opt/railpush/.env'
+              printf '%s\n' 'EnvironmentFile=-/etc/railpush/railpush-api.env'
               printf '%s\n' 'ExecStart=/opt/railpush/railpush-api-bin'
               printf '%s\n' 'Restart=always'
               printf '%s\n' 'RestartSec=5'
@@ -217,6 +199,27 @@ jobs:
             } | ${SUDO} tee "/etc/systemd/system/${SERVICE_UNIT}" >/dev/null
             ${SUDO} systemctl daemon-reload
             ${SUDO} systemctl enable "${SERVICE_UNIT}" || true
+          fi
+
+          ${SUDO} mkdir -p "/etc/systemd/system/${SERVICE_UNIT}.d"
+          {
+            printf '%s\n' '[Service]'
+            printf '%s\n' 'EnvironmentFile='
+            printf '%s\n' 'EnvironmentFile=-/etc/railpush/railpush-api.env'
+          } | ${SUDO} tee "/etc/systemd/system/${SERVICE_UNIT}.d/10-env.conf" >/dev/null
+          ${SUDO} systemctl daemon-reload
+
+          if ! ${SUDO} grep -Eq '^(DATABASE_URL|DB_PASSWORD)=.+' "${ENV_FILE}"; then
+            echo "${ENV_FILE} must define DATABASE_URL or DB_PASSWORD."
+            exit 1
+          fi
+          if ! ${SUDO} grep -Eq '^JWT_SECRET=.+' "${ENV_FILE}"; then
+            echo "${ENV_FILE} must define JWT_SECRET."
+            exit 1
+          fi
+          if ! ${SUDO} grep -Eq '^ENCRYPTION_KEY=.+' "${ENV_FILE}"; then
+            echo "${ENV_FILE} must define ENCRYPTION_KEY."
+            exit 1
           fi
 
           echo "Restarting ${SERVICE_UNIT}"
