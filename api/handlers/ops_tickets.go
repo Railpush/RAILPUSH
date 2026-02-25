@@ -72,8 +72,8 @@ const opsTicketsWhereClause = `
 	  AND ($2 = '' OR COALESCE(t.subject,'') ILIKE $3 OR COALESCE(u.email,'') ILIKE $3 OR COALESCE(w.name,'') ILIKE $3)
 	  AND ($4 = '' OR COALESCE(t.category,'support') = $4)
 	  AND ($5 = '' OR COALESCE(t.priority,'normal') = $5)
-	  AND ($8::timestamptz IS NULL OR t.created_at >= $8::timestamptz)
-	  AND ($9::timestamptz IS NULL OR t.created_at <= $9::timestamptz)`
+	  AND ($6::timestamptz IS NULL OR t.created_at >= $6::timestamptz)
+	  AND ($7::timestamptz IS NULL OR t.created_at <= $7::timestamptz)`
 
 func normalizeSupportTicketStatus(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
@@ -231,7 +231,8 @@ func (h *OpsTicketsHandler) ListTickets(w http.ResponseWriter, r *http.Request) 
 		createdBeforeArg = createdBefore
 	}
 
-	args := []interface{}{status, q, like, category, priority, limit, offset, createdAfterArg, createdBeforeArg}
+	filterArgs := []interface{}{status, q, like, category, priority, createdAfterArg, createdBeforeArg}
+	listArgs := append(filterArgs, limit, offset)
 
 	rows, err := database.DB.Query(
 		`SELECT t.id::text, COALESCE(t.workspace_id::text,''), COALESCE(w.name,''), COALESCE(t.created_by::text,''),
@@ -240,8 +241,8 @@ func (h *OpsTicketsHandler) ListTickets(w http.ResponseWriter, r *http.Request) 
 		        t.last_customer_reply_at, t.last_ops_reply_at, t.created_at, t.updated_at
 		   `+opsTicketsWhereClause+`
 		  ORDER BY `+orderClause+`
-		  LIMIT $6 OFFSET $7`,
-		args...,
+		  LIMIT $8 OFFSET $9`,
+		listArgs...,
 	)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to list tickets")
@@ -281,22 +282,22 @@ func (h *OpsTicketsHandler) ListTickets(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var total int64
-	if err := database.DB.QueryRow("SELECT COUNT(*) "+opsTicketsWhereClause, args...).Scan(&total); err != nil {
+	if err := database.DB.QueryRow("SELECT COUNT(*) "+opsTicketsWhereClause, filterArgs...).Scan(&total); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to count tickets")
 		return
 	}
 
-	byStatus, err := listFacetCounts("COALESCE(t.status,'open')", args)
+	byStatus, err := listFacetCounts("COALESCE(t.status,'open')", filterArgs)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to aggregate ticket status facets")
 		return
 	}
-	byPriority, err := listFacetCounts("COALESCE(t.priority,'normal')", args)
+	byPriority, err := listFacetCounts("COALESCE(t.priority,'normal')", filterArgs)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to aggregate ticket priority facets")
 		return
 	}
-	byCategory, err := listFacetCounts("COALESCE(t.category,'support')", args)
+	byCategory, err := listFacetCounts("COALESCE(t.category,'support')", filterArgs)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to aggregate ticket category facets")
 		return
