@@ -341,6 +341,9 @@ export function Docs() {
                 This webhook registration works for both HTTPS and SSH GitHub repository URL formats.
               </p>
               <p className="text-sm text-content-secondary mb-4">
+                Workflow-name suggestions in Service Detail and Service Settings use service-scoped GitHub lookup so team members can still see suggestions even if their personal GitHub account is not connected.
+              </p>
+              <p className="text-sm text-content-secondary mb-4">
                 For API or MCP automation, configure the same service env vars directly:
               </p>
               <CodeBlock language="bash" filename="service env vars" code={`# Enable deploys from GitHub workflow_run success events

@@ -313,6 +313,54 @@ func (h *ServiceHandler) GetService(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, svc)
 }
 
+func (h *ServiceHandler) ListServiceGitHubWorkflows(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	id := mux.Vars(r)["id"]
+
+	svc, err := models.GetService(id)
+	if err != nil || svc == nil {
+		utils.RespondError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if !h.ensureAccess(w, userID, svc.WorkspaceID, models.RoleViewer) {
+		return
+	}
+
+	owner, repo := ParseGitHubOwnerRepo(svc.RepoURL)
+	if owner == "" || repo == "" {
+		utils.RespondJSON(w, http.StatusOK, []services.GitHubWorkflow{})
+		return
+	}
+
+	var ghToken string
+	if ws, err := models.GetWorkspace(svc.WorkspaceID); err == nil && ws != nil {
+		if encToken, err := models.GetUserGitHubToken(ws.OwnerID); err == nil && encToken != "" {
+			if t, err := utils.Decrypt(encToken, h.Config.Crypto.EncryptionKey); err == nil {
+				ghToken = t
+			}
+		}
+	}
+	if ghToken == "" {
+		if encToken, err := models.GetUserGitHubToken(userID); err == nil && encToken != "" {
+			if t, err := utils.Decrypt(encToken, h.Config.Crypto.EncryptionKey); err == nil {
+				ghToken = t
+			}
+		}
+	}
+	if ghToken == "" {
+		utils.RespondError(w, http.StatusBadRequest, "no GitHub account connected")
+		return
+	}
+
+	gh := services.NewGitHub(h.Config)
+	workflows, err := gh.ListWorkflows(ghToken, owner, repo)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadGateway, "failed to list workflows: "+err.Error())
+		return
+	}
+	utils.RespondJSON(w, http.StatusOK, workflows)
+}
+
 func (h *ServiceHandler) UpdateService(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r)
 	id := mux.Vars(r)["id"]

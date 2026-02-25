@@ -10,7 +10,7 @@ import { ServiceIcon } from '../components/ui/ServiceIcon';
 import { deriveDeployAutomationState, parseWorkflowNames, type DeployAutomationMode } from '../lib/deployAutomation';
 import { serviceTypeLabel, timeAgo, formatDuration } from '../lib/utils';
 import { buildDefaultServiceUrl } from '../lib/serviceUrl';
-import { services as servicesApi, deploys as deploysApi, envVars as envVarsApi, github as githubApi, connectBuildStream } from '../lib/api';
+import { services as servicesApi, deploys as deploysApi, envVars as envVarsApi, connectBuildStream } from '../lib/api';
 import type { Service, Deploy } from '../types';
 import { toast } from 'sonner';
 
@@ -27,26 +27,6 @@ function CopyUrlButton({ url }: { url: string }) {
       {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
     </button>
   );
-}
-
-function parseGitHubOwnerRepo(repoURL?: string): { owner: string; repo: string } | null {
-  const raw = (repoURL || '').trim();
-  if (!raw) return null;
-
-  if (raw.startsWith('git@github.com:')) {
-    const cleaned = raw.replace('git@github.com:', '').replace(/\.git$/i, '');
-    const parts = cleaned.split('/').filter(Boolean);
-    if (parts.length >= 2) return { owner: parts[0], repo: parts[1] };
-    return null;
-  }
-
-  const marker = 'github.com/';
-  const idx = raw.indexOf(marker);
-  if (idx === -1) return null;
-  const cleaned = raw.slice(idx + marker.length).replace(/\.git$/i, '');
-  const parts = cleaned.split('/').filter(Boolean);
-  if (parts.length >= 2) return { owner: parts[0], repo: parts[1] };
-  return null;
 }
 
 export function ServiceDetail() {
@@ -69,9 +49,9 @@ export function ServiceDetail() {
   const buildWsRef = useRef<WebSocket | null>(null);
   const buildLogEndRef = useRef<HTMLDivElement>(null);
 
-  const loadGitHubWorkflows = async (repoURL?: string) => {
-    const parsed = parseGitHubOwnerRepo(repoURL);
-    if (!parsed) {
+  const loadGitHubWorkflows = async (targetServiceId?: string) => {
+    const id = (targetServiceId || '').trim();
+    if (!id) {
       setKnownGitHubWorkflows([]);
       setGitHubWorkflowLoadError(null);
       setLoadingGitHubWorkflows(false);
@@ -81,7 +61,7 @@ export function ServiceDetail() {
     setLoadingGitHubWorkflows(true);
     setGitHubWorkflowLoadError(null);
     try {
-      const workflows = await githubApi.listWorkflows(parsed.owner, parsed.repo);
+      const workflows = await servicesApi.listGitHubWorkflows(id);
       const seen = new Set<string>();
       const names = workflows
         .map((w) => (w.name || '').trim())
@@ -115,7 +95,7 @@ export function ServiceDetail() {
         const state = deriveDeployAutomationState(Boolean(s.auto_deploy), env || []);
         setDeployAutomationMode(state.mode);
         setDeployAutomationWorkflows(state.workflows);
-        void loadGitHubWorkflows(s.repo_url);
+        void loadGitHubWorkflows(s.id);
       } else {
         setDeployAutomationMode('push');
         setDeployAutomationWorkflows([]);
@@ -256,7 +236,7 @@ export function ServiceDetail() {
     setWorkflowDraft(deployAutomationWorkflows.join(', '));
     setWorkflowModalOpen(true);
     if (knownGitHubWorkflows.length === 0 && !loadingGitHubWorkflows && !githubWorkflowLoadError) {
-      void loadGitHubWorkflows(service?.repo_url);
+      void loadGitHubWorkflows(service?.id || serviceId);
     }
   };
 

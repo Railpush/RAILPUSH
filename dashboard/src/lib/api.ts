@@ -76,6 +76,7 @@ export const settings = {
 export const services = {
   list: () => request<Service[]>('/services'),
   get: (id: string) => request<Service>(`/services/${id}`),
+  listGitHubWorkflows: (id: string) => request<GitHubWorkflow[]>(`/services/${id}/github/workflows`),
   create: (data: Partial<Service>) => request<Service>('/services', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: string, data: Partial<Service>) => request<Service>(`/services/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (id: string) => request<void>(`/services/${id}`, { method: 'DELETE' }),
