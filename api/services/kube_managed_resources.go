@@ -975,7 +975,7 @@ func (k *KubeDeployer) RunDatabaseInitScript(db *models.ManagedDatabase, passwor
 
 // RunDatabaseQuery executes SQL in the target managed database pod and returns stdout/stderr.
 // This path avoids cluster networking dependencies by using localhost access from inside the DB pod.
-func (k *KubeDeployer) RunDatabaseQuery(db *models.ManagedDatabase, password string, query string, timeout time.Duration) (string, string, error) {
+func (k *KubeDeployer) RunDatabaseQuery(db *models.ManagedDatabase, password string, query string, timeout time.Duration, readOnly bool) (string, string, error) {
 	if k == nil || k.Client == nil {
 		return "", "", fmt.Errorf("kube deployer not initialized")
 	}
@@ -1001,10 +1001,14 @@ func (k *KubeDeployer) RunDatabaseQuery(db *models.ManagedDatabase, password str
 	ns := k.namespace()
 	podName := kubeManagedDatabaseName(db.ID) + "-0"
 	queryB64 := base64.StdEncoding.EncodeToString([]byte(query))
+	pgOptionsPrefix := ""
+	if readOnly {
+		pgOptionsPrefix = "PGOPTIONS='-c default_transaction_read_only=on' "
+	}
 	script := "set -euo pipefail; " +
 		"printf %s " + shellSingleQuote(queryB64) + " | base64 -d > /tmp/railpush-query.sql; " +
 		"PGPASSWORD=" + shellSingleQuote(password) + " " +
-		"psql -v ON_ERROR_STOP=1 --no-psqlrc --csv -h 127.0.0.1 -p 5432 -U " + shellSingleQuote(user) + " -d " + shellSingleQuote(dbName) + " -f /tmp/railpush-query.sql"
+		pgOptionsPrefix + "psql -v ON_ERROR_STOP=1 --no-psqlrc --csv -h 127.0.0.1 -p 5432 -U " + shellSingleQuote(user) + " -d " + shellSingleQuote(dbName) + " -f /tmp/railpush-query.sql"
 
 	restCfg, err := rest.InClusterConfig()
 	if err != nil {

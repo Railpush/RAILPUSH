@@ -108,6 +108,10 @@ jobs:
           \${SUDO} docker push "\${IMAGE_DEV}"
 
           kctl apply -k "${KUSTOMIZE_PATH}"
+          # Re-apply control-plane RBAC explicitly so pods/exec permissions
+          # (used by managed database query execution) are preserved even if
+          # an overlay misses this resource.
+          kctl apply -f deploy/k8s/control-plane/rbac.yaml
 
           # Roll out control-plane first, then worker (sequential to detect failures early).
           kctl -n railpush set image deploy/railpush-control-plane control-plane="\${IMAGE_SHA}"

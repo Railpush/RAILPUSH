@@ -411,11 +411,7 @@ func (h *DatabaseHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) 
 			utils.RespondError(w, http.StatusBadGateway, "failed to initialize kubernetes query executor")
 			return
 		}
-		querySQL := req.Query
-		if !req.AllowWrite {
-			querySQL = "BEGIN READ ONLY;\n" + ensureSQLTerminated(req.Query) + "\nCOMMIT;"
-		}
-		stdout, stderr, err := kd.RunDatabaseQuery(db, password, querySQL, time.Duration(req.TimeoutMS)*time.Millisecond)
+		stdout, stderr, err := kd.RunDatabaseQuery(db, password, req.Query, time.Duration(req.TimeoutMS)*time.Millisecond, !req.AllowWrite)
 		if err != nil {
 			details := strings.TrimSpace(stderr)
 			if details == "" {
@@ -1219,17 +1215,6 @@ func parsePSQLCSVOutput(raw string, maxRows int) ([]string, []map[string]interfa
 		rows = append(rows, row)
 	}
 	return columns, rows, truncated, true
-}
-
-func ensureSQLTerminated(query string) string {
-	trimmed := strings.TrimSpace(query)
-	if trimmed == "" {
-		return ";"
-	}
-	if strings.HasSuffix(trimmed, ";") {
-		return trimmed
-	}
-	return trimmed + ";"
 }
 
 func buildPostgresDSN(host string, port int, dbName, username, password, sslMode string) string {
