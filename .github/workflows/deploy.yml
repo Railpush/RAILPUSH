@@ -74,8 +74,13 @@ jobs:
 
           ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" <<'SSH'
           set -euo pipefail
+          if [ "$(id -u)" -eq 0 ]; then
+            SUDO=""
+          else
+            SUDO="sudo"
+          fi
           if [ -f /opt/railpush/railpush-api/.env ]; then
-            cp -f /opt/railpush/railpush-api/.env /opt/railpush/.railpush-api.env.backup
+            ${SUDO} cp -f /opt/railpush/railpush-api/.env /opt/railpush/.railpush-api.env.backup || true
           fi
           SSH
 
@@ -97,11 +102,16 @@ jobs:
 
           ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" <<'SSH'
           set -euo pipefail
+          if [ "$(id -u)" -eq 0 ]; then
+            SUDO=""
+          else
+            SUDO="sudo"
+          fi
           if [ ! -f /opt/railpush/railpush-api/.env ]; then
             if [ -f /opt/railpush/.railpush-api.env.backup ]; then
-              cp -f /opt/railpush/.railpush-api.env.backup /opt/railpush/railpush-api/.env
+              ${SUDO} cp -f /opt/railpush/.railpush-api.env.backup /opt/railpush/railpush-api/.env || true
             elif [ -f /opt/railpush/.env ]; then
-              cp -f /opt/railpush/.env /opt/railpush/railpush-api/.env
+              ${SUDO} cp -f /opt/railpush/.env /opt/railpush/railpush-api/.env || true
             fi
           fi
           SSH
