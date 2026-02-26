@@ -586,11 +586,17 @@ func (k *KubeDeployer) ensureTenantNetpolServiceEgress(ctx context.Context) erro
 	// When a pod connects to the ClusterIP 10.43.0.1:443, kube-proxy rewrites the destination
 	// to an actual server node IP (e.g. 91.98.183.19:6443). NetworkPolicy evaluates post-DNAT,
 	// so we must block the real server IPs in addition to the service CIDR.
+	//
+	// However, tenant apps may legitimately need HTTPS to services hosted on these same IPs
+	// (e.g., external domains resolving to server public IPs). So we block the IPs broadly in
+	// the internet rule but add a separate rule allowing only ports 80/443 to those IPs.
+	// This blocks port 6443 (K8s API) while allowing normal web traffic.
 	except := []string{
 		"10.42.0.0/16",   // pod CIDR — blocks cross-namespace pod access
 		"10.43.0.0/16",   // service CIDR — blocks K8s API ClusterIP and all ClusterIP services
 		"169.254.0.0/16", // link-local / metadata
 	}
+	var serverNodePeers []networkingv1.NetworkPolicyPeer
 	if k != nil && k.Client != nil {
 		if nodes, err := k.Client.CoreV1().Nodes().List(ctx, metav1.ListOptions{}); err == nil && nodes != nil {
 			for _, n := range nodes.Items {
@@ -610,13 +616,75 @@ func (k *KubeDeployer) ensureTenantNetpolServiceEgress(ctx context.Context) erro
 						if ip == "" || strings.Contains(ip, ":") {
 							continue // skip IPv6 for now
 						}
-						except = append(except, ip+"/32")
+						cidr := ip + "/32"
+						except = append(except, cidr)
+						serverNodePeers = append(serverNodePeers, networkingv1.NetworkPolicyPeer{
+							IPBlock: &networkingv1.IPBlock{CIDR: cidr},
+						})
 					}
 				}
 			}
 		}
 	}
 	sort.Strings(except)
+
+	egressRules := []networkingv1.NetworkPolicyEgressRule{
+		// 1. Allow DNS resolution via kube-dns.
+		{
+			To: []networkingv1.NetworkPolicyPeer{
+				{
+					NamespaceSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{
+							"kubernetes.io/metadata.name": "kube-system",
+						},
+					},
+					PodSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{
+							"k8s-app": "kube-dns",
+						},
+					},
+				},
+			},
+			Ports: []networkingv1.NetworkPolicyPort{
+				{Port: &dnsPort, Protocol: &udp},
+				{Port: &dnsPort, Protocol: &tcp},
+			},
+		},
+		// 2. Allow same-namespace pod communication (workspace isolation handles granularity).
+		{
+			To: []networkingv1.NetworkPolicyPeer{
+				{PodSelector: &metav1.LabelSelector{}},
+			},
+		},
+		// 3. Allow internet access; block cluster-internal, k8s API (ClusterIP + real IPs), and metadata.
+		{
+			To: []networkingv1.NetworkPolicyPeer{
+				{
+					IPBlock: &networkingv1.IPBlock{
+						CIDR:   "0.0.0.0/0",
+						Except: except,
+					},
+				},
+			},
+		},
+	}
+
+	// 4. Allow HTTP/HTTPS to server node IPs (but NOT port 6443 / K8s API).
+	// Server node IPs are blocked in rule 3 to prevent K8s API access after kube-proxy DNAT.
+	// But tenant apps may legitimately need HTTPS to services hosted on those IPs
+	// (e.g., external domains resolving to server public IPs like api.delphi.flightatom.com).
+	// NetworkPolicy is additive — this rule re-allows only ports 80/443 to those IPs.
+	if len(serverNodePeers) > 0 {
+		httpPort := intstr.FromInt(80)
+		httpsPort := intstr.FromInt(443)
+		egressRules = append(egressRules, networkingv1.NetworkPolicyEgressRule{
+			To: serverNodePeers,
+			Ports: []networkingv1.NetworkPolicyPort{
+				{Port: &httpPort, Protocol: &tcp},
+				{Port: &httpsPort, Protocol: &tcp},
+			},
+		})
+	}
 
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
@@ -635,46 +703,7 @@ func (k *KubeDeployer) ensureTenantNetpolServiceEgress(ctx context.Context) erro
 				},
 			},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
-			Egress: []networkingv1.NetworkPolicyEgressRule{
-				// 1. Allow DNS resolution via kube-dns.
-				{
-					To: []networkingv1.NetworkPolicyPeer{
-						{
-							NamespaceSelector: &metav1.LabelSelector{
-								MatchLabels: map[string]string{
-									"kubernetes.io/metadata.name": "kube-system",
-								},
-							},
-							PodSelector: &metav1.LabelSelector{
-								MatchLabels: map[string]string{
-									"k8s-app": "kube-dns",
-								},
-							},
-						},
-					},
-					Ports: []networkingv1.NetworkPolicyPort{
-						{Port: &dnsPort, Protocol: &udp},
-						{Port: &dnsPort, Protocol: &tcp},
-					},
-				},
-				// 2. Allow same-namespace pod communication (workspace isolation handles granularity).
-				{
-					To: []networkingv1.NetworkPolicyPeer{
-						{PodSelector: &metav1.LabelSelector{}},
-					},
-				},
-				// 3. Allow internet access; block cluster-internal, k8s API (ClusterIP + real IPs), and metadata.
-				{
-					To: []networkingv1.NetworkPolicyPeer{
-						{
-							IPBlock: &networkingv1.IPBlock{
-								CIDR:   "0.0.0.0/0",
-								Except: except,
-							},
-						},
-					},
-				},
-			},
+			Egress:      egressRules,
 		},
 	}
 	return k.upsertNetworkPolicy(ctx, ns, np)
