@@ -8,11 +8,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/railpush/api/config"
 	"github.com/railpush/api/models"
+	"github.com/railpush/api/utils"
 )
 
 type AIFixService struct {
@@ -26,6 +28,31 @@ type AIFixDiagnosis struct {
 	SuggestedFix  string `json:"suggested_fix"`
 	Confidence    string `json:"confidence"`
 	Source        string `json:"source"`
+}
+
+type AIFixOptions struct {
+	Hint string
+}
+
+type AIFixEnvVarUpdate struct {
+	Key      string `json:"key"`
+	Value    string `json:"value"`
+	IsSecret bool   `json:"is_secret"`
+}
+
+type AIFixPatch struct {
+	Summary       string            `json:"summary"`
+	Dockerfile    string            `json:"dockerfile,omitempty"`
+	BuildCommand  string            `json:"build_command,omitempty"`
+	StartCommand  string            `json:"start_command,omitempty"`
+	EnvVars       []AIFixEnvVarUpdate `json:"env_vars,omitempty"`
+	DockerfileDiff string           `json:"dockerfile_diff,omitempty"`
+	Source        string            `json:"source"`
+}
+
+type aiFixLogContext struct {
+	BuildLogs   string
+	RuntimeLogs string
 }
 
 func NewAIFixService(cfg *config.Config) *AIFixService {
@@ -45,21 +72,53 @@ func (s *AIFixService) Available() bool {
 		strings.TrimSpace(s.Config.BlueprintAI.OpenRouterURL) != ""
 }
 
+func (s *AIFixService) collectDeployFailureLogs(svc *models.Service, deploy *models.Deploy) aiFixLogContext {
+	ctx := aiFixLogContext{}
+	if deploy == nil {
+		return ctx
+	}
+
+	buildLogs := strings.TrimSpace(deploy.BuildLog)
+	if len(buildLogs) < 50 && s != nil && s.Config != nil && s.Config.Kubernetes.Enabled {
+		if lokiLogs := strings.TrimSpace(s.fetchLokiBuildLogs(deploy)); lokiLogs != "" {
+			buildLogs = lokiLogs
+		}
+	}
+	ctx.BuildLogs = strings.TrimSpace(lastNLines(buildLogs, 220))
+
+	if s != nil && s.Config != nil && s.Config.Kubernetes.Enabled && svc != nil {
+		runtimeLogs := strings.TrimSpace(s.fetchLokiRuntimeLogs(svc.ID, deploy))
+		ctx.RuntimeLogs = strings.TrimSpace(lastNLines(runtimeLogs, 220))
+	}
+
+	return ctx
+}
+
+func formatAIFixLogsForPrompt(logs aiFixLogContext) string {
+	parts := make([]string, 0, 2)
+	if strings.TrimSpace(logs.BuildLogs) != "" {
+		parts = append(parts, "BUILD LOGS:\n"+strings.TrimSpace(logs.BuildLogs))
+	}
+	if strings.TrimSpace(logs.RuntimeLogs) != "" {
+		parts = append(parts, "RUNTIME LOGS:\n"+strings.TrimSpace(logs.RuntimeLogs))
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+}
+
 func (s *AIFixService) DiagnoseDeployFailure(deploy *models.Deploy) (*AIFixDiagnosis, error) {
 	if deploy == nil {
 		return nil, fmt.Errorf("missing deploy")
 	}
 
-	buildLogs := strings.TrimSpace(deploy.BuildLog)
-	if len(buildLogs) < 50 && s != nil && s.Config != nil && s.Config.Kubernetes.Enabled {
-		if lokiLogs := strings.TrimSpace(s.fetchLokiLogs(deploy)); lokiLogs != "" {
-			buildLogs = lokiLogs
-		}
+	var svc *models.Service
+	if strings.TrimSpace(deploy.ServiceID) != "" {
+		svc, _ = models.GetService(deploy.ServiceID)
 	}
-	buildLogs = strings.TrimSpace(lastNLines(buildLogs, 240))
+	logs := s.collectDeployFailureLogs(svc, deploy)
+	logContext := strings.TrimSpace(formatAIFixLogsForPrompt(logs))
 
-	if s.Available() && buildLogs != "" {
-		diag, err := s.callOpenRouterDiagnosis(buildLogs)
+	if s.Available() && logContext != "" {
+		diag, err := s.callOpenRouterDiagnosis(logContext)
 		if err == nil && diag != nil {
 			diag.Source = "ai"
 			return sanitizeAIFixDiagnosis(diag), nil
@@ -69,14 +128,42 @@ func (s *AIFixService) DiagnoseDeployFailure(deploy *models.Deploy) (*AIFixDiagn
 		}
 	}
 
-	diag := heuristicAIFixDiagnosis(buildLogs)
+	diag := heuristicAIFixDiagnosis(logContext)
 	diag.Source = "heuristic"
 	return sanitizeAIFixDiagnosis(diag), nil
 }
 
-// AttemptFix gets the last failed deploy's build logs, sends them to OpenRouter
-// to get a fixed Dockerfile, then creates a new deploy with the override.
+func (s *AIFixService) PreviewFix(svc *models.Service, failedDeploy *models.Deploy, hint string) (*AIFixPatch, error) {
+	if svc == nil {
+		return nil, fmt.Errorf("missing service")
+	}
+	if failedDeploy == nil {
+		return nil, fmt.Errorf("missing failed deploy")
+	}
+	if !s.Available() {
+		return nil, fmt.Errorf("AI not available")
+	}
+
+	logs := s.collectDeployFailureLogs(svc, failedDeploy)
+	logContext := strings.TrimSpace(formatAIFixLogsForPrompt(logs))
+	if logContext == "" {
+		return nil, fmt.Errorf("failed deploy logs are empty")
+	}
+
+	currentDockerfile := strings.TrimSpace(failedDeploy.DockerfileOverride)
+	if currentDockerfile == "" {
+		currentDockerfile = "(auto-generated or from repository)"
+	}
+
+	return s.callOpenRouterPatch(logContext, currentDockerfile, svc, hint)
+}
+
+// AttemptFix creates a fix plan from failed deploy context and applies it.
 func (s *AIFixService) AttemptFix(session *models.AIFixSession, worker *Worker) error {
+	return s.AttemptFixWithOptions(session, worker, AIFixOptions{})
+}
+
+func (s *AIFixService) AttemptFixWithOptions(session *models.AIFixSession, worker *Worker, opts AIFixOptions) error {
 	if session == nil {
 		return fmt.Errorf("nil session")
 	}
@@ -86,56 +173,105 @@ func (s *AIFixService) AttemptFix(session *models.AIFixSession, worker *Worker) 
 		return fmt.Errorf("service not found: %v", err)
 	}
 
-	// Get last failed deploy
 	failedDeploy, err := models.GetLastFailedDeploy(svc.ID)
 	if err != nil || failedDeploy == nil {
 		return fmt.Errorf("no failed deploy found")
 	}
 
-	buildLogs := failedDeploy.BuildLog
-
-	// If build logs are sparse, try Loki
-	if len(strings.TrimSpace(buildLogs)) < 50 && s.Config.Kubernetes.Enabled {
-		lokiLogs := s.fetchLokiLogs(failedDeploy)
-		if lokiLogs != "" {
-			buildLogs = lokiLogs
-		}
-	}
-
-	// Truncate to last 200 lines
-	buildLogs = lastNLines(buildLogs, 200)
-
-	// Determine the current Dockerfile content
-	currentDockerfile := failedDeploy.DockerfileOverride
-	if currentDockerfile == "" {
-		currentDockerfile = "(auto-generated or from repository)"
-	}
-
-	// Call OpenRouter
-	fixedDockerfile, summary, err := s.callOpenRouter(buildLogs, currentDockerfile)
+	patch, err := s.PreviewFix(svc, failedDeploy, opts.Hint)
 	if err != nil {
-		return fmt.Errorf("openrouter call failed: %w", err)
+		return fmt.Errorf("generate fix plan: %w", err)
+	}
+	if patch == nil {
+		return fmt.Errorf("generate fix plan: empty response")
 	}
 
-	// Create new deploy with the fixed Dockerfile
+	updatedSvc := *svc
+	serviceChanged := false
+	applied := make([]string, 0, 4)
+
+	if v := strings.TrimSpace(patch.BuildCommand); v != "" && v != strings.TrimSpace(updatedSvc.BuildCommand) {
+		updatedSvc.BuildCommand = v
+		serviceChanged = true
+		applied = append(applied, "build_command")
+	}
+	if v := strings.TrimSpace(patch.StartCommand); v != "" && v != strings.TrimSpace(updatedSvc.StartCommand) {
+		updatedSvc.StartCommand = v
+		serviceChanged = true
+		applied = append(applied, "start_command")
+	}
+
+	if serviceChanged {
+		if err := models.UpdateService(&updatedSvc); err != nil {
+			return fmt.Errorf("update service from AI fix: %w", err)
+		}
+		svc = &updatedSvc
+	}
+
+	envVars := normalizeAIFixEnvVarUpdates(patch.EnvVars)
+	if len(envVars) > 0 {
+		upsert := make([]models.EnvVar, 0, len(envVars))
+		for _, ev := range envVars {
+			encrypted, encErr := utils.Encrypt(ev.Value, s.Config.Crypto.EncryptionKey)
+			if encErr != nil {
+				return fmt.Errorf("encrypt env var %s: %w", ev.Key, encErr)
+			}
+			upsert = append(upsert, models.EnvVar{
+				Key:            ev.Key,
+				EncryptedValue: encrypted,
+				IsSecret:       ev.IsSecret,
+			})
+		}
+		if err := models.MergeUpsertEnvVars("service", svc.ID, upsert); err != nil {
+			return fmt.Errorf("update env vars from AI fix: %w", err)
+		}
+		applied = append(applied, fmt.Sprintf("env_vars(%d)", len(upsert)))
+	}
+
+	dockerfileOverride := strings.TrimSpace(patch.Dockerfile)
+	if dockerfileOverride == "" {
+		dockerfileOverride = strings.TrimSpace(failedDeploy.DockerfileOverride)
+	}
+
+	hasActionableChange := serviceChanged || len(envVars) > 0 || dockerfileOverride != strings.TrimSpace(failedDeploy.DockerfileOverride)
+	if !hasActionableChange {
+		applied = append(applied, "redeploy_only")
+	}
+
+	summary := strings.TrimSpace(patch.Summary)
+	if summary == "" {
+		summary = "AI-generated deploy fix"
+	}
+	if strings.TrimSpace(patch.DockerfileDiff) != "" {
+		summary += "\n\nDockerfile diff preview:\n" + strings.TrimSpace(patch.DockerfileDiff)
+	}
+	if !hasActionableChange {
+		summary += "\n\nNo deterministic config patch was detected from AI output; triggering a verification redeploy with existing settings."
+	}
+	if len(applied) > 0 {
+		summary += "\n\nApplied changes: " + strings.Join(applied, ", ")
+	}
+	if h := strings.TrimSpace(opts.Hint); h != "" {
+		summary += "\n\nUser hint: " + truncateAIFixText(h, 280)
+	}
+	summary = truncateAIFixText(summary, 2000)
+
 	deploy := &models.Deploy{
 		ServiceID:          svc.ID,
 		Trigger:            "ai_fix",
 		CommitSHA:          failedDeploy.CommitSHA,
 		CommitMessage:      fmt.Sprintf("AI fix attempt %d/%d", session.CurrentAttempt+1, session.MaxAttempts),
 		Branch:             failedDeploy.Branch,
-		DockerfileOverride: fixedDockerfile,
+		DockerfileOverride: dockerfileOverride,
 	}
 	if err := models.CreateDeploy(deploy); err != nil {
 		return fmt.Errorf("create deploy: %w", err)
 	}
 
-	// Update session
 	if err := models.UpdateAIFixSessionAttempt(session.ID, session.CurrentAttempt+1, deploy.ID, summary); err != nil {
 		log.Printf("ai_fix: update session attempt failed: %v", err)
 	}
 
-	// Enqueue the deploy
 	if worker != nil {
 		ghToken := worker.resolveGitHubToken(deploy, svc)
 		worker.Enqueue(DeployJob{
@@ -148,24 +284,49 @@ func (s *AIFixService) AttemptFix(session *models.AIFixSession, worker *Worker) 
 	return nil
 }
 
-func (s *AIFixService) callOpenRouter(buildLogs string, currentDockerfile string) (fixedDockerfile string, summary string, err error) {
-	systemPrompt := `You are a DevOps expert. A Docker build failed on RailPush (a Render-like PaaS). Analyze the build logs and fix the Dockerfile.
+func (s *AIFixService) callOpenRouterPatch(logContext string, currentDockerfile string, svc *models.Service, hint string) (*AIFixPatch, error) {
+	serviceRuntime := ""
+	serviceType := ""
+	buildCommand := ""
+	startCommand := ""
+	if svc != nil {
+		serviceRuntime = strings.TrimSpace(svc.Runtime)
+		serviceType = strings.TrimSpace(svc.Type)
+		buildCommand = strings.TrimSpace(svc.BuildCommand)
+		startCommand = strings.TrimSpace(svc.StartCommand)
+	}
 
-Return ONLY a valid Dockerfile. No markdown fences, no explanation, no comments about what you changed.
+	systemPrompt := `You are a senior DevOps engineer fixing failed deployments on RailPush.
+Analyze build + runtime logs and output ONLY valid JSON with this schema:
+{
+  "summary": "one concise sentence",
+  "dockerfile": "optional full Dockerfile text, empty if unchanged",
+  "build_command": "optional new build command",
+  "start_command": "optional new start command",
+  "env_vars": [
+    {"key": "ENV_KEY", "value": "value", "is_secret": false}
+  ]
+}
 
-CRITICAL RULES:
-1. Fix ONLY the specific error shown in the logs. Minimal changes.
-2. NEVER replace "npm install" with "npm ci" unless you can confirm package-lock.json exists. npm ci REQUIRES package-lock.json and will fail without it.
-3. For Node.js: always use "npm install" as the safe default. Only use "npm ci" if the logs show package-lock.json was found.
-4. If the error is "ENOENT: no such file or directory, open 'package.json'" — the Dockerfile's WORKDIR or COPY context is wrong, NOT a missing package. Adjust COPY source paths or WORKDIR.
-5. For monorepos (frontend+backend in one repo), COPY only the relevant subdirectory. Check the docker context path in the logs.
-6. Do NOT add unnecessary build dependencies (python3, make, g++) unless the logs specifically show native module compilation failures.
-7. Do NOT set environment variables with empty values (ENV RESEND_API_KEY=). Runtime env vars are injected by the platform.
-8. If the error is a runtime crash (not a build failure), the Dockerfile is probably fine — the issue is missing env vars or config. In this case, return the EXACT same Dockerfile unchanged.
-9. Use standard base images: node:20-alpine, python:3.12-slim, golang:1.22-alpine, ruby:3.3-slim, etc.
-10. For static sites (React, Vue, Next.js static export), use a multi-stage build: node for building, nginx:alpine or a lightweight server for serving.`
+Rules:
+- Return JSON only (no markdown/code fences).
+- Keep changes minimal and focused on the first real failure.
+- If Dockerfile is unchanged, return empty dockerfile.
+- Only suggest env vars when values are deterministic from logs/context.
+- Never invent sensitive secret values (API keys/tokens/passwords).
+- Avoid broad speculative rewrites.
+- Prefer safe Node default: npm install over npm ci unless lockfile is clearly present.
+- If logs indicate runtime failure (CrashLoop/startup), prioritize start_command/env fixes over Dockerfile.`
 
-	userPrompt := fmt.Sprintf("Build logs (last 200 lines):\n```\n%s\n```\n\nCurrent Dockerfile:\n```\n%s\n```", buildLogs, currentDockerfile)
+	userPrompt := fmt.Sprintf("Service type: %s\nRuntime: %s\nCurrent build_command: %s\nCurrent start_command: %s\n\nLogs:\n```\n%s\n```\n\nCurrent Dockerfile:\n```\n%s\n```\n\nUser hint (optional): %s",
+		serviceType,
+		serviceRuntime,
+		buildCommand,
+		startCommand,
+		logContext,
+		currentDockerfile,
+		strings.TrimSpace(hint),
+	)
 
 	reqBody := openRouterChatRequest{
 		Model: s.Config.BlueprintAI.OpenRouterModel,
@@ -173,13 +334,13 @@ CRITICAL RULES:
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		Temperature: 0.2,
-		MaxTokens:   4000,
+		Temperature: 0.1,
+		MaxTokens:   1800,
 	}
 
 	raw, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", "", fmt.Errorf("marshal request: %w", err)
+		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.HTTPClient.Timeout)
@@ -187,7 +348,7 @@ CRITICAL RULES:
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.Config.BlueprintAI.OpenRouterURL, bytes.NewReader(raw))
 	if err != nil {
-		return "", "", fmt.Errorf("build request: %w", err)
+		return nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+s.Config.BlueprintAI.OpenRouterAPIKey)
 	req.Header.Set("Content-Type", "application/json")
@@ -196,46 +357,46 @@ CRITICAL RULES:
 
 	resp, err := s.HTTPClient.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("request failed: %w", err)
+		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", fmt.Errorf("openrouter error (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("openrouter error (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var parsed openRouterChatResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return "", "", fmt.Errorf("decode response: %w", err)
+		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	if parsed.Error != nil && strings.TrimSpace(parsed.Error.Message) != "" {
-		return "", "", fmt.Errorf("openrouter error: %s", strings.TrimSpace(parsed.Error.Message))
+		return nil, fmt.Errorf("openrouter error: %s", strings.TrimSpace(parsed.Error.Message))
 	}
 	if len(parsed.Choices) == 0 {
-		return "", "", fmt.Errorf("openrouter returned no choices")
+		return nil, fmt.Errorf("openrouter returned no choices")
 	}
 
 	content := extractOpenRouterContent(parsed.Choices[0].Message.Content)
-	content = normalizeDockerfileContent(content)
-	if content == "" {
-		return "", "", fmt.Errorf("openrouter returned empty content")
-	}
-	if !looksLikeDockerfile(content) {
-		return "", "", fmt.Errorf("openrouter returned content without a Dockerfile")
-	}
-
-	// Build a short summary from the first line of the Dockerfile change
-	summaryLine := "AI-generated Dockerfile fix"
-	lines := strings.SplitN(content, "\n", 3)
-	if len(lines) > 0 {
-		summaryLine = fmt.Sprintf("Fixed Dockerfile (FROM %s...)", strings.TrimPrefix(lines[0], "FROM "))
-		if len(summaryLine) > 120 {
-			summaryLine = summaryLine[:120]
+	patch, err := parseAIFixPatchJSON(content)
+	if err != nil {
+		patch = fallbackAIFixPatchFromText(content, currentDockerfile)
+		if patch == nil {
+			return nil, err
 		}
 	}
+	patch = normalizeAIFixPatch(patch)
+	patch.Source = "ai"
 
-	return content, summaryLine, nil
+	if patch.Dockerfile != "" && patch.Dockerfile != currentDockerfile {
+		patch.DockerfileDiff = buildTextDiffPreview(currentDockerfile, patch.Dockerfile, 40)
+	}
+
+	if strings.TrimSpace(patch.Summary) == "" {
+		patch.Summary = "AI-generated deploy fix plan"
+	}
+
+	return patch, nil
 }
 
 func (s *AIFixService) callOpenRouterDiagnosis(buildLogs string) (*AIFixDiagnosis, error) {
@@ -315,8 +476,11 @@ Rules:
 	return sanitizeAIFixDiagnosis(diag), nil
 }
 
-func (s *AIFixService) fetchLokiLogs(deploy *models.Deploy) string {
+func (s *AIFixService) fetchLokiBuildLogs(deploy *models.Deploy) string {
 	if s == nil || s.Config == nil || !s.Config.Kubernetes.Enabled {
+		return ""
+	}
+	if deploy == nil {
 		return ""
 	}
 	ns := strings.TrimSpace(s.Config.Kubernetes.Namespace)
@@ -343,6 +507,51 @@ func (s *AIFixService) fetchLokiLogs(deploy *models.Deploy) string {
 	}
 
 	logQL := fmt.Sprintf(`{namespace=%q, app=%q, component="build", container=~"clone|kaniko"}`, ns, jobName)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	lines, err := LokiQueryRange(ctx, lokiURL, logQL, start, end, 5000)
+	if err != nil || len(lines) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	for _, ln := range lines {
+		b.WriteString(ln.Line)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (s *AIFixService) fetchLokiRuntimeLogs(serviceID string, deploy *models.Deploy) string {
+	if s == nil || s.Config == nil || !s.Config.Kubernetes.Enabled {
+		return ""
+	}
+	if strings.TrimSpace(serviceID) == "" {
+		return ""
+	}
+	ns := strings.TrimSpace(s.Config.Kubernetes.Namespace)
+	if ns == "" {
+		ns = "railpush"
+	}
+	lokiURL := strings.TrimSpace(s.Config.Logging.LokiURL)
+	if lokiURL == "" {
+		lokiURL = "http://loki-gateway.logging.svc.cluster.local"
+	}
+
+	start := time.Now().UTC().Add(-30 * time.Minute)
+	end := time.Now().UTC()
+	if deploy != nil {
+		if deploy.StartedAt != nil {
+			start = deploy.StartedAt.Add(-2 * time.Minute)
+		}
+		if deploy.FinishedAt != nil {
+			end = deploy.FinishedAt.Add(8 * time.Minute)
+		}
+	}
+
+	servicePodPrefix := regexp.QuoteMeta(kubeServiceName(serviceID)) + ".*"
+	logQL := fmt.Sprintf(`{namespace=%q,pod=~%q,container="service"}`, ns, servicePodPrefix)
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
@@ -476,6 +685,203 @@ func parseAIFixDiagnosisJSON(raw string) (*AIFixDiagnosis, error) {
 	return nil, fmt.Errorf("diagnosis response is not valid JSON")
 }
 
+func parseAIFixPatchJSON(raw string) (*AIFixPatch, error) {
+	type payload struct {
+		Summary      string             `json:"summary"`
+		Dockerfile   string             `json:"dockerfile"`
+		BuildCommand string             `json:"build_command"`
+		StartCommand string             `json:"start_command"`
+		EnvVars      []AIFixEnvVarUpdate `json:"env_vars"`
+	}
+
+	cleaned := strings.TrimSpace(stripMarkdownFences(raw))
+	if cleaned == "" {
+		return nil, fmt.Errorf("empty AI patch response")
+	}
+
+	decode := func(candidate string) (*AIFixPatch, error) {
+		var p payload
+		if err := json.Unmarshal([]byte(candidate), &p); err != nil {
+			return nil, err
+		}
+		return &AIFixPatch{
+			Summary:      p.Summary,
+			Dockerfile:   p.Dockerfile,
+			BuildCommand: p.BuildCommand,
+			StartCommand: p.StartCommand,
+			EnvVars:      p.EnvVars,
+		}, nil
+	}
+
+	if patch, err := decode(cleaned); err == nil {
+		return patch, nil
+	}
+
+	start := strings.Index(cleaned, "{")
+	end := strings.LastIndex(cleaned, "}")
+	if start >= 0 && end > start {
+		if patch, err := decode(cleaned[start : end+1]); err == nil {
+			return patch, nil
+		}
+	}
+
+	return nil, fmt.Errorf("AI patch response is not valid JSON")
+}
+
+func fallbackAIFixPatchFromText(raw string, currentDockerfile string) *AIFixPatch {
+	cleaned := strings.TrimSpace(stripMarkdownFences(raw))
+	if cleaned == "" {
+		return nil
+	}
+
+	patch := &AIFixPatch{
+		Summary: firstNonEmptyLine(cleaned),
+	}
+
+	dockerfile := normalizeDockerfileContent(cleaned)
+	if looksLikeDockerfile(dockerfile) && dockerfile != strings.TrimSpace(currentDockerfile) {
+		patch.Dockerfile = dockerfile
+	}
+
+	patch.BuildCommand = extractLooseAIFixField(cleaned, "build_command")
+	patch.StartCommand = extractLooseAIFixField(cleaned, "start_command")
+
+	return patch
+}
+
+func extractLooseAIFixField(raw string, field string) string {
+	field = strings.TrimSpace(field)
+	if field == "" {
+		return ""
+	}
+	re := regexp.MustCompile(`(?im)^\s*` + regexp.QuoteMeta(field) + `\s*[:=]\s*(.+)\s*$`)
+	matches := re.FindStringSubmatch(raw)
+	if len(matches) < 2 {
+		return ""
+	}
+	value := strings.TrimSpace(matches[1])
+	value = strings.Trim(value, "\"'")
+	return value
+}
+
+func firstNonEmptyLine(raw string) string {
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		line = strings.Trim(line, "\"'")
+		return truncateAIFixText(line, 220)
+	}
+	return ""
+}
+
+func normalizeAIFixPatch(patch *AIFixPatch) *AIFixPatch {
+	if patch == nil {
+		patch = &AIFixPatch{}
+	}
+	patch.Summary = strings.TrimSpace(patch.Summary)
+	patch.BuildCommand = strings.TrimSpace(patch.BuildCommand)
+	patch.StartCommand = strings.TrimSpace(patch.StartCommand)
+
+	if patch.Dockerfile != "" {
+		normalized := normalizeDockerfileContent(patch.Dockerfile)
+		if looksLikeDockerfile(normalized) {
+			patch.Dockerfile = normalized
+		} else {
+			patch.Dockerfile = ""
+		}
+	}
+
+	patch.EnvVars = normalizeAIFixEnvVarUpdates(patch.EnvVars)
+	if strings.TrimSpace(patch.Source) == "" {
+		patch.Source = "heuristic"
+	}
+	return patch
+}
+
+func normalizeAIFixEnvVarUpdates(updates []AIFixEnvVarUpdate) []AIFixEnvVarUpdate {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	normalized := make([]AIFixEnvVarUpdate, 0, len(updates))
+	indexByKey := map[string]int{}
+
+	for _, item := range updates {
+		key := strings.TrimSpace(item.Key)
+		if key == "" {
+			continue
+		}
+		value := strings.TrimSpace(item.Value)
+		if value == "" {
+			continue
+		}
+
+		entry := AIFixEnvVarUpdate{
+			Key:      key,
+			Value:    value,
+			IsSecret: item.IsSecret,
+		}
+
+		if idx, ok := indexByKey[key]; ok {
+			normalized[idx] = entry
+			continue
+		}
+		indexByKey[key] = len(normalized)
+		normalized = append(normalized, entry)
+		if len(normalized) >= 25 {
+			break
+		}
+	}
+
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func buildTextDiffPreview(before string, after string, maxLines int) string {
+	before = strings.TrimSpace(before)
+	after = strings.TrimSpace(after)
+	if before == "" || after == "" || before == after {
+		return ""
+	}
+	if maxLines <= 0 {
+		maxLines = 40
+	}
+
+	beforeLines := strings.Split(strings.ReplaceAll(before, "\r\n", "\n"), "\n")
+	afterLines := strings.Split(strings.ReplaceAll(after, "\r\n", "\n"), "\n")
+
+	changes := make([]string, 0, maxLines+1)
+	i := 0
+	j := 0
+	for i < len(beforeLines) || j < len(afterLines) {
+		if i < len(beforeLines) && j < len(afterLines) && beforeLines[i] == afterLines[j] {
+			i++
+			j++
+			continue
+		}
+		if i < len(beforeLines) {
+			changes = append(changes, "- "+beforeLines[i])
+			i++
+		}
+		if j < len(afterLines) {
+			changes = append(changes, "+ "+afterLines[j])
+			j++
+		}
+		if len(changes) >= maxLines {
+			if i < len(beforeLines) || j < len(afterLines) {
+				changes = append(changes, "... (truncated)")
+			}
+			break
+		}
+	}
+
+	return strings.Join(changes, "\n")
+}
+
 func heuristicAIFixDiagnosis(buildLogs string) *AIFixDiagnosis {
 	logs := strings.TrimSpace(buildLogs)
 	if logs == "" {
@@ -552,6 +958,17 @@ func looksLikeDockerfile(in string) bool {
 		}
 	}
 	return false
+}
+
+func truncateAIFixText(raw string, max int) string {
+	raw = strings.TrimSpace(raw)
+	if max <= 0 || len(raw) <= max {
+		return raw
+	}
+	if max < 4 {
+		return raw[:max]
+	}
+	return raw[:max-3] + "..."
 }
 
 func lastNLines(s string, n int) string {

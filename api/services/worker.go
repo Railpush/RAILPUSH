@@ -1089,6 +1089,7 @@ func (w *Worker) processJob(job DeployJob) {
 	defer close(logStop)
 
 	appendLog := func(line string) {
+		line = RedactSecretsInText(line)
 		log.Printf("[deploy:%s] %s", deploy.ID[:8], line)
 		// In Kubernetes mode, large build output lives in Loki (via Promtail).
 		// Keep only high-level metadata in Postgres to avoid DB bloat.
@@ -1171,7 +1172,7 @@ func (w *Worker) processJob(job DeployJob) {
 			return
 		}
 
-		appendLog(fmt.Sprintf("==> Cloning %s (branch: %s)...", svc.RepoURL, svc.Branch))
+		appendLog(fmt.Sprintf("==> Cloning %s (branch: %s)...", RedactRepoURLCredentials(svc.RepoURL), svc.Branch))
 		if err := w.Builder.CloneRepo(svc.RepoURL, svc.Branch, buildDir, job.GitHubToken); err != nil {
 			appendLog(fmt.Sprintf("ERROR: Clone failed: %v", err))
 			w.failDeploy(deploy, svc)

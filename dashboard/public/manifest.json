@@ -9,7 +9,7 @@
   "background_color": "#0A0A0F",
   "icons": [
     {
-      "src": "/favicon.svg",
+      "src": "/favicon-contrast.svg",
       "sizes": "any",
       "type": "image/svg+xml"
     }

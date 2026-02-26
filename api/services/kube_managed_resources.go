@@ -977,6 +977,136 @@ func (k *KubeDeployer) RunDatabaseInitScript(db *models.ManagedDatabase, passwor
 	}
 }
 
+// CloneManagedDatabaseData copies schema+data from source managed database to target managed database.
+// It runs a short-lived pod that streams pg_dump -> psql inside the cluster.
+func (k *KubeDeployer) CloneManagedDatabaseData(source *models.ManagedDatabase, sourcePassword string, target *models.ManagedDatabase, targetPassword string) error {
+	if k == nil || k.Client == nil {
+		return fmt.Errorf("kube deployer not initialized")
+	}
+	if source == nil || target == nil {
+		return fmt.Errorf("source and target databases are required")
+	}
+	if strings.TrimSpace(sourcePassword) == "" || strings.TrimSpace(targetPassword) == "" {
+		return fmt.Errorf("database credentials are unavailable")
+	}
+
+	sourceDBName := strings.TrimSpace(source.DBName)
+	if sourceDBName == "" {
+		sourceDBName = strings.TrimSpace(source.Name)
+	}
+	sourceUser := strings.TrimSpace(source.Username)
+	if sourceUser == "" {
+		sourceUser = strings.TrimSpace(source.Name)
+	}
+	targetDBName := strings.TrimSpace(target.DBName)
+	if targetDBName == "" {
+		targetDBName = strings.TrimSpace(target.Name)
+	}
+	targetUser := strings.TrimSpace(target.Username)
+	if targetUser == "" {
+		targetUser = strings.TrimSpace(target.Name)
+	}
+	if sourceDBName == "" || sourceUser == "" || targetDBName == "" || targetUser == "" {
+		return fmt.Errorf("database connection metadata is incomplete")
+	}
+
+	ns := k.namespace()
+	podName := "rp-db-clone-" + kubeIDPrefix(target.ID)
+	sourceHost := kubeManagedDatabaseName(source.ID)
+	targetHost := kubeManagedDatabaseName(target.ID)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	_ = k.Client.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{})
+	for i := 0; i < 20; i++ {
+		if _, err := k.Client.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); apierrors.IsNotFound(err) {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	script := strings.Join([]string{
+		"set -euo pipefail",
+		"PGSSLMODE=require PGPASSWORD=\"$SOURCE_PASSWORD\" pg_dump -h \"$SOURCE_HOST\" -p 5432 -U \"$SOURCE_USER\" -d \"$SOURCE_DB\" --clean --if-exists --no-owner --no-privileges | PGSSLMODE=require PGPASSWORD=\"$TARGET_PASSWORD\" psql -v ON_ERROR_STOP=1 --no-psqlrc -h \"$TARGET_HOST\" -p 5432 -U \"$TARGET_USER\" -d \"$TARGET_DB\"",
+	}, "; ")
+
+	pgVersion := source.PGVersion
+	if pgVersion <= 0 {
+		pgVersion = 16
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: ns,
+		},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			Containers: []corev1.Container{
+				{
+					Name:    "clone",
+					Image:   fmt.Sprintf("postgres:%d-alpine", pgVersion),
+					Command: []string{"sh", "-lc", script},
+					Env: []corev1.EnvVar{
+						{Name: "SOURCE_HOST", Value: sourceHost},
+						{Name: "SOURCE_DB", Value: sourceDBName},
+						{Name: "SOURCE_USER", Value: sourceUser},
+						{Name: "SOURCE_PASSWORD", Value: sourcePassword},
+						{Name: "TARGET_HOST", Value: targetHost},
+						{Name: "TARGET_DB", Value: targetDBName},
+						{Name: "TARGET_USER", Value: targetUser},
+						{Name: "TARGET_PASSWORD", Value: targetPassword},
+					},
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceCPU:    resource.MustParse("100m"),
+							corev1.ResourceMemory: resource.MustParse("128Mi"),
+						},
+						Limits: corev1.ResourceList{
+							corev1.ResourceCPU:    resource.MustParse("500m"),
+							corev1.ResourceMemory: resource.MustParse("512Mi"),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if _, err := k.Client.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("create clone pod: %w", err)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			_ = k.Client.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
+			return fmt.Errorf("database clone timed out")
+		default:
+		}
+
+		p, err := k.Client.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("get clone pod: %w", err)
+		}
+		if p.Status.Phase == corev1.PodSucceeded {
+			_ = k.Client.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{})
+			return nil
+		}
+		if p.Status.Phase == corev1.PodFailed {
+			logRaw, _ := k.Client.CoreV1().Pods(ns).GetLogs(podName, &corev1.PodLogOptions{Container: "clone"}).DoRaw(ctx)
+			_ = k.Client.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{})
+			msg := strings.TrimSpace(string(logRaw))
+			if msg == "" {
+				msg = "clone pod failed"
+			}
+			if len(msg) > 900 {
+				msg = msg[:900] + "..."
+			}
+			return fmt.Errorf(msg)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
 // RunDatabaseQuery executes SQL in the target managed database pod and returns stdout/stderr.
 // This path avoids cluster networking dependencies by using localhost access from inside the DB pod.
 func (k *KubeDeployer) RunDatabaseQuery(db *models.ManagedDatabase, password string, query string, timeout time.Duration, readOnly bool) (string, string, error) {

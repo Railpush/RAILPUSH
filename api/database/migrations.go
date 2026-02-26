@@ -515,11 +515,15 @@ $$ LANGUAGE plpgsql IMMUTABLE`,
 	`ALTER TABLE workspace_notification_channels ADD COLUMN IF NOT EXISTS discord_webhook_url TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE workspace_notification_channels ADD COLUMN IF NOT EXISTS email_recipients TEXT[] NOT NULL DEFAULT '{}'::text[]`,
 	`ALTER TABLE workspace_notification_channels ADD COLUMN IF NOT EXISTS deploy_events TEXT[] NOT NULL DEFAULT '{"success","failed","rollback"}'::text[]`,
+	`ALTER TABLE workspace_notification_channels ADD COLUMN IF NOT EXISTS audit_events TEXT[] NOT NULL DEFAULT '{}'::text[]`,
 	`ALTER TABLE workspace_notification_channels ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
 	`ALTER TABLE workspace_notification_channels ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
 	`UPDATE workspace_notification_channels
 	    SET deploy_events = '{"success","failed","rollback"}'::text[]
 	  WHERE deploy_events IS NULL`,
+	`UPDATE workspace_notification_channels
+	    SET audit_events = '{}'::text[]
+	  WHERE audit_events IS NULL`,
 
 	// Managed database restore jobs (soft-delete + backup/PITR restore progress tracking).
 	`CREATE TABLE IF NOT EXISTS database_restore_jobs (

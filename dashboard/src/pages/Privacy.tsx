@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, ChevronRight, Shield } from 'lucide-react';
 import { SEO } from '../components/SEO';
-import { LogoMark } from '../components/Logo';
+import { Logo } from '../components/Logo';
 
 export function Privacy() {
   const navigate = useNavigate();
@@ -18,8 +18,7 @@ export function Privacy() {
         <div className="max-w-4xl mx-auto px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <button onClick={() => navigate('/')} className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
-              <LogoMark size={28} />
-              <span className="text-base font-semibold tracking-tight">RailPush</span>
+              <Logo size={28} />
             </button>
             <ChevronRight className="w-4 h-4 text-content-tertiary" />
             <span className="text-sm font-medium text-content-secondary flex items-center gap-1.5">

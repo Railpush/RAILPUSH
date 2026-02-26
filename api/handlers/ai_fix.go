@@ -44,17 +44,55 @@ func (h *AIFixHandler) StartFix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check for existing active session
-	existing, _ := models.GetActiveAIFixSessionForService(svc.ID)
-	if existing != nil {
-		utils.RespondError(w, http.StatusConflict, "AI fix already in progress")
+	var req struct {
+		Hint        string `json:"hint"`
+		PreviewOnly bool   `json:"preview_only"`
+	}
+	if err := decodeOptionalJSONBody(w, r, &req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	req.Hint = strings.TrimSpace(req.Hint)
 
 	// Check that there's a failed deploy to fix
 	failedDeploy, _ := models.GetLastFailedDeploy(svc.ID)
 	if failedDeploy == nil {
 		utils.RespondError(w, http.StatusBadRequest, "no failed deploy to fix")
+		return
+	}
+
+	if req.PreviewOnly {
+		patch, err := aiFixer.PreviewFix(svc, failedDeploy, req.Hint)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to generate AI fix preview")
+			return
+		}
+		dockerfileChanged := strings.TrimSpace(patch.Dockerfile) != "" && strings.TrimSpace(patch.Dockerfile) != strings.TrimSpace(failedDeploy.DockerfileOverride)
+		buildCommandChanged := strings.TrimSpace(patch.BuildCommand) != "" && strings.TrimSpace(patch.BuildCommand) != strings.TrimSpace(svc.BuildCommand)
+		startCommandChanged := strings.TrimSpace(patch.StartCommand) != "" && strings.TrimSpace(patch.StartCommand) != strings.TrimSpace(svc.StartCommand)
+		canApply := dockerfileChanged || buildCommandChanged || startCommandChanged || len(patch.EnvVars) > 0
+		utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":           "preview",
+			"service_id":       svc.ID,
+			"failed_deploy_id": failedDeploy.ID,
+			"source":           patch.Source,
+			"summary":          patch.Summary,
+			"dockerfile_diff":  patch.DockerfileDiff,
+			"changes": map[string]interface{}{
+				"dockerfile_changed": dockerfileChanged,
+				"build_command":     patch.BuildCommand,
+				"start_command":     patch.StartCommand,
+				"env_vars":          patch.EnvVars,
+			},
+			"can_apply": canApply,
+		})
+		return
+	}
+
+	// Check for existing active session
+	existing, _ := models.GetActiveAIFixSessionForService(svc.ID)
+	if existing != nil {
+		utils.RespondError(w, http.StatusConflict, "AI fix already in progress")
 		return
 	}
 
@@ -67,7 +105,7 @@ func (h *AIFixHandler) StartFix(w http.ResponseWriter, r *http.Request) {
 
 	// Start first attempt in background
 	go func() {
-		if err := aiFixer.AttemptFix(session, h.Worker); err != nil {
+		if err := aiFixer.AttemptFixWithOptions(session, h.Worker, services.AIFixOptions{Hint: req.Hint}); err != nil {
 			log.Printf("ai_fix: first attempt failed for service %s: %v", svc.ID, err)
 			_ = models.UpdateAIFixSessionStatus(session.ID, "error")
 		}

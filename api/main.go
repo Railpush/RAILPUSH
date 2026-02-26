@@ -306,6 +306,7 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 
 	authed.HandleFunc("/services", svcH.ListServices).Methods("GET")
 	authed.HandleFunc("/services", svcH.CreateService).Methods("POST")
+	authed.HandleFunc("/services/{id}/clone", svcH.CloneService).Methods("POST")
 	authed.HandleFunc("/services/bulk-update", svcH.BulkUpdateServices).Methods("POST")
 	authed.HandleFunc("/services/bulk-deploy", depH.BulkTriggerDeploy).Methods("POST")
 	authed.HandleFunc("/services/bulk-restart", svcH.BulkRestartServices).Methods("POST")
@@ -397,6 +398,8 @@ func setupRoutes(r *mux.Router, cfg *config.Config, worker *services.Worker, wsH
 	authed.HandleFunc("/databases/{id}", dbH.UpdateDatabase).Methods("PATCH")
 	authed.HandleFunc("/databases/{id}", dbH.DeleteDatabase).Methods("DELETE")
 	authed.HandleFunc("/databases/{id}/restore", dbH.RestoreDatabase).Methods("POST")
+	authed.HandleFunc("/databases/{id}/clone", dbH.CloneDatabase).Methods("POST")
+	authed.HandleFunc("/databases/{id}/clone-status", dbH.GetCloneStatus).Methods("GET")
 	authed.HandleFunc("/databases/{id}/restores", dbH.ListRestoreJobs).Methods("GET")
 	authed.HandleFunc("/databases/{id}/backups", dbH.ListBackups).Methods("GET")
 	authed.HandleFunc("/databases/{id}/backups", dbH.TriggerBackup).Methods("POST")

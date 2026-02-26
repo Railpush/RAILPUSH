@@ -806,6 +806,7 @@ func (h *DatabaseHandler) databaseResponse(db *models.ManagedDatabase, password 
 	externalURL := ""
 	externalPSQL := ""
 	externalAccess := "disabled"
+	encryption := managedStorageEncryptionInfo(h.Config, h.Worker)
 	if h.externalDatabaseAccessEnabled() {
 		externalAccess = "provisioning"
 		externalHost, externalConnPort, externalDBName, externalUser := h.linkedDatabaseConnectionParts(db, false)
@@ -840,6 +841,13 @@ func (h *DatabaseHandler) databaseResponse(db *models.ManagedDatabase, password 
 		"external_url":          externalURL,
 		"external_psql_command": externalPSQL,
 		"external_access":       externalAccess,
+		"encryption_at_rest":    encryption.AtRest,
+		"encryption_status":     encryption.Status,
+		"encryption_algorithm":  encryption.Algorithm,
+		"key_management":        encryption.KeyManagement,
+		"encryption_scope":      encryption.Scope,
+		"encryption_evidence":   encryption.Evidence,
+		"storage_class":         encryption.StorageClass,
 		"psql_command":          psqlCommand,
 		"credentials_exposed":   revealCredentials,
 	}

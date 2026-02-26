@@ -76,6 +76,40 @@ type ServiceGitHubWebhookStatus struct {
 	CanRepair     bool     `json:"can_repair"`
 }
 
+type cloneServiceRequest struct {
+	Name           string                `json:"name"`
+	IncludeEnvVars *bool                 `json:"include_env_vars"`
+	Overrides      cloneServiceOverrides `json:"overrides"`
+}
+
+type cloneServiceOverrides struct {
+	Type              *string `json:"type"`
+	Runtime           *string `json:"runtime"`
+	RepoURL           *string `json:"repo_url"`
+	Branch            *string `json:"branch"`
+	BuildCommand      *string `json:"build_command"`
+	StartCommand      *string `json:"start_command"`
+	DockerfilePath    *string `json:"dockerfile_path"`
+	DockerContext     *string `json:"docker_context"`
+	BuildContext      *string `json:"build_context"`
+	ImageURL          *string `json:"image_url"`
+	HealthCheckPath   *string `json:"health_check_path"`
+	Port              *int    `json:"port"`
+	AutoDeploy        *bool   `json:"auto_deploy"`
+	MaxShutdownDelay  *int    `json:"max_shutdown_delay"`
+	PreDeployCommand  *string `json:"pre_deploy_command"`
+	StaticPublishPath *string `json:"static_publish_path"`
+	Schedule          *string `json:"schedule"`
+	Plan              *string `json:"plan"`
+	Instances         *int    `json:"instances"`
+	DockerAccess      *bool   `json:"docker_access"`
+	BaseImage         *string `json:"base_image"`
+	BuildInclude      *string `json:"build_include"`
+	BuildExclude      *string `json:"build_exclude"`
+	ProjectID         *string `json:"project_id"`
+	EnvironmentID     *string `json:"environment_id"`
+}
+
 func NewServiceHandler(cfg *config.Config, worker *services.Worker, stripe *services.StripeService) *ServiceHandler {
 	return &ServiceHandler{Config: cfg, Worker: worker, Stripe: stripe}
 }
@@ -107,6 +141,7 @@ func (h *ServiceHandler) decorateServicePublicURL(svc *models.Service) {
 	if svc == nil {
 		return
 	}
+	svc.RepoURL = services.RedactRepoURLCredentials(svc.RepoURL)
 	svc.PublicURL = utils.ServicePublicURL(svc.Type, svc.Name, svc.Subdomain, h.Config.Deploy.Domain, svc.HostPort)
 }
 
@@ -116,6 +151,18 @@ func (h *ServiceHandler) ensureAccess(w http.ResponseWriter, userID, workspaceID
 		return false
 	}
 	return true
+}
+
+func cloneServiceStringPtr(raw *string) *string {
+	if raw == nil {
+		return nil
+	}
+	v := strings.TrimSpace(*raw)
+	if v == "" {
+		return nil
+	}
+	cp := v
+	return &cp
 }
 
 func (h *ServiceHandler) webhookEndpointURL() string {
@@ -508,6 +555,7 @@ func (h *ServiceHandler) CreateService(w http.ResponseWriter, r *http.Request) {
 	}
 	svc.Name = strings.TrimSpace(svc.Name)
 	svc.Type = strings.TrimSpace(svc.Type)
+	svc.RepoURL = strings.TrimSpace(svc.RepoURL)
 	validationIssues := make([]utils.ValidationIssue, 0, 8)
 	if svc.Name == "" {
 		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "name", Message: "is required"})
@@ -520,6 +568,9 @@ func (h *ServiceHandler) CreateService(w http.ResponseWriter, r *http.Request) {
 	}
 	if svc.Instances < 0 {
 		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "instances", Message: "must be >= 0"})
+	}
+	if services.RepoURLHasEmbeddedCredentials(svc.RepoURL) {
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "repo_url", Message: "must not include embedded credentials; connect your GitHub account instead"})
 	}
 	if strings.TrimSpace(svc.Plan) != "" {
 		if _, ok := services.NormalizePlan(svc.Plan); !ok {
@@ -659,6 +710,332 @@ func (h *ServiceHandler) CreateService(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusCreated, svc)
 }
 
+func (h *ServiceHandler) CloneService(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r)
+	id := mux.Vars(r)["id"]
+	source, err := models.GetService(id)
+	if err != nil || source == nil {
+		respondServiceNotFound(w, id)
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(source.Status), "soft_deleted") {
+		respondServiceNotFound(w, id)
+		return
+	}
+	if !h.ensureAccess(w, userID, source.WorkspaceID, models.RoleDeveloper) {
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	var req cloneServiceRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		utils.RespondValidationErrors(w, http.StatusBadRequest, []utils.ValidationIssue{{Field: "name", Message: "is required"}})
+		return
+	}
+
+	clone := models.Service{
+		WorkspaceID:       source.WorkspaceID,
+		ProjectID:         cloneServiceStringPtr(source.ProjectID),
+		EnvironmentID:     cloneServiceStringPtr(source.EnvironmentID),
+		Name:              req.Name,
+		Type:              strings.TrimSpace(source.Type),
+		Runtime:           strings.TrimSpace(source.Runtime),
+		RepoURL:           services.RedactRepoURLCredentials(source.RepoURL),
+		Branch:            strings.TrimSpace(source.Branch),
+		BuildCommand:      source.BuildCommand,
+		StartCommand:      source.StartCommand,
+		DockerfilePath:    source.DockerfilePath,
+		DockerContext:     source.DockerContext,
+		ImageURL:          source.ImageURL,
+		HealthCheckPath:   source.HealthCheckPath,
+		Port:              source.Port,
+		AutoDeploy:        source.AutoDeploy,
+		MaxShutdownDelay:  source.MaxShutdownDelay,
+		PreDeployCommand:  source.PreDeployCommand,
+		StaticPublishPath: source.StaticPublishPath,
+		Schedule:          source.Schedule,
+		Plan:              strings.TrimSpace(source.Plan),
+		Instances:         source.Instances,
+		DockerAccess:      source.DockerAccess,
+		BaseImage:         source.BaseImage,
+		BuildInclude:      source.BuildInclude,
+		BuildExclude:      source.BuildExclude,
+	}
+
+	o := req.Overrides
+	if o.Type != nil {
+		clone.Type = strings.TrimSpace(*o.Type)
+	}
+	if o.Runtime != nil {
+		clone.Runtime = strings.TrimSpace(*o.Runtime)
+	}
+	if o.RepoURL != nil {
+		clone.RepoURL = strings.TrimSpace(*o.RepoURL)
+	}
+	if o.Branch != nil {
+		clone.Branch = strings.TrimSpace(*o.Branch)
+	}
+	if o.BuildCommand != nil {
+		clone.BuildCommand = strings.TrimSpace(*o.BuildCommand)
+	}
+	if o.StartCommand != nil {
+		clone.StartCommand = strings.TrimSpace(*o.StartCommand)
+	}
+	if o.DockerfilePath != nil {
+		clone.DockerfilePath = strings.TrimSpace(*o.DockerfilePath)
+	}
+	if o.DockerContext != nil {
+		clone.DockerContext = strings.TrimSpace(*o.DockerContext)
+	}
+	if o.BuildContext != nil && o.DockerContext == nil {
+		clone.DockerContext = strings.TrimSpace(*o.BuildContext)
+	}
+	if o.ImageURL != nil {
+		clone.ImageURL = strings.TrimSpace(*o.ImageURL)
+	}
+	if o.HealthCheckPath != nil {
+		clone.HealthCheckPath = strings.TrimSpace(*o.HealthCheckPath)
+	}
+	if o.Port != nil {
+		clone.Port = *o.Port
+	}
+	if o.AutoDeploy != nil {
+		clone.AutoDeploy = *o.AutoDeploy
+	}
+	if o.MaxShutdownDelay != nil {
+		clone.MaxShutdownDelay = *o.MaxShutdownDelay
+	}
+	if o.PreDeployCommand != nil {
+		clone.PreDeployCommand = strings.TrimSpace(*o.PreDeployCommand)
+	}
+	if o.StaticPublishPath != nil {
+		clone.StaticPublishPath = strings.TrimSpace(*o.StaticPublishPath)
+	}
+	if o.Schedule != nil {
+		clone.Schedule = strings.TrimSpace(*o.Schedule)
+	}
+	if o.Plan != nil {
+		clone.Plan = strings.TrimSpace(*o.Plan)
+	}
+	if o.Instances != nil {
+		clone.Instances = *o.Instances
+	}
+	if o.DockerAccess != nil {
+		clone.DockerAccess = *o.DockerAccess
+	}
+	if o.BaseImage != nil {
+		clone.BaseImage = strings.TrimSpace(*o.BaseImage)
+	}
+	if o.BuildInclude != nil {
+		clone.BuildInclude = strings.TrimSpace(*o.BuildInclude)
+	}
+	if o.BuildExclude != nil {
+		clone.BuildExclude = strings.TrimSpace(*o.BuildExclude)
+	}
+	if o.ProjectID != nil {
+		clone.ProjectID = cloneServiceStringPtr(o.ProjectID)
+	}
+	if o.EnvironmentID != nil {
+		clone.EnvironmentID = cloneServiceStringPtr(o.EnvironmentID)
+	}
+
+	validationIssues := make([]utils.ValidationIssue, 0, 8)
+	if clone.Name == "" {
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "name", Message: "is required"})
+	}
+	if clone.Type == "" {
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "type", Message: "is required"})
+	}
+	if clone.Port < 0 || clone.Port > 65535 {
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "port", Message: "must be between 0 and 65535"})
+	}
+	if clone.Instances < 0 {
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "instances", Message: "must be >= 0"})
+	}
+	if services.RepoURLHasEmbeddedCredentials(clone.RepoURL) {
+		validationIssues = append(validationIssues, utils.ValidationIssue{Field: "overrides.repo_url", Message: "must not include embedded credentials; connect your GitHub account instead"})
+	}
+	if strings.TrimSpace(clone.Plan) != "" {
+		if _, ok := services.NormalizePlan(clone.Plan); !ok {
+			validationIssues = append(validationIssues, utils.ValidationIssue{Field: "plan", Message: "must be one of free, starter, standard, pro"})
+		}
+	}
+	if len(validationIssues) > 0 {
+		utils.RespondValidationErrors(w, http.StatusBadRequest, validationIssues)
+		return
+	}
+
+	relationIssues := make([]utils.ValidationIssue, 0, 3)
+	if clone.ProjectID != nil && *clone.ProjectID != "" {
+		project, err := models.GetProject(*clone.ProjectID)
+		if err != nil || project == nil || project.WorkspaceID != clone.WorkspaceID {
+			relationIssues = append(relationIssues, utils.ValidationIssue{Field: "project_id", Message: "is invalid"})
+		}
+	}
+	if clone.EnvironmentID != nil && *clone.EnvironmentID != "" {
+		env, err := models.GetEnvironment(*clone.EnvironmentID)
+		if err != nil || env == nil {
+			relationIssues = append(relationIssues, utils.ValidationIssue{Field: "environment_id", Message: "is invalid"})
+		} else {
+			if clone.ProjectID != nil && *clone.ProjectID != "" && env.ProjectID != *clone.ProjectID {
+				relationIssues = append(relationIssues, utils.ValidationIssue{Field: "environment_id", Message: "does not belong to project_id"})
+			}
+			if len(relationIssues) == 0 && env.IsProtected && !h.ensureAccess(w, userID, clone.WorkspaceID, models.RoleAdmin) {
+				return
+			}
+		}
+	}
+	if len(relationIssues) > 0 {
+		utils.RespondValidationErrors(w, http.StatusBadRequest, relationIssues)
+		return
+	}
+
+	if clone.Port == 0 {
+		clone.Port = 10000
+	}
+	if clone.Plan == "" {
+		clone.Plan = services.PlanStarter
+	}
+	if p, ok := services.NormalizePlan(clone.Plan); ok {
+		clone.Plan = p
+	}
+	if clone.Instances == 0 {
+		clone.Instances = 1
+	}
+	if clone.Branch == "" {
+		clone.Branch = "main"
+	}
+
+	if clone.Plan == services.PlanFree {
+		count, err := models.CountResourcesByWorkspaceAndPlan(clone.WorkspaceID, "service", services.PlanFree)
+		if err == nil && count >= 1 {
+			utils.RespondError(w, http.StatusBadRequest, "free tier limit reached: 1 free service per workspace")
+			return
+		}
+	}
+
+	stripeEnabled := h.Stripe != nil && h.Stripe.Enabled()
+	var billingCustomer *models.BillingCustomer
+	if clone.Plan != services.PlanFree && stripeEnabled {
+		user, err := models.GetUserByID(userID)
+		if err != nil || user == nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to get user")
+			return
+		}
+		bc, err := h.Stripe.EnsureCustomer(userID, user.Email)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "billing error: "+err.Error())
+			return
+		}
+		if bc == nil {
+			utils.RespondError(w, http.StatusInternalServerError, "billing error: failed to initialize billing customer")
+			return
+		}
+		billingCustomer = bc
+	}
+
+	if err := models.CreateService(&clone); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to clone service: "+err.Error())
+		return
+	}
+
+	includeEnvVars := true
+	if req.IncludeEnvVars != nil {
+		includeEnvVars = *req.IncludeEnvVars
+	}
+	envVarsCopied := 0
+	if includeEnvVars {
+		sourceVars, err := models.ListEnvVars("service", source.ID)
+		if err != nil {
+			_ = models.DeleteService(clone.ID)
+			utils.RespondError(w, http.StatusInternalServerError, "failed to clone env vars")
+			return
+		}
+		if len(sourceVars) > 0 {
+			clonedVars := make([]models.EnvVar, 0, len(sourceVars))
+			for _, ev := range sourceVars {
+				clonedVars = append(clonedVars, models.EnvVar{
+					Key:            ev.Key,
+					EncryptedValue: ev.EncryptedValue,
+					IsSecret:       ev.IsSecret,
+				})
+			}
+			if err := models.BulkUpsertEnvVars("service", clone.ID, clonedVars); err != nil {
+				_ = models.DeleteService(clone.ID)
+				utils.RespondError(w, http.StatusInternalServerError, "failed to clone env vars")
+				return
+			}
+			envVarsCopied = len(clonedVars)
+		}
+	}
+
+	if clone.Plan != services.PlanFree && stripeEnabled && billingCustomer != nil {
+		if err := h.Stripe.AddSubscriptionItem(billingCustomer, clone.WorkspaceID, "service", clone.ID, clone.Name, clone.Plan); err != nil {
+			log.Printf("Warning: failed to add billing for cloned service %s: %v", clone.ID, err)
+			_ = models.DeleteService(clone.ID)
+			if errors.Is(err, services.ErrNoDefaultPaymentMethod) {
+				utils.RespondError(w, http.StatusPaymentRequired, "payment method required. Please add a default payment method in billing settings.")
+				return
+			}
+			utils.RespondError(w, http.StatusInternalServerError, "billing error: "+err.Error())
+			return
+		}
+	}
+
+	if strings.Contains(clone.RepoURL, "github.com") {
+		owner, repo := ParseGitHubOwnerRepo(clone.RepoURL)
+		if owner != "" && repo != "" {
+			if encToken, err := models.GetUserGitHubToken(userID); err == nil && encToken != "" {
+				if ghToken, err := utils.Decrypt(encToken, h.Config.Crypto.EncryptionKey); err == nil {
+					gh := services.NewGitHub(h.Config)
+					webhookURL := "https://" + h.Config.ControlPlane.Domain + "/api/v1/webhooks/github"
+					if err := gh.CreateWebhook(ghToken, owner, repo, webhookURL, h.Config.GitHub.WebhookSecret); err != nil {
+						log.Printf("Warning: failed to auto-register webhook for cloned service %s (%s/%s): %v", clone.ID, owner, repo, err)
+					}
+				}
+			}
+		}
+	}
+
+	projectID := ""
+	if clone.ProjectID != nil {
+		projectID = *clone.ProjectID
+	}
+	environmentID := ""
+	if clone.EnvironmentID != nil {
+		environmentID = *clone.EnvironmentID
+	}
+
+	services.Audit(clone.WorkspaceID, userID, "service.cloned", "service", clone.ID, map[string]interface{}{
+		"source_service_id": source.ID,
+		"name":              clone.Name,
+		"type":              clone.Type,
+		"plan":              clone.Plan,
+		"project_id":        projectID,
+		"environment_id":    environmentID,
+		"include_env_vars":  includeEnvVars,
+		"env_vars_copied":   envVarsCopied,
+	})
+
+	clone.BuildContext = clone.DockerContext
+	h.decorateServicePublicURL(&clone)
+	utils.RespondJSON(w, http.StatusCreated, map[string]interface{}{
+		"service":                clone,
+		"cloned_from_service_id": source.ID,
+		"env_vars_copied":        envVarsCopied,
+	})
+}
+
 func (h *ServiceHandler) GetService(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r)
 	id := mux.Vars(r)["id"]
@@ -779,7 +1156,7 @@ func (h *ServiceHandler) RepairServiceGitHubWebhook(w http.ResponseWriter, r *ht
 	}
 
 	services.Audit(svc.WorkspaceID, userID, "service.github_webhook.repaired", "service", svc.ID, map[string]interface{}{
-		"repo_url": svc.RepoURL,
+		"repo_url": services.RedactRepoURLCredentials(svc.RepoURL),
 		"owner":    owner,
 		"repo":     repo,
 	})

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +26,9 @@ import (
 const (
 	databaseRestoreTargetNewDatabase = "new_database"
 	databaseRestoreTargetInPlace     = "in_place"
+	databaseCloneSourceLive          = "live"
+	databaseCloneSourceBackup        = "backup"
+	databaseCloneSourcePointInTime   = "point_in_time"
 )
 
 type pointInTimeRestoreRequest struct {
@@ -32,6 +37,16 @@ type pointInTimeRestoreRequest struct {
 	RestoreTo          string `json:"restore_to"`
 	NewDatabaseName    string `json:"new_database_name"`
 	ConfirmDestructive bool   `json:"confirm_destructive"`
+}
+
+type databaseCloneRequest struct {
+	Name          string            `json:"name"`
+	Plan          string            `json:"plan"`
+	Source        string            `json:"source"`
+	BackupID      string            `json:"backup_id"`
+	TargetTime    string            `json:"target_time"`
+	Sanitize      bool              `json:"sanitize"`
+	SanitizeRules map[string]string `json:"sanitize_rules"`
 }
 
 type databaseBackupSnapshot struct {
@@ -56,6 +71,20 @@ func normalizeDatabaseRestoreTarget(raw string) (string, bool) {
 		return databaseRestoreTargetNewDatabase, true
 	case "in_place", "inplace", "in-place":
 		return databaseRestoreTargetInPlace, true
+	default:
+		return "", false
+	}
+}
+
+func normalizeDatabaseCloneSource(raw string) (string, bool) {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	switch value {
+	case "", "latest", "live":
+		return databaseCloneSourceLive, true
+	case "backup":
+		return databaseCloneSourceBackup, true
+	case "point_in_time", "point-in-time", "pointintime", "time":
+		return databaseCloneSourcePointInTime, true
 	default:
 		return "", false
 	}
@@ -138,6 +167,296 @@ func (h *DatabaseHandler) ListRestoreJobs(w http.ResponseWriter, r *http.Request
 		jobs = []models.DatabaseRestoreJob{}
 	}
 	utils.RespondJSON(w, http.StatusOK, jobs)
+}
+
+func (h *DatabaseHandler) CloneDatabase(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	source, err := models.GetManagedDatabase(id)
+	if err != nil || source == nil {
+		respondDatabaseNotFound(w, id)
+		return
+	}
+
+	userID := middleware.GetUserID(r)
+	if err := services.EnsureWorkspaceAccess(userID, source.WorkspaceID, models.RoleDeveloper); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	var req databaseCloneRequest
+	if err := decodeOptionalJSONBody(w, r, &req); err != nil {
+		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		utils.RespondValidationErrors(w, http.StatusBadRequest, []utils.ValidationIssue{{Field: "name", Message: "is required"}})
+		return
+	}
+
+	cloneSource, ok := normalizeDatabaseCloneSource(req.Source)
+	if !ok {
+		utils.RespondError(w, http.StatusBadRequest, "source must be one of live, backup, point_in_time")
+		return
+	}
+
+	backupID := strings.TrimSpace(req.BackupID)
+	targetTimeRaw := strings.TrimSpace(req.TargetTime)
+	if backupID != "" && targetTimeRaw != "" {
+		utils.RespondError(w, http.StatusBadRequest, "backup_id and target_time cannot be combined")
+		return
+	}
+	if backupID != "" {
+		cloneSource = databaseCloneSourceBackup
+	}
+	if targetTimeRaw != "" {
+		cloneSource = databaseCloneSourcePointInTime
+	}
+
+	clonePlan := strings.TrimSpace(req.Plan)
+	if clonePlan == "" {
+		clonePlan = strings.TrimSpace(source.Plan)
+	}
+	if normalized, ok := services.NormalizePlan(clonePlan); ok {
+		clonePlan = normalized
+	} else {
+		utils.RespondValidationErrors(w, http.StatusBadRequest, []utils.ValidationIssue{{Field: "plan", Message: "must be one of free, starter, standard, pro"}})
+		return
+	}
+
+	if len(req.SanitizeRules) > 0 && !req.Sanitize {
+		utils.RespondError(w, http.StatusBadRequest, "sanitize_rules requires sanitize=true")
+		return
+	}
+	if req.Sanitize {
+		if _, err := buildDatabaseSanitizationSQL(req.SanitizeRules); err != nil {
+			utils.RespondError(w, http.StatusBadRequest, "invalid sanitize_rules: "+err.Error())
+			return
+		}
+	}
+
+	var backup *databaseBackupSnapshot
+	if cloneSource != databaseCloneSourceLive {
+		switch cloneSource {
+		case databaseCloneSourceBackup:
+			if backupID != "" {
+				backup, err = backupByIDForDatabase(source.ID, backupID)
+			} else {
+				backup, err = latestCompletedBackupForDatabase(source.ID)
+			}
+		case databaseCloneSourcePointInTime:
+			targetTime, parseErr := time.Parse(time.RFC3339, targetTimeRaw)
+			if parseErr != nil {
+				utils.RespondError(w, http.StatusBadRequest, "target_time must be RFC3339")
+				return
+			}
+			backup, err = latestBackupAtOrBefore(source.ID, targetTime)
+		}
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "failed to resolve clone source")
+			return
+		}
+		if backup == nil {
+			utils.RespondJSON(w, http.StatusConflict, map[string]interface{}{
+				"error": "no completed backup available for cloning",
+				"hint":  "trigger a backup first, then retry cloning",
+			})
+			return
+		}
+		if strings.TrimSpace(backup.FilePath) == "" {
+			utils.RespondJSON(w, http.StatusConflict, map[string]interface{}{
+				"error":     "selected backup file is not available",
+				"backup_id": backup.ID,
+			})
+			return
+		}
+		if _, statErr := os.Stat(backup.FilePath); statErr != nil {
+			utils.RespondJSON(w, http.StatusConflict, map[string]interface{}{
+				"error":       "selected backup file is not available on disk",
+				"backup_id":   backup.ID,
+				"backup_path": backup.FilePath,
+			})
+			return
+		}
+	}
+
+	cloneDB, clonePassword, err := h.createRestoredDatabase(source, userID, req.Name, clonePlan)
+	if err != nil {
+		utils.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	targetID := cloneDB.ID
+	restorePoint := time.Now().UTC()
+	var backupIDForJob *string
+	var effectiveRestorePoint *time.Time
+	if backup != nil {
+		idCopy := backup.ID
+		backupIDForJob = &idCopy
+		rp := backup.RestorePoint.UTC()
+		restorePoint = rp
+		effectiveRestorePoint = &rp
+	}
+	reqBy := strings.TrimSpace(userID)
+	job := &models.DatabaseRestoreJob{
+		SourceDatabaseID:      source.ID,
+		TargetDatabaseID:      &targetID,
+		WorkspaceID:           source.WorkspaceID,
+		BackupID:              backupIDForJob,
+		TargetTime:            restorePoint,
+		EffectiveRestorePoint: effectiveRestorePoint,
+		RestoreTo:             databaseRestoreTargetNewDatabase,
+		Status:                "queued",
+		RequestedBy:           &reqBy,
+	}
+	if err := models.CreateDatabaseRestoreJob(job); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to create clone job")
+		return
+	}
+
+	if backup != nil {
+		go h.executePointInTimeRestoreJob(job.ID, source.ID, cloneDB.ID, clonePassword, backup, databaseRestoreTargetNewDatabase, userID, req.Sanitize, req.SanitizeRules)
+	} else {
+		go h.executeLiveDatabaseCloneJob(job.ID, source.ID, cloneDB.ID, clonePassword, userID, req.Sanitize, req.SanitizeRules)
+	}
+
+	services.Audit(source.WorkspaceID, userID, "database.clone.queued", "database", source.ID, map[string]interface{}{
+		"clone_job_id":       job.ID,
+		"clone_database_id":  cloneDB.ID,
+		"clone_database_name": cloneDB.Name,
+		"backup_id":          backupIDForJob,
+		"plan":               clonePlan,
+		"sanitize":           req.Sanitize,
+		"sanitize_rule_count": len(req.SanitizeRules),
+	})
+
+	response := map[string]interface{}{
+		"id":                    job.ID,
+		"status":                "queued",
+		"source":                cloneSource,
+		"source_database_id":    source.ID,
+		"clone_database_id":     cloneDB.ID,
+		"clone_database_name":   cloneDB.Name,
+		"effective_restore_point": restorePoint.Format(time.RFC3339),
+		"plan":                  clonePlan,
+		"sanitize":              req.Sanitize,
+		"clone_status_endpoint": fmt.Sprintf("/api/v1/databases/%s/clone-status", cloneDB.ID),
+	}
+	if backupIDForJob != nil {
+		response["backup_id"] = *backupIDForJob
+	}
+	utils.RespondJSON(w, http.StatusAccepted, response)
+}
+
+func (h *DatabaseHandler) GetCloneStatus(w http.ResponseWriter, r *http.Request) {
+	cloneDatabaseID := mux.Vars(r)["id"]
+	cloneDB, err := models.GetManagedDatabase(cloneDatabaseID)
+	if err != nil || cloneDB == nil {
+		respondDatabaseNotFound(w, cloneDatabaseID)
+		return
+	}
+
+	userID := middleware.GetUserID(r)
+	if err := services.EnsureWorkspaceAccess(userID, cloneDB.WorkspaceID, models.RoleViewer); err != nil {
+		utils.RespondError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	job, err := models.GetLatestDatabaseCloneJob(cloneDatabaseID)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "failed to load clone status")
+		return
+	}
+	if job == nil {
+		utils.RespondError(w, http.StatusNotFound, "clone job not found")
+		return
+	}
+
+	rawStatus := strings.ToLower(strings.TrimSpace(job.Status))
+	status := rawStatus
+	progress := 0
+	estimated := ""
+	switch rawStatus {
+	case "queued":
+		status = "in_progress"
+		progress = 10
+		estimated = "starting"
+	case "running":
+		status = "in_progress"
+		progress = 65
+		estimated = "a few minutes"
+	case "completed":
+		status = "completed"
+		progress = 100
+	case "failed":
+		status = "failed"
+		progress = 100
+	default:
+		status = "in_progress"
+		progress = 25
+	}
+
+	sourceSizeBytes := int64(0)
+	sourceSize := ""
+	if job.BackupID != nil && strings.TrimSpace(*job.BackupID) != "" {
+		if backup, backupErr := backupByIDForDatabase(job.SourceDatabaseID, *job.BackupID); backupErr == nil && backup != nil {
+			sourceSizeBytes = backup.SizeBytes
+			sourceSize = formatDatabaseCloneSize(backup.SizeBytes)
+		}
+	}
+
+	resp := map[string]interface{}{
+		"status":              status,
+		"raw_status":          rawStatus,
+		"clone_job_id":        job.ID,
+		"source_database_id":  job.SourceDatabaseID,
+		"clone_database_id":   cloneDatabaseID,
+		"progress_percent":    progress,
+		"source_size":         sourceSize,
+		"source_size_bytes":   sourceSizeBytes,
+		"backup_id":           job.BackupID,
+		"created_at":          job.CreatedAt,
+		"started_at":          job.StartedAt,
+		"finished_at":         job.FinishedAt,
+	}
+	if estimated != "" {
+		resp["estimated_remaining"] = estimated
+	}
+	if strings.TrimSpace(job.Error) != "" {
+		resp["error"] = job.Error
+	}
+
+	utils.RespondJSON(w, http.StatusOK, resp)
+}
+
+func latestCompletedBackupForDatabase(databaseID string) (*databaseBackupSnapshot, error) {
+	backups, err := listCompletedDatabaseBackups(databaseID)
+	if err != nil {
+		return nil, err
+	}
+	if len(backups) == 0 {
+		return nil, nil
+	}
+	latest := backups[len(backups)-1]
+	return &latest, nil
+}
+
+func formatDatabaseCloneSize(size int64) string {
+	if size <= 0 {
+		return ""
+	}
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	value := float64(size)
+	idx := 0
+	for value >= 1024 && idx < len(units)-1 {
+		value /= 1024
+		idx++
+	}
+	if idx == 0 {
+		return fmt.Sprintf("%d %s", size, units[idx])
+	}
+	return fmt.Sprintf("%.1f %s", value, units[idx])
 }
 
 func computeDatabaseRecoveryWindow(backups []databaseBackupSnapshot, walRetentionDays int, now time.Time, databaseStatus string) (*time.Time, *time.Time) {
@@ -368,7 +687,7 @@ func (h *DatabaseHandler) queueBackupRestore(w http.ResponseWriter, r *http.Requ
 		if newName == "" {
 			newName = defaultRestoredDatabaseName(source.Name, backup.RestorePoint)
 		}
-		restoredDB, restoredPassword, err := h.createRestoredDatabase(source, userID, newName)
+		restoredDB, restoredPassword, err := h.createRestoredDatabase(source, userID, newName, source.Plan)
 		if err != nil {
 			utils.RespondError(w, http.StatusBadRequest, err.Error())
 			return
@@ -397,7 +716,7 @@ func (h *DatabaseHandler) queueBackupRestore(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	go h.executePointInTimeRestoreJob(job.ID, source.ID, target.ID, targetPassword, backup, restoreTo, userID)
+	go h.executePointInTimeRestoreJob(job.ID, source.ID, target.ID, targetPassword, backup, restoreTo, userID, false, nil)
 
 	services.Audit(source.WorkspaceID, userID, "database.backup_restore.queued", "database", source.ID, map[string]interface{}{
 		"restore_job_id":          job.ID,
@@ -491,7 +810,7 @@ func (h *DatabaseHandler) queuePointInTimeRestore(w http.ResponseWriter, r *http
 		if newName == "" {
 			newName = defaultRestoredDatabaseName(source.Name, targetTime)
 		}
-		restoredDB, restoredPassword, err := h.createRestoredDatabase(source, userID, newName)
+		restoredDB, restoredPassword, err := h.createRestoredDatabase(source, userID, newName, source.Plan)
 		if err != nil {
 			utils.RespondError(w, http.StatusBadRequest, err.Error())
 			return
@@ -520,7 +839,7 @@ func (h *DatabaseHandler) queuePointInTimeRestore(w http.ResponseWriter, r *http
 		return
 	}
 
-	go h.executePointInTimeRestoreJob(job.ID, source.ID, target.ID, targetPassword, backup, restoreTo, userID)
+	go h.executePointInTimeRestoreJob(job.ID, source.ID, target.ID, targetPassword, backup, restoreTo, userID, false, nil)
 
 	services.Audit(source.WorkspaceID, userID, "database.point_in_time_restore.queued", "database", source.ID, map[string]interface{}{
 		"restore_job_id":          job.ID,
@@ -548,7 +867,7 @@ func (h *DatabaseHandler) queuePointInTimeRestore(w http.ResponseWriter, r *http
 	utils.RespondJSON(w, http.StatusAccepted, response)
 }
 
-func (h *DatabaseHandler) createRestoredDatabase(source *models.ManagedDatabase, userID, requestedName string) (*models.ManagedDatabase, string, error) {
+func (h *DatabaseHandler) createRestoredDatabase(source *models.ManagedDatabase, userID, requestedName, planOverride string) (*models.ManagedDatabase, string, error) {
 	if h == nil || h.Config == nil {
 		return nil, "", fmt.Errorf("database handler is not initialized")
 	}
@@ -559,8 +878,17 @@ func (h *DatabaseHandler) createRestoredDatabase(source *models.ManagedDatabase,
 	if name == "" {
 		return nil, "", fmt.Errorf("new_database_name is required for restore_to=new_database")
 	}
+	plan := strings.TrimSpace(planOverride)
+	if plan == "" {
+		plan = strings.TrimSpace(source.Plan)
+	}
+	if normalized, ok := services.NormalizePlan(plan); ok {
+		plan = normalized
+	} else {
+		return nil, "", fmt.Errorf("plan must be one of free, starter, standard, pro")
+	}
 
-	if source.Plan == services.PlanFree {
+	if plan == services.PlanFree {
 		count, err := models.CountResourcesByWorkspaceAndPlan(source.WorkspaceID, "database", services.PlanFree)
 		if err == nil && count >= 1 {
 			return nil, "", fmt.Errorf("free tier limit reached: 1 free database per workspace")
@@ -579,7 +907,7 @@ func (h *DatabaseHandler) createRestoredDatabase(source *models.ManagedDatabase,
 	restored := &models.ManagedDatabase{
 		WorkspaceID:       source.WorkspaceID,
 		Name:              name,
-		Plan:              source.Plan,
+		Plan:              plan,
 		PGVersion:         source.PGVersion,
 		Host:              "localhost",
 		Port:              5432,
@@ -724,7 +1052,347 @@ func (h *DatabaseHandler) applyBackupToManagedDatabase(db *models.ManagedDatabas
 	return nil
 }
 
-func (h *DatabaseHandler) executePointInTimeRestoreJob(jobID, sourceDatabaseID, targetDatabaseID, targetPassword string, backup *databaseBackupSnapshot, restoreTo, requestedBy string) {
+func (h *DatabaseHandler) applySanitizationRulesToManagedDatabase(db *models.ManagedDatabase, password string, rules map[string]string) error {
+	if db == nil {
+		return fmt.Errorf("missing target database")
+	}
+	if strings.TrimSpace(password) == "" {
+		return fmt.Errorf("database password is unavailable")
+	}
+
+	sanitizeSQL, err := buildDatabaseSanitizationSQL(rules)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(sanitizeSQL) == "" {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	if h.Config != nil && h.Config.Kubernetes.Enabled && strings.HasPrefix(strings.TrimSpace(db.ContainerID), "k8s:") {
+		if h.Worker == nil {
+			return fmt.Errorf("kubernetes sanitize executor unavailable")
+		}
+		kd, err := h.Worker.GetKubeDeployer()
+		if err != nil || kd == nil {
+			if err == nil {
+				err = fmt.Errorf("kube deployer not initialized")
+			}
+			return fmt.Errorf("initialize kubernetes sanitize executor: %w", err)
+		}
+		_, stderr, err := kd.RunDatabaseQuery(db, password, sanitizeSQL, 10*time.Minute, false)
+		if err != nil {
+			details := strings.TrimSpace(stderr)
+			if details == "" {
+				details = err.Error()
+			}
+			return fmt.Errorf("sanitize command failed: %s", truncateRestoreOutput(details, 1200))
+		}
+		return nil
+	}
+
+	var cmd *exec.Cmd
+	{
+		containerName := managedDatabaseRuntimeName(db.ID)
+		cmd = exec.CommandContext(ctx,
+			"docker", "exec", "-i", "-e", "PGPASSWORD="+password,
+			containerName,
+			"psql", "-v", "ON_ERROR_STOP=1", "--no-psqlrc", "-U", db.Username, "-d", db.DBName,
+		)
+	}
+
+	cmd.Stdin = strings.NewReader(sanitizeSQL)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("sanitization timed out after 10m")
+		}
+		return fmt.Errorf("sanitize command failed: %s", truncateRestoreOutput(string(out), 1200))
+	}
+
+	return nil
+}
+
+func buildDatabaseSanitizationSQL(rules map[string]string) (string, error) {
+	if len(rules) == 0 {
+		return "", nil
+	}
+
+	keys := make([]string, 0, len(rules))
+	for key := range rules {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	statements := make([]string, 0, len(keys))
+	for _, rawTarget := range keys {
+		action := strings.ToLower(strings.TrimSpace(rules[rawTarget]))
+		if action == "" {
+			continue
+		}
+		tableName, columnName, hasColumn, err := parseDatabaseSanitizeTarget(rawTarget)
+		if err != nil {
+			return "", err
+		}
+		quotedTable := quoteDatabaseSanitizeIdentifier(tableName)
+
+		if !hasColumn {
+			if action != "truncate" {
+				return "", fmt.Errorf("rule %q must use action truncate when no column is specified", strings.TrimSpace(rawTarget))
+			}
+			statements = append(statements, fmt.Sprintf("TRUNCATE TABLE %s RESTART IDENTITY CASCADE;", quotedTable))
+			continue
+		}
+
+		quotedColumn := quoteDatabaseSanitizeIdentifier(columnName)
+		switch action {
+		case "redact":
+			statements = append(statements, fmt.Sprintf("UPDATE %s SET %s = NULL;", quotedTable, quotedColumn))
+		case "mask":
+			statements = append(statements, fmt.Sprintf("UPDATE %s SET %s = CASE WHEN %s IS NULL THEN NULL ELSE regexp_replace(%s::text, '.(?=.{4})', '*', 'g') END;", quotedTable, quotedColumn, quotedColumn, quotedColumn))
+		case "faker.email":
+			statements = append(statements, fmt.Sprintf("UPDATE %s SET %s = lower('user_' || substr(md5(random()::text), 1, 12) || '@example.invalid');", quotedTable, quotedColumn))
+		default:
+			return "", fmt.Errorf("unsupported sanitize action %q for %q", action, strings.TrimSpace(rawTarget))
+		}
+	}
+
+	if len(statements) == 0 {
+		return "", nil
+	}
+	return strings.Join(statements, "\n"), nil
+}
+
+func parseDatabaseSanitizeTarget(raw string) (table string, column string, hasColumn bool, err error) {
+	parts := strings.Split(strings.TrimSpace(raw), ".")
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		return "", "", false, fmt.Errorf("invalid sanitize target %q", raw)
+	}
+	if len(parts) > 2 {
+		return "", "", false, fmt.Errorf("sanitize target %q must be table or table.column", raw)
+	}
+
+	table = strings.TrimSpace(parts[0])
+	if !isSafeDatabaseSanitizeIdentifier(table) {
+		return "", "", false, fmt.Errorf("invalid table identifier %q", table)
+	}
+
+	if len(parts) == 1 {
+		return table, "", false, nil
+	}
+
+	column = strings.TrimSpace(parts[1])
+	if !isSafeDatabaseSanitizeIdentifier(column) {
+		return "", "", false, fmt.Errorf("invalid column identifier %q", column)
+	}
+	return table, column, true, nil
+}
+
+func isSafeDatabaseSanitizeIdentifier(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for idx, r := range value {
+		if idx == 0 {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_' {
+				continue
+			}
+			return false
+		}
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func quoteDatabaseSanitizeIdentifier(value string) string {
+	return `"` + strings.ReplaceAll(strings.TrimSpace(value), `"`, `""`) + `"`
+}
+
+func (h *DatabaseHandler) applyLiveCloneBetweenManagedDatabases(source *models.ManagedDatabase, sourcePassword string, target *models.ManagedDatabase, targetPassword string) error {
+	if source == nil || target == nil {
+		return fmt.Errorf("source and target databases are required")
+	}
+	if strings.TrimSpace(sourcePassword) == "" || strings.TrimSpace(targetPassword) == "" {
+		return fmt.Errorf("database credentials are unavailable")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	if h.Config != nil && h.Config.Kubernetes.Enabled {
+		if h.Worker == nil {
+			return fmt.Errorf("kubernetes clone executor unavailable")
+		}
+		kd, err := h.Worker.GetKubeDeployer()
+		if err != nil || kd == nil {
+			if err == nil {
+				err = fmt.Errorf("kube deployer not initialized")
+			}
+			return fmt.Errorf("initialize kubernetes clone executor: %w", err)
+		}
+		if err := kd.CloneManagedDatabaseData(source, sourcePassword, target, targetPassword); err != nil {
+			return fmt.Errorf("kubernetes clone failed: %w", err)
+		}
+		return nil
+	}
+
+	sourceContainer := managedDatabaseRuntimeName(source.ID)
+	targetContainer := managedDatabaseRuntimeName(target.ID)
+	dumpCmd := exec.CommandContext(ctx,
+		"docker", "exec",
+		"-e", "PGPASSWORD="+sourcePassword,
+		sourceContainer,
+		"pg_dump", "-U", source.Username, "-d", source.DBName, "--clean", "--if-exists", "--no-owner", "--no-privileges",
+	)
+	restoreCmd := exec.CommandContext(ctx,
+		"docker", "exec", "-i",
+		"-e", "PGPASSWORD="+targetPassword,
+		targetContainer,
+		"psql", "-v", "ON_ERROR_STOP=1", "--no-psqlrc", "-U", target.Username, "-d", target.DBName,
+	)
+
+	pipe, err := dumpCmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("open dump stream: %w", err)
+	}
+	var dumpStderr bytes.Buffer
+	var restoreStderr bytes.Buffer
+	dumpCmd.Stderr = &dumpStderr
+	restoreCmd.Stdin = pipe
+	restoreCmd.Stderr = &restoreStderr
+
+	if err := restoreCmd.Start(); err != nil {
+		return fmt.Errorf("start restore stream: %w", err)
+	}
+	if err := dumpCmd.Start(); err != nil {
+		_ = restoreCmd.Process.Kill()
+		return fmt.Errorf("start dump stream: %w", err)
+	}
+
+	dumpErr := dumpCmd.Wait()
+	restoreErr := restoreCmd.Wait()
+	if dumpErr != nil {
+		msg := strings.TrimSpace(dumpStderr.String())
+		if msg == "" {
+			msg = dumpErr.Error()
+		}
+		return fmt.Errorf("pg_dump failed: %s", truncateRestoreOutput(msg, 1200))
+	}
+	if restoreErr != nil {
+		msg := strings.TrimSpace(restoreStderr.String())
+		if msg == "" {
+			msg = restoreErr.Error()
+		}
+		return fmt.Errorf("psql restore failed: %s", truncateRestoreOutput(msg, 1200))
+	}
+	return nil
+}
+
+func (h *DatabaseHandler) executeLiveDatabaseCloneJob(jobID, sourceDatabaseID, targetDatabaseID, targetPassword, requestedBy string, sanitize bool, sanitizeRules map[string]string) {
+	if h == nil || h.Config == nil {
+		_ = models.MarkDatabaseRestoreJobFailed(jobID, "database clone handler is unavailable")
+		return
+	}
+	if strings.TrimSpace(jobID) == "" {
+		return
+	}
+
+	now := time.Now().UTC()
+	targetID := strings.TrimSpace(targetDatabaseID)
+	_ = models.MarkDatabaseRestoreJobRunning(jobID, &targetID, &now)
+
+	sourceDB, err := models.GetManagedDatabase(sourceDatabaseID)
+	if err != nil || sourceDB == nil {
+		msg := "failed to load source database"
+		if err != nil {
+			msg = msg + ": " + err.Error()
+		}
+		_ = models.MarkDatabaseRestoreJobFailed(jobID, truncateRestoreOutput(msg, 1024))
+		return
+	}
+	targetDB, err := models.GetManagedDatabase(targetDatabaseID)
+	if err != nil || targetDB == nil {
+		msg := "failed to load target database"
+		if err != nil {
+			msg = msg + ": " + err.Error()
+		}
+		_ = models.MarkDatabaseRestoreJobFailed(jobID, truncateRestoreOutput(msg, 1024))
+		return
+	}
+
+	targetDB, err = h.waitForDatabaseReady(targetDatabaseID, 10*time.Minute)
+	if err != nil {
+		_ = models.MarkDatabaseRestoreJobFailed(jobID, truncateRestoreOutput(err.Error(), 1024))
+		_ = models.UpdateManagedDatabaseStatus(targetDatabaseID, "restore_failed", targetDB.ContainerID)
+		return
+	}
+
+	if strings.TrimSpace(targetPassword) == "" {
+		if strings.TrimSpace(targetDB.EncryptedPassword) == "" {
+			_ = models.MarkDatabaseRestoreJobFailed(jobID, "target database credentials are unavailable")
+			return
+		}
+		decrypted, decErr := utils.Decrypt(targetDB.EncryptedPassword, h.Config.Crypto.EncryptionKey)
+		if decErr != nil || strings.TrimSpace(decrypted) == "" {
+			_ = models.MarkDatabaseRestoreJobFailed(jobID, "failed to decrypt target database credentials")
+			return
+		}
+		targetPassword = decrypted
+	}
+
+	if strings.TrimSpace(sourceDB.EncryptedPassword) == "" {
+		_ = models.MarkDatabaseRestoreJobFailed(jobID, "source database credentials are unavailable")
+		return
+	}
+	sourcePassword, decErr := utils.Decrypt(sourceDB.EncryptedPassword, h.Config.Crypto.EncryptionKey)
+	if decErr != nil || strings.TrimSpace(sourcePassword) == "" {
+		_ = models.MarkDatabaseRestoreJobFailed(jobID, "failed to decrypt source database credentials")
+		return
+	}
+
+	_ = models.UpdateManagedDatabaseStatus(targetDB.ID, "restoring", targetDB.ContainerID)
+	if err := h.applyLiveCloneBetweenManagedDatabases(sourceDB, sourcePassword, targetDB, targetPassword); err != nil {
+		_ = models.MarkDatabaseRestoreJobFailed(jobID, truncateRestoreOutput(err.Error(), 1024))
+		_ = models.UpdateManagedDatabaseStatus(targetDB.ID, "restore_failed", targetDB.ContainerID)
+		services.Audit(targetDB.WorkspaceID, requestedBy, "database.clone.failed", "database", sourceDatabaseID, map[string]interface{}{
+			"clone_job_id":       jobID,
+			"target_database_id": targetDB.ID,
+			"error":              truncateRestoreOutput(err.Error(), 1024),
+		})
+		return
+	}
+	if sanitize {
+		if err := h.applySanitizationRulesToManagedDatabase(targetDB, targetPassword, sanitizeRules); err != nil {
+			_ = models.MarkDatabaseRestoreJobFailed(jobID, truncateRestoreOutput(err.Error(), 1024))
+			_ = models.UpdateManagedDatabaseStatus(targetDB.ID, "restore_failed", targetDB.ContainerID)
+			services.Audit(targetDB.WorkspaceID, requestedBy, "database.clone.failed", "database", sourceDatabaseID, map[string]interface{}{
+				"clone_job_id":       jobID,
+				"target_database_id": targetDB.ID,
+				"error":              truncateRestoreOutput(err.Error(), 1024),
+			})
+			return
+		}
+	}
+
+	_ = models.UpdateManagedDatabaseStatus(targetDB.ID, "available", targetDB.ContainerID)
+	_ = models.MarkDatabaseRestoreJobCompleted(jobID)
+	h.syncDatabaseLinks(targetDB.ID)
+
+	services.Audit(targetDB.WorkspaceID, requestedBy, "database.clone.completed", "database", sourceDatabaseID, map[string]interface{}{
+		"clone_job_id":       jobID,
+		"target_database_id": targetDB.ID,
+	})
+
+	log.Printf("database live clone job completed source=%s target=%s job=%s", sourceDatabaseID, targetDatabaseID, jobID)
+}
+
+func (h *DatabaseHandler) executePointInTimeRestoreJob(jobID, sourceDatabaseID, targetDatabaseID, targetPassword string, backup *databaseBackupSnapshot, restoreTo, requestedBy string, sanitize bool, sanitizeRules map[string]string) {
 	if h == nil || h.Config == nil {
 		_ = models.MarkDatabaseRestoreJobFailed(jobID, "database restore handler is unavailable")
 		return
@@ -780,6 +1448,19 @@ func (h *DatabaseHandler) executePointInTimeRestoreJob(jobID, sourceDatabaseID, 
 			"error":              truncateRestoreOutput(err.Error(), 1024),
 		})
 		return
+	}
+	if sanitize {
+		if err := h.applySanitizationRulesToManagedDatabase(targetDB, targetPassword, sanitizeRules); err != nil {
+			_ = models.MarkDatabaseRestoreJobFailed(jobID, truncateRestoreOutput(err.Error(), 1024))
+			_ = models.UpdateManagedDatabaseStatus(targetDB.ID, "restore_failed", targetDB.ContainerID)
+			services.Audit(targetDB.WorkspaceID, requestedBy, "database.point_in_time_restore.failed", "database", sourceDatabaseID, map[string]interface{}{
+				"restore_job_id":     jobID,
+				"target_database_id": targetDB.ID,
+				"restore_to":         restoreTo,
+				"error":              truncateRestoreOutput(err.Error(), 1024),
+			})
+			return
+		}
 	}
 
 	_ = models.UpdateManagedDatabaseStatus(targetDB.ID, "available", targetDB.ContainerID)

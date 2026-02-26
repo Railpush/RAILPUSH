@@ -208,3 +208,79 @@ func ListDatabaseRestoreJobs(databaseID string, limit int) ([]DatabaseRestoreJob
 	}
 	return out, nil
 }
+
+func GetLatestDatabaseCloneJob(targetDatabaseID string) (*DatabaseRestoreJob, error) {
+	targetDatabaseID = strings.TrimSpace(targetDatabaseID)
+	if targetDatabaseID == "" {
+		return nil, nil
+	}
+
+	job := &DatabaseRestoreJob{}
+	var targetID, backupID, requestedBy string
+	var effectiveRestorePoint sql.NullTime
+	var startedAt sql.NullTime
+	var finishedAt sql.NullTime
+
+	err := database.DB.QueryRow(
+		`SELECT
+			id,
+			COALESCE(source_database_id::text, ''),
+			COALESCE(target_database_id::text, ''),
+			COALESCE(workspace_id::text, ''),
+			COALESCE(backup_id::text, ''),
+			target_time,
+			effective_restore_point,
+			COALESCE(restore_to, ''),
+			COALESCE(status, ''),
+			COALESCE(error, ''),
+			COALESCE(requested_by::text, ''),
+			created_at,
+			started_at,
+			finished_at
+		 FROM database_restore_jobs
+		 WHERE target_database_id=$1
+		   AND restore_to='new_database'
+		 ORDER BY created_at DESC
+		 LIMIT 1`,
+		targetDatabaseID,
+	).Scan(
+		&job.ID,
+		&job.SourceDatabaseID,
+		&targetID,
+		&job.WorkspaceID,
+		&backupID,
+		&job.TargetTime,
+		&effectiveRestorePoint,
+		&job.RestoreTo,
+		&job.Status,
+		&job.Error,
+		&requestedBy,
+		&job.CreatedAt,
+		&startedAt,
+		&finishedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	job.TargetDatabaseID = dbRestoreStringPtr(targetID)
+	job.BackupID = dbRestoreStringPtr(backupID)
+	job.RequestedBy = dbRestoreStringPtr(requestedBy)
+	if effectiveRestorePoint.Valid {
+		t := effectiveRestorePoint.Time
+		job.EffectiveRestorePoint = &t
+	}
+	if startedAt.Valid {
+		t := startedAt.Time
+		job.StartedAt = &t
+	}
+	if finishedAt.Valid {
+		t := finishedAt.Time
+		job.FinishedAt = &t
+	}
+
+	return job, nil
+}

@@ -296,6 +296,7 @@ func (h *OpsDashboardHandler) ListServices(w http.ResponseWriter, r *http.Reques
 		); err != nil {
 			continue
 		}
+		it.RepoURL = services.RedactRepoURLCredentials(it.RepoURL)
 		out = append(out, it)
 	}
 	if out == nil {

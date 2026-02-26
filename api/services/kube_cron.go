@@ -138,6 +138,7 @@ func (k *KubeDeployer) DeployCronJob(deployID string, svc *models.Service, image
 	}
 
 	applyTenantSecurityContext(&cronJob.Spec.JobTemplate.Spec.Template.Spec, &cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0], k.strictTenantPodSecurity())
+	k.applyTenantSandboxRuntime(&cronJob.Spec.JobTemplate.Spec.Template.Spec)
 
 	if existing, err := k.Client.BatchV1().CronJobs(ns).Get(ctx, name, metav1.GetOptions{}); err == nil && existing != nil {
 		cronJob.ResourceVersion = existing.ResourceVersion

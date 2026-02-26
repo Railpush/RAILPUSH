@@ -563,12 +563,166 @@ func (k *KubeDeployer) ensureTenantWorkspaceScopedPolicies(ctx context.Context, 
 	return nil
 }
 
+// ensureTenantNetpolServiceEgress creates a default egress policy for tenant service pods.
+// It allows:
+//   - DNS resolution (kube-dns in kube-system, port 53)
+//   - Same-namespace pod communication (workspace service-to-service, service-to-database)
+//   - Internet access (external APIs, CDNs, webhooks, etc.)
+//
+// It blocks:
+//   - Cross-namespace pod traffic (10.42.0.0/16 pod CIDR, except same-namespace via podSelector)
+//   - Kubernetes API server (10.43.0.1/32)
+//   - Link-local / cloud metadata endpoints (169.254.0.0/16)
+//
+// Customer impact: none. Legitimate traffic patterns (DNS, internet, same-workspace comms) are preserved.
+func (k *KubeDeployer) ensureTenantNetpolServiceEgress(ctx context.Context) error {
+	ns := k.namespace()
+	udp := corev1.ProtocolUDP
+	tcp := corev1.ProtocolTCP
+	dnsPort := intstr.FromInt(53)
+
+	np := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "rp-tenant-egress",
+			Namespace: ns,
+			Labels: map[string]string{
+				rpLabelManagedBy: rpManagedByValue,
+				rpLabelComponent: "tenant-isolation",
+			},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					rpLabelManagedBy: rpManagedByValue,
+					rpLabelComponent: "service",
+				},
+			},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+			Egress: []networkingv1.NetworkPolicyEgressRule{
+				// 1. Allow DNS resolution via kube-dns.
+				{
+					To: []networkingv1.NetworkPolicyPeer{
+						{
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"kubernetes.io/metadata.name": "kube-system",
+								},
+							},
+							PodSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"k8s-app": "kube-dns",
+								},
+							},
+						},
+					},
+					Ports: []networkingv1.NetworkPolicyPort{
+						{Port: &dnsPort, Protocol: &udp},
+						{Port: &dnsPort, Protocol: &tcp},
+					},
+				},
+				// 2. Allow same-namespace pod communication (workspace isolation handles granularity).
+				{
+					To: []networkingv1.NetworkPolicyPeer{
+						{PodSelector: &metav1.LabelSelector{}},
+					},
+				},
+				// 3. Allow internet access; block cluster-internal pod CIDR, k8s API, and metadata.
+				{
+					To: []networkingv1.NetworkPolicyPeer{
+						{
+							IPBlock: &networkingv1.IPBlock{
+								CIDR: "0.0.0.0/0",
+								Except: []string{
+									"10.42.0.0/16",  // pod CIDR — blocks cross-namespace pod access
+									"10.43.0.1/32",  // k8s API server
+									"169.254.0.0/16", // link-local / metadata
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	return k.upsertNetworkPolicy(ctx, ns, np)
+}
+
+// ensureTenantNetpolBuildEgress creates a default egress policy for build pods.
+// Build pods need DNS, internet (git clone, npm/pip/go downloads), and the Docker registry.
+// They do NOT need same-namespace pod communication or k8s API access.
+func (k *KubeDeployer) ensureTenantNetpolBuildEgress(ctx context.Context) error {
+	ns := k.namespace()
+	udp := corev1.ProtocolUDP
+	tcp := corev1.ProtocolTCP
+	dnsPort := intstr.FromInt(53)
+
+	np := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "rp-build-egress",
+			Namespace: ns,
+			Labels: map[string]string{
+				rpLabelManagedBy: rpManagedByValue,
+				rpLabelComponent: "tenant-isolation",
+			},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					rpLabelManagedBy: rpManagedByValue,
+					rpLabelComponent: "build",
+				},
+			},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+			Egress: []networkingv1.NetworkPolicyEgressRule{
+				// 1. Allow DNS.
+				{
+					To: []networkingv1.NetworkPolicyPeer{
+						{
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"kubernetes.io/metadata.name": "kube-system",
+								},
+							},
+							PodSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"k8s-app": "kube-dns",
+								},
+							},
+						},
+					},
+					Ports: []networkingv1.NetworkPolicyPort{
+						{Port: &dnsPort, Protocol: &udp},
+						{Port: &dnsPort, Protocol: &tcp},
+					},
+				},
+				// 2. Allow internet (git repos, package registries, Docker registry).
+				// The Docker registry at 91.98.183.19:5000 is a node public IP, not in pod/service CIDRs.
+				{
+					To: []networkingv1.NetworkPolicyPeer{
+						{
+							IPBlock: &networkingv1.IPBlock{
+								CIDR: "0.0.0.0/0",
+								Except: []string{
+									"10.42.0.0/16",  // pod CIDR
+									"10.43.0.0/16",  // service CIDR (builds don't need ClusterIP access)
+									"169.254.0.0/16", // link-local / metadata
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	return k.upsertNetworkPolicy(ctx, ns, np)
+}
+
 // EnsureTenantNetworkPolicies ensures:
 // - per-workspace default-deny ingress (only allow from same workspace)
 // - global allow from ingress-nginx controller -> service pods
+// - egress restrictions blocking k8s API, cross-namespace, and metadata access
 //
-// This is the minimal network-level tenant isolation model while keeping all workloads
-// in a shared namespace.
+// This is the network-level tenant isolation model for workloads in a shared namespace.
 func (k *KubeDeployer) EnsureTenantNetworkPolicies(ctx context.Context, workspaceID string) error {
 	if k == nil || k.Client == nil {
 		return fmt.Errorf("kube deployer not initialized")
@@ -582,6 +736,12 @@ func (k *KubeDeployer) EnsureTenantNetworkPolicies(ctx context.Context, workspac
 		return err
 	}
 	if err := k.ensureTenantNetpolDatabaseExternal(ctx); err != nil {
+		return err
+	}
+	if err := k.ensureTenantNetpolServiceEgress(ctx); err != nil {
+		return err
+	}
+	if err := k.ensureTenantNetpolBuildEgress(ctx); err != nil {
 		return err
 	}
 	return k.ensureTenantWorkspaceScopedPolicies(ctx, workspaceID)
@@ -602,6 +762,12 @@ func (k *KubeDeployer) ReconcileTenantNetworkPolicies(ctx context.Context) error
 		return err
 	}
 	if err := k.ensureTenantNetpolDatabaseExternal(ctx); err != nil {
+		return err
+	}
+	if err := k.ensureTenantNetpolServiceEgress(ctx); err != nil {
+		return err
+	}
+	if err := k.ensureTenantNetpolBuildEgress(ctx); err != nil {
 		return err
 	}
 

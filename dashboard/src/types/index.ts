@@ -169,6 +169,13 @@ export interface ManagedDatabase {
   external_url: string;
   external_psql_command?: string;
   external_access?: 'enabled' | 'provisioning' | 'disabled';
+  encryption_at_rest?: boolean | null;
+  encryption_status?: 'enabled' | 'disabled' | 'unknown';
+  encryption_algorithm?: string;
+  key_management?: string;
+  encryption_scope?: string;
+  encryption_evidence?: string;
+  storage_class?: string;
   status: string;
   ha_enabled?: boolean;
   ha_strategy?: string;
@@ -188,6 +195,13 @@ export interface ManagedKeyValue {
   internal_url: string;
   external_url: string;
   maxmemory_policy: string;
+  encryption_at_rest?: boolean | null;
+  encryption_status?: 'enabled' | 'disabled' | 'unknown';
+  encryption_algorithm?: string;
+  key_management?: string;
+  encryption_scope?: string;
+  encryption_evidence?: string;
+  storage_class?: string;
   status: string;
   created_at: string;
 }

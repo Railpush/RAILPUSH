@@ -98,6 +98,8 @@ export const services = {
   getGitHubWebhookStatus: (id: string) => request<ServiceGitHubWebhookStatus>(`/services/${id}/github/webhook/status`),
   repairGitHubWebhook: (id: string) => request<ServiceGitHubWebhookStatus>(`/services/${id}/github/webhook/repair`, { method: 'POST' }),
   create: (data: Partial<Service>) => request<Service>('/services', { method: 'POST', body: JSON.stringify(data) }),
+  clone: (id: string, data: { name: string; include_env_vars?: boolean; overrides?: Record<string, unknown> }) =>
+    request<{ service: Service; cloned_from_service_id: string; env_vars_copied: number }>(`/services/${id}/clone`, { method: 'POST', body: JSON.stringify(data) }),
   update: (id: string, data: Partial<Service>) => request<Service>(`/services/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (id: string, options?: { hardDelete?: boolean }) => confirmedDelete(`/services/${id}`, options),
   restore: (id: string) => request<{ status: string }>(`/services/${id}/restore`, { method: 'POST' }),
@@ -151,7 +153,8 @@ export const deploys = {
 
 // AI Fix
 export const aiFix = {
-  start: (serviceId: string) => request<AIFixSession>(`/services/${serviceId}/ai-fix`, { method: 'POST' }),
+  start: (serviceId: string, data?: { hint?: string; preview_only?: boolean }) =>
+    request<AIFixSession | { status: 'preview'; summary: string; dockerfile_diff?: string; changes?: Record<string, unknown>; can_apply?: boolean }>(`/services/${serviceId}/ai-fix`, { method: 'POST', body: JSON.stringify(data || {}) }),
   status: (serviceId: string) => request<{ active: boolean; session?: AIFixSession; status?: string; current_attempt?: number; max_attempts?: number; last_ai_summary?: string; last_deploy_status?: string }>(`/services/${serviceId}/ai-fix/status`),
   diagnose: (serviceId: string, deployId?: string) =>
     request<AIFixDiagnosis>(`/services/${serviceId}/ai-fix/diagnosis${deployId ? `?deploy_id=${encodeURIComponent(deployId)}` : ''}`),
@@ -190,6 +193,16 @@ export const databases = {
   update: (id: string, data: Partial<ManagedDatabase>) => request<ManagedDatabase>(`/databases/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (id: string, options?: { hardDelete?: boolean }) => confirmedDelete(`/databases/${id}`, options),
   restore: (id: string) => request<{ status: string }>(`/databases/${id}/restore`, { method: 'POST' }),
+  clone: (id: string, data: {
+    name: string;
+    plan?: 'free' | 'starter' | 'standard' | 'pro';
+    source?: 'live' | 'backup' | 'point_in_time';
+    backup_id?: string;
+    target_time?: string;
+    sanitize?: boolean;
+    sanitize_rules?: Record<string, string>;
+  }) => request<Record<string, unknown>>(`/databases/${id}/clone`, { method: 'POST', body: JSON.stringify(data) }),
+  cloneStatus: (id: string) => request<Record<string, unknown>>(`/databases/${id}/clone-status`),
   listBackups: (id: string) => request<Backup[]>(`/databases/${id}/backups`),
   triggerBackup: (id: string) => request<Backup>(`/databases/${id}/backups`, { method: 'POST' }),
 };

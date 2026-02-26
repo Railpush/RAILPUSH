@@ -131,6 +131,11 @@ type KubernetesConfig struct {
 	// "strict" (default): drop ALL caps, runAsNonRoot, readOnlyRootFilesystem + writable /tmp.
 	// "compat": keep compatibility-first behavior for legacy images.
 	TenantPodSecurityProfile string
+	// TenantSandboxRuntime sets the RuntimeClassName for tenant pods (services, one-off jobs, cron jobs).
+	// Use "gvisor" for gVisor sandbox isolation (requires runsc installed on nodes).
+	// Empty string means use the node's default container runtime.
+	// Build pods (kaniko) always use the default runtime regardless of this setting.
+	TenantSandboxRuntime string
 }
 
 type WorkerConfig struct {
@@ -276,6 +281,7 @@ func Load() *Config {
 			StorageClass:             getEnv("KUBE_STORAGE_CLASS", "longhorn-r2"),
 			CustomDomainIssuer:       getEnv("KUBE_CUSTOM_DOMAIN_ISSUER", "letsencrypt-http01-prod"),
 			TenantPodSecurityProfile: strings.ToLower(strings.TrimSpace(getEnv("KUBE_TENANT_POD_SECURITY_PROFILE", "strict"))),
+			TenantSandboxRuntime:    strings.TrimSpace(getEnv("KUBE_TENANT_SANDBOX_RUNTIME", "")),
 		},
 		Worker: WorkerConfig{
 			Enabled:        getEnvBool("WORKER_ENABLED", true),

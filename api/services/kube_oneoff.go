@@ -216,6 +216,7 @@ func (k *KubeDeployer) RunOneOffJob(oneOffJobID string, svc *models.Service, com
 	}
 
 	applyTenantSecurityContext(&job.Spec.Template.Spec, &job.Spec.Template.Spec.Containers[0], k.strictTenantPodSecurity())
+	k.applyTenantSandboxRuntime(&job.Spec.Template.Spec)
 
 	if _, err := k.Client.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		if apierrors.IsAlreadyExists(err) {
@@ -388,6 +389,7 @@ func (k *KubeDeployer) RunPreDeployJob(deployID string, svc *models.Service, ima
 	}
 
 	applyTenantSecurityContext(&job.Spec.Template.Spec, &job.Spec.Template.Spec.Containers[0], k.strictTenantPodSecurity())
+	k.applyTenantSandboxRuntime(&job.Spec.Template.Spec)
 
 	if _, err := k.Client.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		if apierrors.IsAlreadyExists(err) {

@@ -29,12 +29,15 @@ data:
   # strict: runAsNonRoot + drop ALL caps + readOnlyRootFilesystem (+ writable /tmp)
   # compat: seccomp + drop dangerous caps + no K8s API access (writable rootfs, app default UID)
   KUBE_TENANT_POD_SECURITY_PROFILE: "compat"
+  # gVisor sandbox runtime for tenant pods (services, one-off jobs, cron jobs).
+  # Build pods (kaniko) always use the default runtime regardless of this setting.
+  KUBE_TENANT_SANDBOX_RUNTIME: "gvisor"
 
   DB_HOST: "railpush-postgres"
   DB_PORT: "5432"
   DB_NAME: "railpush"
   DB_USER: "railpush"
-  DB_SSLMODE: "prefer"
+  DB_SSLMODE: "require"
 
   # Persist RailPush state (certs/backups/builds).
   DATA_DIR: "/var/lib/railpush"

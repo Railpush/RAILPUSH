@@ -2,4 +2,15 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: railpush
-
+  labels:
+    # Enforce baseline: blocks hostNetwork, hostPID, privileged, hostPath, etc.
+    # Safe for all tenant workloads (services, builds, databases, one-off jobs).
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    # Audit + warn restricted: surfaces pods that violate the stricter "restricted"
+    # profile (e.g. running as root, writable rootfs) in audit logs and API warnings
+    # without blocking them. This gives visibility for future hardening.
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest

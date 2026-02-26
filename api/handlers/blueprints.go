@@ -53,6 +53,9 @@ func (h *BlueprintHandler) ListBlueprints(w http.ResponseWriter, r *http.Request
 	if bps == nil {
 		bps = []models.Blueprint{}
 	}
+	for i := range bps {
+		bps[i].RepoURL = services.RedactRepoURLCredentials(bps[i].RepoURL)
+	}
 	utils.RespondJSON(w, http.StatusOK, bps)
 }
 
@@ -68,6 +71,10 @@ func (h *BlueprintHandler) CreateBlueprint(w http.ResponseWriter, r *http.Reques
 	bp.FilePath = strings.TrimSpace(bp.FilePath)
 	if bp.Name == "" || bp.RepoURL == "" {
 		utils.RespondError(w, http.StatusBadRequest, "name and repo_url are required")
+		return
+	}
+	if services.RepoURLHasEmbeddedCredentials(bp.RepoURL) {
+		utils.RespondError(w, http.StatusBadRequest, "repo_url must not include embedded credentials; connect your GitHub account instead")
 		return
 	}
 	if bp.Branch == "" {
@@ -99,6 +106,7 @@ func (h *BlueprintHandler) CreateBlueprint(w http.ResponseWriter, r *http.Reques
 	ghToken := h.resolveGitHubToken(bp.WorkspaceID)
 	go h.doSync(&bp, ghToken)
 
+	bp.RepoURL = services.RedactRepoURLCredentials(bp.RepoURL)
 	utils.RespondJSON(w, http.StatusCreated, bp)
 }
 
@@ -139,6 +147,7 @@ func (h *BlueprintHandler) GetBlueprint(w http.ResponseWriter, r *http.Request) 
 	for i, r := range resources {
 		enriched[i] = blueprintResourceResponse{BlueprintResource: r, Status: blueprintResourceStatus(r)}
 	}
+	bp.RepoURL = services.RedactRepoURLCredentials(bp.RepoURL)
 	utils.RespondJSON(w, http.StatusOK, blueprintDetailResponse{Blueprint: *bp, Resources: enriched})
 }
 
@@ -1007,7 +1016,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		fail("worker not initialized")
 		return
 	}
-	logLine("Cloning repository " + bp.RepoURL + " (branch: " + bp.Branch + ")...")
+	logLine("Cloning repository " + services.RedactRepoURLCredentials(bp.RepoURL) + " (branch: " + bp.Branch + ")...")
 	if err := h.Worker.Builder.CloneRepo(bp.RepoURL, bp.Branch, tmpDir, ghToken); err != nil {
 		fail("clone failed — check repository URL and branch")
 		return
@@ -1265,7 +1274,7 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 				desiredRepo = strings.TrimSpace(bp.RepoURL)
 			}
 			if strings.TrimSpace(svc.RepoURL) != "" && desiredRepo != "" && strings.TrimSpace(svc.RepoURL) != desiredRepo {
-				fail(fmt.Sprintf("service name conflict: %q already exists in this workspace (repo=%q). Blueprint wants repo=%q. Rename the service in %s or rename/delete the existing service.", name, strings.TrimSpace(svc.RepoURL), desiredRepo, displayBlueprintPath))
+				fail(fmt.Sprintf("service name conflict: %q already exists in this workspace (repo=%q). Blueprint wants repo=%q. Rename the service in %s or rename/delete the existing service.", name, services.RedactRepoURLCredentials(strings.TrimSpace(svc.RepoURL)), services.RedactRepoURLCredentials(desiredRepo), displayBlueprintPath))
 				return
 			}
 			if strings.TrimSpace(svc.Type) != "" && strings.TrimSpace(desiredType) != "" && strings.TrimSpace(svc.Type) != strings.TrimSpace(desiredType) {
@@ -1542,6 +1551,10 @@ func (h *BlueprintHandler) doSync(bp *models.Blueprint, ghToken string) {
 		}
 		if svc.RepoURL == "" {
 			svc.RepoURL = bp.RepoURL
+		}
+		if strings.TrimSpace(svc.ID) == "" && services.RepoURLHasEmbeddedCredentials(svc.RepoURL) {
+			fail("service repo_url must not include embedded credentials; connect your GitHub account instead")
+			return
 		}
 		if svc.Port == 0 {
 			svc.Port = 10000

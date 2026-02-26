@@ -289,6 +289,8 @@ function AccessControlTab({ db }: { db: ManagedDatabase }) {
   const externalStatus = db.external_access || (db.external_url ? 'enabled' : 'disabled');
   const externalEnabled = externalStatus === 'enabled' && Boolean(db.external_url);
   const externalProvisioning = externalStatus === 'provisioning' && !externalEnabled;
+  const encryptionStatus = db.encryption_status || (db.encryption_at_rest === true ? 'enabled' : db.encryption_at_rest === false ? 'disabled' : 'unknown');
+  const encryptionEnabled = encryptionStatus === 'enabled';
 
   return (
     <div className="space-y-6">
@@ -317,6 +319,19 @@ function AccessControlTab({ db }: { db: ManagedDatabase }) {
               </div>
             </div>
             <StatusBadge status={externalEnabled ? 'live' : 'created'} pulse={externalProvisioning} />
+          </div>
+          <div className="flex items-center justify-between p-3 bg-surface-tertiary rounded-lg">
+            <div>
+              <div className="text-sm font-medium text-content-primary">Encryption at Rest</div>
+              <div className="text-xs text-content-tertiary mt-0.5">
+                {encryptionStatus === 'enabled'
+                  ? `Enabled (${db.encryption_algorithm || 'platform default'}; ${db.key_management || 'platform-managed'})`
+                  : encryptionStatus === 'disabled'
+                    ? `Not configured at storage class level${db.storage_class ? ` (${db.storage_class})` : ''}`
+                    : 'Encryption posture could not be determined from current storage-class metadata'}
+              </div>
+            </div>
+            <StatusBadge status={encryptionEnabled ? 'live' : 'created'} pulse={false} />
           </div>
         </div>
       </Card>

@@ -206,6 +206,10 @@ func (h *TemplateHandler) DeployTemplate(w http.ResponseWriter, r *http.Request)
 		utils.RespondError(w, http.StatusBadRequest, "repo_url is required for this template")
 		return
 	}
+	if services.RepoURLHasEmbeddedCredentials(req.RepoURL) {
+		utils.RespondError(w, http.StatusBadRequest, "repo_url must not include embedded credentials; connect your GitHub account instead")
+		return
+	}
 
 	plan := strings.TrimSpace(strings.ToLower(req.Plan))
 	if plan == "" {
@@ -306,10 +310,22 @@ func (h *TemplateHandler) DeployTemplate(w http.ResponseWriter, r *http.Request)
 	utils.RespondJSON(w, http.StatusCreated, map[string]interface{}{
 		"status":    "ok",
 		"template":  tpl,
-		"services":  createdServices,
+		"services":  sanitizeServiceRepoURLs(createdServices),
 		"databases": createdDatabases,
 		"keyvalue":  createdKeyValues,
 	})
+}
+
+func sanitizeServiceRepoURLs(items []models.Service) []models.Service {
+	out := make([]models.Service, 0, len(items))
+	for _, svc := range items {
+		svc.RepoURL = services.RedactRepoURLCredentials(svc.RepoURL)
+		out = append(out, svc)
+	}
+	if out == nil {
+		out = []models.Service{}
+	}
+	return out
 }
 
 func (h *TemplateHandler) createTemplateDatabase(workspaceID, name, plan string) (*models.ManagedDatabase, string, error) {

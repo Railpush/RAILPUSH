@@ -42,6 +42,9 @@ func (h *PreviewEnvironmentHandler) ListPreviewEnvironments(w http.ResponseWrite
 	if items == nil {
 		items = []models.PreviewEnvironment{}
 	}
+	for i := range items {
+		items[i].Repository = services.RedactRepoURLCredentials(items[i].Repository)
+	}
 	utils.RespondJSON(w, http.StatusOK, items)
 }
 
@@ -228,7 +231,7 @@ func (h *PreviewEnvironmentHandler) CreatePreviewEnvironment(w http.ResponseWrit
 	pe := &models.PreviewEnvironment{
 		WorkspaceID: workspaceID,
 		ServiceID:   &previewSvc.ID,
-		Repository:  baseSvc.RepoURL,
+		Repository:  services.RedactRepoURLCredentials(baseSvc.RepoURL),
 		PRNumber:    req.PRNumber,
 		PRTitle:     req.PRTitle,
 		PRBranch:    req.PRBranch,
@@ -250,10 +253,11 @@ func (h *PreviewEnvironmentHandler) CreatePreviewEnvironment(w http.ResponseWrit
 
 	services.Audit(workspaceID, userID, "preview_environment.created", "preview_environment", pe.ID, map[string]interface{}{
 		"service_id": previewSvc.ID,
-		"repository": pe.Repository,
+		"repository": services.RedactRepoURLCredentials(pe.Repository),
 		"pr_number":  pe.PRNumber,
 	})
 
+	pe.Repository = services.RedactRepoURLCredentials(pe.Repository)
 	utils.RespondJSON(w, http.StatusCreated, pe)
 }
 
@@ -397,6 +401,7 @@ func (h *PreviewEnvironmentHandler) UpdatePreviewEnvironment(w http.ResponseWrit
 		"service_id": previewSvc.ID,
 	})
 
+	pe.Repository = services.RedactRepoURLCredentials(pe.Repository)
 	utils.RespondJSON(w, http.StatusOK, pe)
 }
 

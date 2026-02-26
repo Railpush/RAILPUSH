@@ -17,6 +17,7 @@ import (
 )
 
 const maxWorkspaceNotificationRecipients = 50
+const maxWorkspaceNotificationAuditFilters = 100
 
 type workspaceNotificationChannelsResponse struct {
 	WorkspaceID              string     `json:"workspace_id"`
@@ -24,6 +25,7 @@ type workspaceNotificationChannelsResponse struct {
 	DiscordWebhookConfigured bool       `json:"discord_webhook_configured"`
 	EmailRecipients          []string   `json:"email_recipients"`
 	DeployEvents             []string   `json:"deploy_events"`
+	AuditEvents              []string   `json:"audit_events"`
 	CreatedAt                *time.Time `json:"created_at,omitempty"`
 	UpdatedAt                *time.Time `json:"updated_at,omitempty"`
 }
@@ -51,6 +53,7 @@ func (h *WorkspaceHandler) GetNotificationChannels(w http.ResponseWriter, r *htt
 			WorkspaceID:     workspaceID,
 			EmailRecipients: []string{},
 			DeployEvents:    models.DefaultWorkspaceNotificationDeployEvents(),
+			AuditEvents:     models.DefaultWorkspaceNotificationAuditEvents(),
 		}
 	}
 
@@ -75,12 +78,13 @@ func (h *WorkspaceHandler) UpdateNotificationChannels(w http.ResponseWriter, r *
 		DiscordWebhookURL *string   `json:"discord_webhook_url"`
 		EmailRecipients   *[]string `json:"email_recipients"`
 		DeployEvents      *[]string `json:"deploy_events"`
+		AuditEvents       *[]string `json:"audit_events"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128*1024)).Decode(&req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.SlackWebhookURL == nil && req.DiscordWebhookURL == nil && req.EmailRecipients == nil && req.DeployEvents == nil {
+	if req.SlackWebhookURL == nil && req.DiscordWebhookURL == nil && req.EmailRecipients == nil && req.DeployEvents == nil && req.AuditEvents == nil {
 		utils.RespondError(w, http.StatusBadRequest, "at least one notification field must be provided")
 		return
 	}
@@ -95,6 +99,7 @@ func (h *WorkspaceHandler) UpdateNotificationChannels(w http.ResponseWriter, r *
 			WorkspaceID:     workspaceID,
 			EmailRecipients: []string{},
 			DeployEvents:    models.DefaultWorkspaceNotificationDeployEvents(),
+			AuditEvents:     models.DefaultWorkspaceNotificationAuditEvents(),
 		}
 	}
 
@@ -134,6 +139,14 @@ func (h *WorkspaceHandler) UpdateNotificationChannels(w http.ResponseWriter, r *
 		}
 		cfg.DeployEvents = events
 	}
+	if req.AuditEvents != nil {
+		events, err := parseWorkspaceNotificationAuditEvents(*req.AuditEvents)
+		if err != nil {
+			utils.RespondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		cfg.AuditEvents = events
+	}
 
 	if err := models.UpsertWorkspaceNotificationChannels(cfg); err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to update notification channels")
@@ -145,6 +158,7 @@ func (h *WorkspaceHandler) UpdateNotificationChannels(w http.ResponseWriter, r *
 		"discord_webhook_configured": strings.TrimSpace(cfg.DiscordWebhookURL) != "",
 		"email_recipient_count":      len(cfg.EmailRecipients),
 		"deploy_events":              cfg.DeployEvents,
+		"audit_events":               cfg.AuditEvents,
 	})
 
 	utils.RespondJSON(w, http.StatusOK, workspaceNotificationChannelsResponseFromModel(cfg))
@@ -157,12 +171,16 @@ func workspaceNotificationChannelsResponseFromModel(cfg *models.WorkspaceNotific
 		DiscordWebhookConfigured: strings.TrimSpace(cfg.DiscordWebhookURL) != "",
 		EmailRecipients:          append([]string{}, cfg.EmailRecipients...),
 		DeployEvents:             append([]string{}, cfg.DeployEvents...),
+		AuditEvents:              append([]string{}, cfg.AuditEvents...),
 	}
 	if res.EmailRecipients == nil {
 		res.EmailRecipients = []string{}
 	}
 	if res.DeployEvents == nil {
 		res.DeployEvents = []string{}
+	}
+	if res.AuditEvents == nil {
+		res.AuditEvents = []string{}
 	}
 	if !cfg.CreatedAt.IsZero() {
 		v := cfg.CreatedAt
@@ -236,6 +254,16 @@ func parseWorkspaceNotificationDeployEvents(raw []string) ([]string, error) {
 		out = []string{}
 	}
 	return out, nil
+}
+
+func parseWorkspaceNotificationAuditEvents(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return []string{}, nil
+	}
+	if len(raw) > maxWorkspaceNotificationAuditFilters {
+		return nil, fmt.Errorf("too many audit event filters (max %d)", maxWorkspaceNotificationAuditFilters)
+	}
+	return models.ValidateWorkspaceNotificationAuditEvents(raw)
 }
 
 func validateWorkspaceNotificationWebhookURL(raw string, channel string) error {

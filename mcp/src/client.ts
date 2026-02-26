@@ -175,6 +175,14 @@ export class RailPushClient {
     return this.request("POST", "/services", data);
   }
 
+  async cloneService(id: string, data: {
+    name: string;
+    include_env_vars?: boolean;
+    overrides?: Record<string, unknown>;
+  }) {
+    return this.request("POST", `/services/${id}/clone`, data);
+  }
+
   async getService(id: string) {
     return this.request("GET", `/services/${id}`);
   }
@@ -510,6 +518,22 @@ export class RailPushClient {
     return this.request("POST", `/databases/${id}/restore`, data);
   }
 
+  async cloneDatabase(id: string, data: {
+    name: string;
+    plan?: "free" | "starter" | "standard" | "pro";
+    source?: "live" | "backup" | "point_in_time";
+    backup_id?: string;
+    target_time?: string;
+    sanitize?: boolean;
+    sanitize_rules?: Record<string, string>;
+  }) {
+    return this.request("POST", `/databases/${id}/clone`, data);
+  }
+
+  async getDatabaseCloneStatus(id: string) {
+    return this.request("GET", `/databases/${id}/clone-status`);
+  }
+
   async listDatabaseRestores(dbId: string, opts?: { limit?: number }) {
     const query: Record<string, string> = {};
     if (typeof opts?.limit === "number" && opts.limit > 0) query.limit = String(opts.limit);
@@ -713,8 +737,11 @@ export class RailPushClient {
 
   // ── AI Fix ───────────────────────────────────────────────────────────
 
-  async startAIFix(serviceId: string) {
-    return this.request("POST", `/services/${serviceId}/ai-fix`);
+  async startAIFix(serviceId: string, data?: {
+    hint?: string;
+    preview_only?: boolean;
+  }) {
+    return this.request("POST", `/services/${serviceId}/ai-fix`, data ?? {});
   }
 
   async getAIFixStatus(serviceId: string) {

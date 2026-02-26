@@ -79,6 +79,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(haystack, query) {
 			continue
 		}
+		svc.RepoURL = services.RedactRepoURLCredentials(svc.RepoURL)
 		servicesOut = append(servicesOut, svc)
 		if len(servicesOut) >= limit {
 			break

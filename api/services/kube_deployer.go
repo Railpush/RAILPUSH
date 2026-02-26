@@ -927,6 +927,7 @@ func (k *KubeDeployer) DeployService(deployID string, svc *models.Service, image
 	}
 
 	applyTenantSecurityContext(&dep.Spec.Template.Spec, &dep.Spec.Template.Spec.Containers[0], k.strictTenantPodSecurity(), svc.DockerAccess)
+	k.applyTenantSandboxRuntime(&dep.Spec.Template.Spec)
 
 	// Probes for HTTP-ish service types only.
 	switch serviceType {

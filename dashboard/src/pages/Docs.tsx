@@ -27,7 +27,7 @@ import {
   Plug
 } from 'lucide-react';
 import { SEO } from '../components/SEO';
-import { LogoMark } from '../components/Logo';
+import { Logo } from '../components/Logo';
 
 // ─── Mac Window ───────────────────────────────────────────────────
 function MacWindow({ title, children, className = '' }: { title: string; children: React.ReactNode; className?: string }) {
@@ -160,8 +160,7 @@ export function Docs() {
               onClick={() => navigate('/')}
               className="flex items-center gap-2.5 hover:opacity-80 transition-opacity"
             >
-              <LogoMark size={28} />
-              <span className="text-base font-semibold tracking-tight">RailPush</span>
+              <Logo size={28} />
             </button>
             <ChevronRight className="w-4 h-4 text-content-tertiary" />
             <span className="text-sm font-medium text-content-secondary flex items-center gap-1.5">
@@ -1585,6 +1584,7 @@ curl https://railpush.com/api/v1/services \\
                 { group: 'Services', endpoints: [
                   { method: 'GET', path: '/services', desc: 'List services (filters: type,status,runtime,plan,name,repo_url,project_id,query,suspended; pagination: limit,cursor)' },
                   { method: 'POST', path: '/services', desc: 'Create a service' },
+                  { method: 'POST', path: '/services/:id/clone', desc: 'Clone a service with optional field overrides and optional env-var copy' },
                   { method: 'POST', path: '/services/bulk-update', desc: 'Apply a partial update payload to multiple services (supports dry_run, transaction_mode)' },
                   { method: 'POST', path: '/services/bulk-restart', desc: 'Restart multiple services in one request (supports dry_run, transaction_mode)' },
                   { method: 'GET', path: '/services/:id', desc: 'Get service details' },
@@ -1618,7 +1618,7 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'POST', path: '/services/:id/deploys/:deployId/wait', desc: 'Wait for deploy completion (timeout query param)' },
                   { method: 'POST', path: '/services/:id/deploys/:deployId/rollback', desc: 'Rollback to a deploy' },
                   { method: 'GET', path: '/services/:id/ai-fix/diagnosis', desc: 'Get a plain-English AI diagnosis for the latest failed deploy (optional deploy_id query)' },
-                  { method: 'POST', path: '/services/:id/ai-fix', desc: 'Start AI auto-fix for a failed deploy' },
+                  { method: 'POST', path: '/services/:id/ai-fix', desc: 'Start AI auto-fix for a failed deploy (supports hint and preview_only mode for proposed diff)' },
                   { method: 'GET', path: '/services/:id/ai-fix/status', desc: 'Get AI auto-fix session status' },
                 ]},
                 { group: 'Env Vars & Domains', endpoints: [
@@ -1675,6 +1675,8 @@ curl https://railpush.com/api/v1/services \\
                   { method: 'PATCH', path: '/databases/:id', desc: 'Update a database (supports deletion_protection)' },
                   { method: 'DELETE', path: '/databases/:id', desc: 'Delete flow (token challenge -> soft-delete; optional confirm_linked_services and hard_delete after recovery window)' },
                   { method: 'POST', path: '/databases/:id/restore', desc: 'Restore a soft-deleted database, restore from backup_id, or perform time-targeted restore with target_time (new database by default, optional in-place)' },
+                  { method: 'POST', path: '/databases/:id/clone', desc: 'Clone a database from latest backup, backup_id, or target_time; supports optional plan override and sanitization rules' },
+                  { method: 'GET', path: '/databases/:id/clone-status', desc: 'Get clone progress/status for a cloned database' },
                   { method: 'GET', path: '/databases/:id/restores', desc: 'List database restore jobs and statuses' },
                   { method: 'GET', path: '/databases/:id/backups', desc: 'List backups (pagination: limit,cursor)' },
                   { method: 'POST', path: '/databases/:id/backups', desc: 'Trigger a backup' },
@@ -1921,17 +1923,17 @@ npm run build`} />
                   <tbody className="text-content-secondary">
                     {[
                       ['Auth', 'whoami, get_rate_limit'],
-                      ['Services', 'list (with server-side filters + limit/cursor pagination), get, create, update, exec command (sync in-container), get/set retention policy, get/set mTLS policy, get/set ingress access control + list policy-change log, delete (token-confirmed soft delete), restore, restart, suspend, resume, search/filter'],
+                      ['Services', 'list (with server-side filters + limit/cursor pagination), get, create, clone, update, exec command (sync in-container), get/set retention policy, get/set mTLS policy, get/set ingress access control + list policy-change log, delete (token-confirmed soft delete), restore, restart, suspend, resume, search/filter'],
                       ['Bulk Operations', 'bulk update services, bulk deploy, bulk restart, bulk set env vars, bulk update databases, plus bulk suspend/resume helpers'],
                       ['Deploys', 'trigger, list (status/branch/since/until + limit/cursor pagination), get, wait_for_deploy, rollback, queue position + estimated wait'],
                       ['Env Vars', 'list (limit/cursor pagination), set (bulk replace), upsert (additive), get/set/enable/disable GitHub Actions deploy gate, set workflow allowlist'],
                       ['Disks', 'list service disks, set/replace disk attachment, delete disk attachment'],
                       ['Custom Domains', 'list (limit/cursor pagination), add, delete'],
-                      ['Databases', 'list (plan/status/version/name/query filters + limit/cursor pagination), create, get (redacted), reveal credentials, rotate password, query_database (read-only by default, optional write mode), get/set retention policy, get recovery window, update, delete (token-confirmed soft delete with optional linked-service confirmation), restore (soft-delete + backup_id + point-in-time modes), list restore jobs, backup, list backups (limit/cursor pagination), replicas, create replica, promote replica, enable HA'],
+                      ['Databases', 'list (plan/status/version/name/query filters + limit/cursor pagination), create, get (redacted), reveal credentials, rotate password, query_database (read-only by default, optional write mode), get/set retention policy, get recovery window, update, delete (token-confirmed soft delete with optional linked-service confirmation), restore (soft-delete + backup_id + point-in-time modes), clone (latest backup/backup_id/target_time with optional sanitize rules), get clone status, list restore jobs, backup, list backups (limit/cursor pagination), replicas, create replica, promote replica, enable HA'],
                       ['Key-Value (Redis)', 'list (plan/status/name/query filters + limit/cursor pagination), create, get (redacted), reveal credentials, update, delete (token-confirmed soft delete), restore'],
                       ['Logs', 'get runtime/deploy logs with text search, regex, since/until, level, structured field filter; list/create/delete/test log drains + stats; list/create/update/delete log alerts'],
                       ['Terminal & Filesystem', 'exec_command, create_shell_session, shell_exec, close_shell_session, list_directory, read_file, search_files'],
-                      ['AI Fix', 'get deploy diagnosis, start fix session, get fix status'],
+                      ['AI Fix', 'get deploy diagnosis, start fix session (hint + preview mode), get fix status'],
                       ['One-Off Jobs', 'run, list (limit/cursor pagination), get'],
                       ['Autoscaling', 'get policy, set policy'],
                       ['Blueprints', 'list, create, get, update (move to folder), sync, delete'],

@@ -61,6 +61,19 @@ func ensureWritableTmp(pod *corev1.PodSpec, c *corev1.Container) {
 	}
 }
 
+// applyTenantSandboxRuntime sets RuntimeClassName on tenant pods if a sandbox runtime
+// (e.g. gVisor) is configured. Build pods should NOT call this — kaniko needs the default runtime.
+func (k *KubeDeployer) applyTenantSandboxRuntime(pod *corev1.PodSpec) {
+	if k == nil || k.Config == nil || pod == nil {
+		return
+	}
+	rt := k.Config.Kubernetes.TenantSandboxRuntime
+	if rt == "" {
+		return
+	}
+	pod.RuntimeClassName = &rt
+}
+
 // applyTenantSecurityContext applies tenant pod hardening.
 //
 // strict=true:
@@ -81,6 +94,11 @@ func applyTenantSecurityContext(pod *corev1.PodSpec, c *corev1.Container, strict
 	if pod != nil {
 		if pod.SecurityContext == nil {
 			pod.SecurityContext = &corev1.PodSecurityContext{}
+		}
+		// Prevent tenant pods from accessing the Kubernetes API via mounted service account tokens.
+		// Applied in both strict and compat modes — no tenant workload needs k8s API access.
+		if pod.AutomountServiceAccountToken == nil {
+			pod.AutomountServiceAccountToken = boolPtr(false)
 		}
 		// When Docker-in-Docker sidecar is present, skip seccomp profile — DinD needs unconfined.
 		if !hasDinD && pod.SecurityContext.SeccompProfile == nil {
@@ -137,11 +155,6 @@ func applyTenantSecurityContext(pod *corev1.PodSpec, c *corev1.Container, strict
 
 	// Compat mode: drop dangerous capabilities that web apps never need.
 	c.SecurityContext.Capabilities = &corev1.Capabilities{
-		Drop: []corev1.Capability{"NET_RAW", "MKNOD", "SYS_CHROOT", "SETFCAP"},
-	}
-
-	// Prevent user pods from accessing the Kubernetes API.
-	if pod != nil && pod.AutomountServiceAccountToken == nil {
-		pod.AutomountServiceAccountToken = boolPtr(false)
+		Drop: []corev1.Capability{"NET_RAW", "MKNOD", "SYS_CHROOT", "SETFCAP", "AUDIT_WRITE", "SETPCAP"},
 	}
 }

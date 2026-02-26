@@ -285,6 +285,57 @@ server.tool(
 );
 
 server.tool(
+  "clone_service",
+  "Clone an existing service into a new service with optional configuration overrides. Optionally copies env vars/secrets from the source service.",
+  {
+    service_id: z.string().describe("Source service ID to clone"),
+    name: z.string().describe("Name for the new cloned service"),
+    include_env_vars: z.boolean().optional().describe("Copy env vars and secrets from the source service (default: true)"),
+    overrides: z.object({
+      type: z.enum(["web", "worker", "cron", "static", "pserv", "cron_job"]).optional(),
+      runtime: z.enum(["node", "python", "go", "docker", "static"]).optional(),
+      repo_url: z.string().optional(),
+      branch: z.string().optional(),
+      build_command: z.string().optional(),
+      start_command: z.string().optional(),
+      dockerfile_path: z.string().optional(),
+      docker_context: z.string().optional(),
+      build_context: z.string().optional(),
+      image_url: z.string().optional(),
+      health_check_path: z.string().optional(),
+      port: z.number().int().optional(),
+      auto_deploy: z.boolean().optional(),
+      max_shutdown_delay: z.number().int().optional(),
+      pre_deploy_command: z.string().optional(),
+      static_publish_path: z.string().optional(),
+      schedule: z.string().optional(),
+      plan: z.enum(["free", "starter", "standard", "pro"]).optional(),
+      instances: z.number().int().optional(),
+      docker_access: z.boolean().optional(),
+      base_image: z.string().optional(),
+      build_include: z.string().optional(),
+      build_exclude: z.string().optional(),
+      project_id: z.string().optional(),
+      environment_id: z.string().optional(),
+    }).passthrough().optional().describe("Optional overrides applied to the cloned service config"),
+  },
+  async ({ service_id, name, include_env_vars, overrides }) => {
+    const overridePayload = { ...(overrides as Record<string, unknown> ?? {}) };
+    if (typeof overridePayload.build_context === "string" && !overridePayload.docker_context) {
+      overridePayload.docker_context = overridePayload.build_context;
+    }
+    try {
+      return text(await client.cloneService(service_id, {
+        name,
+        include_env_vars,
+        overrides: Object.keys(overridePayload).length > 0 ? overridePayload : undefined,
+      }));
+    }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
   "update_service",
   "Update a service's configuration. Only provided fields are changed. Use this to change branch, build/start commands, scaling plan, port, project assignment, and more.",
   {
@@ -1511,6 +1562,46 @@ server.tool(
 );
 
 server.tool(
+  "clone_database",
+  "Create a cloned database from the latest backup, a specific backup_id, or a target_time restore point. Supports plan overrides and optional sanitization rules.",
+  {
+    database_id: z.string().describe("Source database ID"),
+    name: z.string().describe("Name for the cloned database"),
+    plan: z.enum(["free", "starter", "standard", "pro"]).optional().describe("Optional plan for the clone (defaults to source plan)"),
+    source: z.enum(["live", "backup", "point_in_time"]).optional().describe("Clone source mode (defaults to live/latest backup)"),
+    backup_id: z.string().optional().describe("Optional backup ID for source=backup"),
+    target_time: z.string().optional().describe("RFC3339 timestamp for source=point_in_time"),
+    sanitize: z.boolean().optional().describe("Apply sanitize_rules after restore when true"),
+    sanitize_rules: z.record(z.string()).optional().describe("Optional sanitization rules, e.g. {'users.email':'faker.email','audit_logs':'truncate'}"),
+  },
+  async ({ database_id, name, plan, source, backup_id, target_time, sanitize, sanitize_rules }) => {
+    const payload = Object.fromEntries(Object.entries({ name, plan, source, backup_id, target_time, sanitize, sanitize_rules }).filter(([, v]) => v !== undefined));
+    try { return text(await client.cloneDatabase(database_id, payload as {
+      name: string;
+      plan?: "free" | "starter" | "standard" | "pro";
+      source?: "live" | "backup" | "point_in_time";
+      backup_id?: string;
+      target_time?: string;
+      sanitize?: boolean;
+      sanitize_rules?: Record<string, string>;
+    })); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
+  "get_database_clone_status",
+  "Get clone progress/status for a cloned database ID.",
+  {
+    database_id: z.string().describe("Cloned database ID"),
+  },
+  async ({ database_id }) => {
+    try { return text(await client.getDatabaseCloneStatus(database_id)); }
+    catch (e) { return err(e); }
+  },
+);
+
+server.tool(
   "trigger_backup",
   "Trigger an immediate backup of a database.",
   { database_id: z.string().describe("Database ID") },
@@ -2059,10 +2150,14 @@ server.tool(
 
 server.tool(
   "start_ai_fix",
-  "Start an automated AI fix session for a service that has a failed deploy. The AI analyzes build/runtime logs and attempts to fix the Dockerfile or configuration.",
-  { service_id: z.string().describe("Service ID") },
-  async ({ service_id }) => {
-    try { return text(await client.startAIFix(service_id)); }
+  "Start an automated AI fix session for a service that has a failed deploy. Can run in preview_only mode to return a proposed fix + diff without applying changes.",
+  {
+    service_id: z.string().describe("Service ID"),
+    hint: z.string().optional().describe("Optional context/hint for the AI (e.g. expected port, required package, known dependency)"),
+    preview_only: z.boolean().optional().describe("If true, return proposed changes without creating a deploy"),
+  },
+  async ({ service_id, hint, preview_only }) => {
+    try { return text(await client.startAIFix(service_id, { hint, preview_only })); }
     catch (e) { return err(e); }
   },
 );

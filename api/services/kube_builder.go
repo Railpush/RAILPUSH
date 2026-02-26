@@ -133,7 +133,7 @@ func (k *KubeDeployer) BuildImageWithKaniko(deployID string, svc *models.Service
 
 	if appendLog != nil {
 		appendLog(fmt.Sprintf("==> Kubernetes build: job=%s", jobName))
-		appendLog(fmt.Sprintf("==> Repo: %s (branch=%s)", repoURL, branch))
+		appendLog(fmt.Sprintf("==> Repo: %s (branch=%s)", RedactRepoURLCredentials(repoURL), branch))
 		appendLog(fmt.Sprintf("==> Docker context: %s", effectiveDir))
 		appendLog(fmt.Sprintf("==> Dockerfile: %s", dfAbs))
 		appendLog(fmt.Sprintf("==> Destination: %s", destImage))
@@ -649,8 +649,14 @@ fi
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{Labels: labels},
 					Spec: corev1.PodSpec{
-						PriorityClassName: "railpush-critical",
-						RestartPolicy:     corev1.RestartPolicyNever,
+						PriorityClassName:          "railpush-critical",
+						RestartPolicy:              corev1.RestartPolicyNever,
+						AutomountServiceAccountToken: boolPtr(false),
+						SecurityContext: &corev1.PodSecurityContext{
+							SeccompProfile: &corev1.SeccompProfile{
+								Type: corev1.SeccompProfileTypeRuntimeDefault,
+							},
+						},
 						Volumes: []corev1.Volume{
 							{
 								Name: "workspace",
@@ -671,6 +677,9 @@ fi
 								Resources: corev1.ResourceRequirements{
 									Requests: cloneRequests,
 									Limits:   cloneLimits,
+								},
+								SecurityContext: &corev1.SecurityContext{
+									AllowPrivilegeEscalation: boolPtr(false),
 								},
 							},
 						},
@@ -696,6 +705,9 @@ fi
 								Resources: corev1.ResourceRequirements{
 									Requests: kanikoRequests,
 									Limits:   kanikoLimits,
+								},
+								SecurityContext: &corev1.SecurityContext{
+									AllowPrivilegeEscalation: boolPtr(false),
 								},
 							},
 						},

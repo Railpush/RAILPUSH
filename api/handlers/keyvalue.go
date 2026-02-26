@@ -307,6 +307,7 @@ func (h *KeyValueHandler) keyValueResponse(kv *models.ManagedKeyValue, password 
 	if revealCredentials && strings.TrimSpace(password) != "" {
 		passwordForURL = password
 	}
+	encryption := managedStorageEncryptionInfo(h.Config, h.Worker)
 
 	resp := map[string]interface{}{
 		"id":                  kv.ID,
@@ -320,6 +321,13 @@ func (h *KeyValueHandler) keyValueResponse(kv *models.ManagedKeyValue, password 
 		"status":              kv.Status,
 		"created_at":          kv.CreatedAt,
 		"redis_url":           "redis://:" + passwordForURL + "@" + kv.Host + ":" + intToStr(kv.Port),
+		"encryption_at_rest":  encryption.AtRest,
+		"encryption_status":   encryption.Status,
+		"encryption_algorithm": encryption.Algorithm,
+		"key_management":      encryption.KeyManagement,
+		"encryption_scope":    encryption.Scope,
+		"encryption_evidence": encryption.Evidence,
+		"storage_class":       encryption.StorageClass,
 		"credentials_exposed": revealCredentials,
 	}
 	if revealCredentials {
