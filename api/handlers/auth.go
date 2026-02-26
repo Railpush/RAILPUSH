@@ -223,6 +223,25 @@ func (h *AuthHandler) ResendVerification(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *AuthHandler) GitHubRedirect(w http.ResponseWriter, r *http.Request) {
+	// The OAuth state cookie must be set on the same domain that handles the GitHub callback.
+	// If the user starts from railpush.com but the callback is apps.railpush.com, the cookie
+	// won't be sent on the callback request. Redirect to the callback host first.
+	if cbURL, err := url.Parse(h.Config.GitHub.CallbackURL); err == nil && cbURL.Host != "" {
+		reqHost := strings.TrimSpace(r.Host)
+		if h := strings.SplitN(reqHost, ":", 2); len(h) > 0 {
+			reqHost = h[0]
+		}
+		cbHost := strings.TrimSpace(cbURL.Hostname())
+		if !strings.EqualFold(reqHost, cbHost) {
+			target := cbURL.Scheme + "://" + cbURL.Host + r.URL.Path
+			if r.URL.RawQuery != "" {
+				target += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, target, http.StatusTemporaryRedirect)
+			return
+		}
+	}
+
 	state, err := utils.GenerateRandomString(24)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "failed to generate oauth state")
