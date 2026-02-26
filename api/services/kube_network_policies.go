@@ -571,15 +571,52 @@ func (k *KubeDeployer) ensureTenantWorkspaceScopedPolicies(ctx context.Context, 
 //
 // It blocks:
 //   - Cross-namespace pod traffic (10.42.0.0/16 pod CIDR, except same-namespace via podSelector)
-//   - Kubernetes API server (10.43.0.1/32)
+//   - Kubernetes API server — both ClusterIP (10.43.0.0/16) and DNAT'd server node IPs
 //   - Link-local / cloud metadata endpoints (169.254.0.0/16)
 //
 // Customer impact: none. Legitimate traffic patterns (DNS, internet, same-workspace comms) are preserved.
+// Tenant pods access other services via pod IPs (rule 2) or external domains (Cloudflare -> ingress).
 func (k *KubeDeployer) ensureTenantNetpolServiceEgress(ctx context.Context) error {
 	ns := k.namespace()
 	udp := corev1.ProtocolUDP
 	tcp := corev1.ProtocolTCP
 	dnsPort := intstr.FromInt(53)
+
+	// Collect control-plane node IPs to block K8s API access after kube-proxy DNAT.
+	// When a pod connects to the ClusterIP 10.43.0.1:443, kube-proxy rewrites the destination
+	// to an actual server node IP (e.g. 91.98.183.19:6443). NetworkPolicy evaluates post-DNAT,
+	// so we must block the real server IPs in addition to the service CIDR.
+	except := []string{
+		"10.42.0.0/16",   // pod CIDR — blocks cross-namespace pod access
+		"10.43.0.0/16",   // service CIDR — blocks K8s API ClusterIP and all ClusterIP services
+		"169.254.0.0/16", // link-local / metadata
+	}
+	if k != nil && k.Client != nil {
+		if nodes, err := k.Client.CoreV1().Nodes().List(ctx, metav1.ListOptions{}); err == nil && nodes != nil {
+			for _, n := range nodes.Items {
+				isServer := false
+				for _, role := range []string{"control-plane", "master", "etcd"} {
+					if _, ok := n.Labels["node-role.kubernetes.io/"+role]; ok {
+						isServer = true
+						break
+					}
+				}
+				if !isServer {
+					continue
+				}
+				for _, addr := range n.Status.Addresses {
+					if addr.Type == corev1.NodeInternalIP || addr.Type == corev1.NodeExternalIP {
+						ip := strings.TrimSpace(addr.Address)
+						if ip == "" || strings.Contains(ip, ":") {
+							continue // skip IPv6 for now
+						}
+						except = append(except, ip+"/32")
+					}
+				}
+			}
+		}
+	}
+	sort.Strings(except)
 
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
@@ -626,17 +663,13 @@ func (k *KubeDeployer) ensureTenantNetpolServiceEgress(ctx context.Context) erro
 						{PodSelector: &metav1.LabelSelector{}},
 					},
 				},
-				// 3. Allow internet access; block cluster-internal pod CIDR, k8s API, and metadata.
+				// 3. Allow internet access; block cluster-internal, k8s API (ClusterIP + real IPs), and metadata.
 				{
 					To: []networkingv1.NetworkPolicyPeer{
 						{
 							IPBlock: &networkingv1.IPBlock{
-								CIDR: "0.0.0.0/0",
-								Except: []string{
-									"10.42.0.0/16",  // pod CIDR — blocks cross-namespace pod access
-									"10.43.0.1/32",  // k8s API server
-									"169.254.0.0/16", // link-local / metadata
-								},
+								CIDR:   "0.0.0.0/0",
+								Except: except,
 							},
 						},
 					},

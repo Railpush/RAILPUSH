@@ -100,6 +100,12 @@ func applyTenantSecurityContext(pod *corev1.PodSpec, c *corev1.Container, strict
 		if pod.AutomountServiceAccountToken == nil {
 			pod.AutomountServiceAccountToken = boolPtr(false)
 		}
+		// Disable Kubernetes service-link environment variables (SVC_NAME_HOST, SVC_NAME_PORT, etc.).
+		// Without this, every ClusterIP service in the namespace injects ~5 env vars into every pod,
+		// leaking a full topology map of the cluster. Apps use DNS or explicit connection strings instead.
+		if pod.EnableServiceLinks == nil {
+			pod.EnableServiceLinks = boolPtr(false)
+		}
 		// When Docker-in-Docker sidecar is present, skip seccomp profile — DinD needs unconfined.
 		if !hasDinD && pod.SecurityContext.SeccompProfile == nil {
 			pod.SecurityContext.SeccompProfile = &corev1.SeccompProfile{
